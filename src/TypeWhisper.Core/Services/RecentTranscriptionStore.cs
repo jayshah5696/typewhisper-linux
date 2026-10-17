@@ -22,7 +22,10 @@ public sealed class RecentTranscriptionStore
         string finalText,
         DateTime timestamp,
         string? appName,
-        string? appProcessName
+        string? appProcessName,
+        string? rawText = null,
+        string? language = null,
+        CleanupOutcome? cleanupOutcome = null
     )
     {
         var trimmedText = finalText.Trim();
@@ -45,7 +48,7 @@ public sealed class RecentTranscriptionStore
                     appName,
                     appProcessName,
                     RecentTranscriptionSource.Session
-                )
+                ) { RawText = rawText, Language = language, CleanupOutcome = cleanupOutcome }
             );
 
             if (_sessionEntries.Count > _maxSessionEntries)
@@ -91,7 +94,8 @@ public sealed class RecentTranscriptionStore
                 record.AppName,
                 record.AppProcessName,
                 RecentTranscriptionSource.History
-            ));
+            ) { RawText = record.IsSpokenCommand ? null : record.RawText,
+                Language = record.Language, CleanupOutcome = record.CleanupOutcome });
 
         var merged = sessionSnapshot
             .Concat(historyEntries)

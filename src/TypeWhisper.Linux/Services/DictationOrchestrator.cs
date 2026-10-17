@@ -18,7 +18,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Immutable snapshot of the per-recording context captured at stop time.
+///     Per-recording context captured at stop time, with cleanup outcome filled by the pipeline.
 ///     Passed to the post-stop pipeline so it reads a stable view even if a new
 ///     dictation has already started and overwritten the instance-level fields.
 /// </summary>
@@ -48,6 +48,7 @@ internal sealed record RecordingContext(
     public int CleanupTimeoutSeconds { get; init; } = 5;
     public long StopRequestedTimestamp { get; init; }
     public LiveCleanupDraft? LiveCleanup { get; init; }
+    public CleanupOutcome? CleanupOutcome { get; set; }
 
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
@@ -2896,6 +2897,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                         or InsertionResult.MissingPasteTool;
                 var isCanceled =
                     insertion is InsertionResult.NoText && commandResult.CancelInsertion;
+                if (!isError && !isCanceled && context.CleanupOutcome?.FallbackReason is { } fallbackReason)
+                    completionMessage += " " + CleanupOutcomeText.ForFallback(fallbackReason);
                 ReportStatus(context, completionMessage);
                 if (actionExecutionResult is not null)
                 {
@@ -2939,7 +2942,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                 finalText,
                 timestamp,
                 context.AppTitle,
-                context.AppProcess
+                context.AppProcess,
+                rawText: rawText,
+                language: postProcessingLanguage,
+                cleanupOutcome: context.CleanupOutcome
             );
 
             // Memory extraction is itself an LLM call. When provenance capture is
@@ -4309,7 +4315,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     InsertionStatus = ToTextInsertionStatus(insertion),
                     InsertionFailureReason = InsertionFailureReasonFor(insertion, promptActionUnavailable),
-                    CleanupLevelUsed = cleanupLevel,
+                    CleanupLevelUsed = context.CleanupOutcome?.AppliedLevel ?? cleanupLevel,
+                    CleanupOutcome = context.CleanupOutcome,
                     CleanupApplied = WasPipelineStepChanged(
                         pipelineResult,
                         PostProcessingStepNames.Cleanup

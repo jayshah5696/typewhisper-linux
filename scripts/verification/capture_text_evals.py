@@ -34,8 +34,10 @@ def wait_for_cleanup_provider(app: "isolated_app.IsolatedApp", timeout: float = 
     started = time.monotonic()
     while True:
         response = app.api("/v1/text/process", {"text": CANARY})
-        if response.get("cleanup_level") not in LLM_LEVELS or any(
-                call.get("stage") == "Cleanup" and call.get("succeeded", True) for call in response.get("llm_calls") or []):
+        outcome = response.get("cleanup_outcome") or {}
+        requested = outcome.get("requested_level", response.get("cleanup_level"))
+        if requested not in LLM_LEVELS or (not outcome.get("fallback_reason") and any(
+                call.get("stage") == "Cleanup" and call.get("succeeded", True) for call in response.get("llm_calls") or [])):
             return time.monotonic() - started
         if time.monotonic() - started > timeout:
             raise TimeoutError(f"cleanup provider never answered within {timeout:.0f}s; see the instance app.log")
@@ -50,9 +52,12 @@ def result_row(case: dict, response: dict | None, error: str | None, latency_ms:
     calls = (response or {}).get("llm_calls") or []
     # `succeeded` is true only for a nonempty completed response; an attempt alone is not cleanup.
     cleanup_call = next((call for call in calls if call.get("stage") == "Cleanup" and call.get("succeeded", True)), None)
-    if error is None and (response or {}).get("cleanup_level") in LLM_LEVELS and cleanup_call is None:
+    outcome = (response or {}).get("cleanup_outcome") or {}
+    requested = outcome.get("requested_level", (response or {}).get("cleanup_level"))
+    if error is None and requested in LLM_LEVELS and (cleanup_call is None or outcome.get("fallback_reason")):
         # LlmCleanupService returns Light-cleaned text when the provider fails or is missing.
-        error = f"{response['cleanup_level']} cleanup fell back to Light: no cleanup LLM call was made"
+        reason = outcome.get("fallback_reason") or "no cleanup LLM call was made"
+        error = f"{requested} cleanup fell back to Light: {reason}"
     profile = case.get("profile", "plain")
     return {
         "id": case["id"],
@@ -66,6 +71,7 @@ def result_row(case: dict, response: dict | None, error: str | None, latency_ms:
             "cleanup_provider": cleanup_call["provider"] if cleanup_call else None,
             "cleanup_model": cleanup_call["model"] if cleanup_call else None,
             "cleanup_level": (response or {}).get("cleanup_level"),
+            "cleanup_outcome": (response or {}).get("cleanup_outcome"),
             "prompt_version": None,
             "profile": profile,
             # Case profiles and dictionaries describe intended conditions; this run does not create them.

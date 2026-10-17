@@ -27,6 +27,8 @@ This release adds **Parakeet Ultra 0.6B**, a more accurate local Parakeet model,
 
 ## What it does
 
+Our fork also provides [dictation recovery](docs/dictation-recovery.md) in the recent-transcriptions palette. Copy the original transcript or preview another cleanup attempt without changing the previous result. New dictations report when AI cleanup falls back to basic cleanup.
+
 - **Global dictation** with Toggle, Push-to-talk, and Hybrid activation modes, a configurable recording overlay, recent-transcriptions and transform-selection hotkeys, and cancel-in-flight. See [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) and [Global Hotkeys](https://github.com/csmashe/typewhisper-linux/wiki/Global-Hotkeys).
 - **Plugin-backed transcription** — local engines (whisper.cpp, sherpa-onnx, …) and cloud engines, with optional real-time websocket streaming and token-by-token LLM response streaming. See [Transcription Engines](https://github.com/csmashe/typewhisper-linux/wiki/Transcription-Engines).
 - **Local GPU acceleration** — optional NVIDIA CUDA for whisper.cpp and sherpa-onnx, Vulkan for AMD/Intel whisper.cpp, and AMD MIGraphX for sherpa-onnx on supported ROCm systems. See [GPU acceleration](docs/gpu-acceleration.md).

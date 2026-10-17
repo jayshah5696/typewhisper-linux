@@ -27,12 +27,12 @@ internal sealed class LiveCleanupDraft : IDisposable
         {
             Interlocked.Increment(ref _requests);
             var capture = new LlmCallCapture();
-            var output = await cleanup.CleanAsync(input, level, capture: capture,
+            var result = await cleanup.CleanWithResultAsync(input, level, capture: capture,
                 timeout: TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 5), ct: token,
                 sourceLanguage: language, providerOverride: provider, preparedLightText: true).ConfigureAwait(false);
-            if (!capture.Calls.Any(call => !string.IsNullOrWhiteSpace(call.ResponseReceived))) return null;
+            if (result.Outcome.FallbackReason is not null) return null;
             lock (_gate) { _capturedInput = input; _capture = capture; }
-            return output;
+            return result.Text;
         }, publish);
     }
 

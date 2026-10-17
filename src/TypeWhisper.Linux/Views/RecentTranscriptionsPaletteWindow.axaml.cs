@@ -62,6 +62,7 @@ public partial class RecentTranscriptionsPaletteWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _viewModel.CancelRecovery();
         _closed.TrySetResult();
     }
 
@@ -72,6 +73,7 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         switch (e.Key)
         {
             case Key.Down:
+                if (!SearchBox.IsFocused && !EntriesList.IsKeyboardFocusWithin) break;
                 _viewModel.MoveSelection(1);
                 if (_viewModel.SelectedItem is not null)
                 {
@@ -81,6 +83,7 @@ public partial class RecentTranscriptionsPaletteWindow : Window
                 e.Handled = true;
                 break;
             case Key.Up:
+                if (!SearchBox.IsFocused && !EntriesList.IsKeyboardFocusWithin) break;
                 _viewModel.MoveSelection(-1);
                 if (_viewModel.SelectedItem is not null)
                 {
@@ -90,6 +93,7 @@ public partial class RecentTranscriptionsPaletteWindow : Window
                 e.Handled = true;
                 break;
             case Key.Enter:
+                if (!SearchBox.IsFocused && !EntriesList.IsKeyboardFocusWithin) break;
                 SelectAndClose(_viewModel.SelectedItem);
                 e.Handled = true;
                 break;
@@ -106,10 +110,13 @@ public partial class RecentTranscriptionsPaletteWindow : Window
         // inverting would orphan the binding.
         if ((sender as Control)?.DataContext is RecentTranscriptionPaletteItem item)
         {
-            SelectAndClose(item);
+            _viewModel.SelectedItem = item;
             e.Handled = true;
         }
     }
+
+    private void InsertSelected_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
+        SelectAndClose(_viewModel.SelectedItem);
 
     // ReSharper disable once AsyncVoidMethod -- called from synchronous KeyDown/PointerReleased
     // handlers; awaits _closed.Task so selection runs only after the window has closed.

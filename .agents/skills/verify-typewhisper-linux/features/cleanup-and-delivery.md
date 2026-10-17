@@ -34,8 +34,10 @@ Proven on 2026-10-14: 30 of 30 cases completed with 30 LLM requests, and the rev
 
 ## Gotchas
 
+- Text recovery is available from History, then Recent transcriptions. Select an entry, copy its original transcript, or run Clean up again and review the new result before copying. Selecting another entry or closing the palette cancels pending cleanup. On 2026-10-17, an isolated app with authored history and a fake provider showed the original and previous text, previewed one new cleanup request, retained the history file unchanged, and displayed timeout feedback. Screenshots and `recovery-smoke.json` are under `artifacts/verification/2026-10-17-dictation-recovery/`. Clipboard read-back in the private compositor was inconclusive. The normal desktop check refused to replace the user's image clipboard.
+
 - `state: ready` means text is ready, not delivered. A run once reported `ready` with `delivery_outcome: Failed`.
-- At Medium or High, a missing or failing provider returns Light text with no error, and the result still says Medium. The only signal is that no `Cleanup` call appears in `llm_calls`. Right after startup the provider registers about one second after the API answers; `capture_text_evals.py` waits for a canary to reach the LLM first.
+- At Medium or High, a missing or failing provider returns Light text. `cleanup_outcome` records the requested level, applied level, and fallback reason independently of optional provenance capture. The text API's `cleanup_level` is the applied level. New dictations show fallback reasons in completion feedback and expanded History. Right after startup the provider registers about one second after the API answers; `capture_text_evals.py` waits for a canary to reach the LLM first.
 - Live cleanup waits 2 s after the last transcript change (`LiveCleanupSession` debounce). A clip followed by less silence never sends a draft; `live_smoke.py` records 4 s of silence by default.
 - The fake LLM echoes its input. It proves request routing, timing, and reuse, not writing quality. Real-provider runs need that provider's credentials inside the isolated instance; decide that with the user.
 - The OpenAI-compatible plugin used to append `/v1/chat/completions` to a base URL that already ended in `/v1`, producing `/v1/v1/...`; it now drops the repeated segment. The fake LLM still rejects any unexpected path.

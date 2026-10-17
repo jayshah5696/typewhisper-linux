@@ -31,6 +31,7 @@ public sealed record TranscriptionRecord
     public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
     public string? InsertionFailureReason { get; init; }
     public CleanupLevel CleanupLevelUsed { get; init; } = CleanupLevel.None;
+    public CleanupOutcome? CleanupOutcome { get; init; }
     public bool CleanupApplied { get; init; }
     public bool SnippetApplied { get; init; }
     public bool DictionaryCorrectionApplied { get; init; }

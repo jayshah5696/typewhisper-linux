@@ -93,13 +93,14 @@ public sealed partial class DictationOrchestrator
                                 var reused = await draft.ReuseAsync(text.Trim(), postProcessingLanguage, context.Capture, token);
                                 if (reused is not null)
                                 {
+                                    context.CleanupOutcome = new CleanupOutcome(cleanupLevel, cleanupLevel);
                                     Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
                                     return reused;
                                 }
                             }
                             draft.Dispose();
                         }
-                        return await _cleanup.CleanAsync(
+                        var cleaned = await _cleanup.CleanWithResultAsync(
                             text,
                             cleanupLevel,
                             message =>
@@ -112,6 +113,8 @@ public sealed partial class DictationOrchestrator
                             ct: token,
                             sourceLanguage: postProcessingLanguage
                         );
+                        context.CleanupOutcome = cleaned.Outcome;
+                        return cleaned.Text;
                     },
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
@@ -328,7 +331,8 @@ public sealed partial class DictationOrchestrator
                             .LanguageTag,
                     InsertionStatus = TextInsertionStatus.CopiedToClipboard,
                     InsertionFailureReason = null,
-                    CleanupLevelUsed = ResolveCleanupLevel(context, promptAction),
+                    CleanupLevelUsed = context.CleanupOutcome?.AppliedLevel ?? ResolveCleanupLevel(context, promptAction),
+                    CleanupOutcome = context.CleanupOutcome,
                     CleanupApplied = WasPipelineStepChanged(processed, PostProcessingStepNames.Cleanup),
                     SnippetApplied = WasPipelineStepChanged(processed, PostProcessingStepNames.Snippets),
                     DictionaryCorrectionApplied = WasPipelineStepChanged(processed, PostProcessingStepNames.Dictionary),

@@ -11,4 +11,10 @@ public sealed record RecentTranscriptionEntry(
     string? AppName,
     string? AppProcessName,
     RecentTranscriptionSource Source
-);
+)
+{
+    // Null for older session entries that did not retain an original transcript.
+    public string? RawText { get; init; }
+    public string? Language { get; init; }
+    public CleanupOutcome? CleanupOutcome { get; init; }
+}

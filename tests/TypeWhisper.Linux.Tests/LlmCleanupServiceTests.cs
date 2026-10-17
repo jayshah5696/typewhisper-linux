@@ -13,6 +13,63 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LlmCleanupServiceTests
 {
     [Fact]
+    public async Task CleanupResult_MissingProvider_ReportsActualLevelWithoutProvenance()
+    {
+        var result = await CreateService([]).CleanWithResultAsync("uh hello", CleanupLevel.High);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(CleanupLevel.High, result.Outcome.RequestedLevel);
+        Assert.Equal(CleanupLevel.Light, result.Outcome.AppliedLevel);
+        Assert.Equal(CleanupFallbackReason.ProviderUnavailable, result.Outcome.FallbackReason);
+    }
+
+    [Theory]
+    [InlineData("", CleanupFallbackReason.EmptyResponse)]
+    [InlineData("  ", CleanupFallbackReason.EmptyResponse)]
+    public async Task CleanupResult_EmptyResponse_IsNotSuccessfulAiCleanup(string response, CleanupFallbackReason reason)
+    {
+        var result = await CreateService([new FakeLlmProviderPlugin(response)])
+            .CleanWithResultAsync("uh hello", CleanupLevel.Medium);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(CleanupLevel.Light, result.Outcome.AppliedLevel);
+        Assert.Equal(reason, result.Outcome.FallbackReason);
+    }
+
+    [Fact]
+    public async Task CleanupResult_ProviderFailure_DoesNotReportRequestedLevelAsApplied()
+    {
+        var result = await CreateService([new FakeLlmProviderPlugin("unused") { ThrowOnProcess = true }])
+            .CleanWithResultAsync("uh hello", CleanupLevel.High);
+
+        Assert.Equal(CleanupLevel.Light, result.Outcome.AppliedLevel);
+        Assert.Equal(CleanupFallbackReason.ProviderFailed, result.Outcome.FallbackReason);
+    }
+
+    [Fact]
+    public async Task CleanupResult_Deadline_ReportsTimeout()
+    {
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            Process = async token => { await Task.Delay(Timeout.InfiniteTimeSpan, token); return "unused"; },
+        };
+        var result = await CreateService([provider]).CleanWithResultAsync("uh hello", CleanupLevel.Medium,
+            timeout: TimeSpan.FromMilliseconds(50));
+
+        Assert.Equal(CleanupFallbackReason.TimedOut, result.Outcome.FallbackReason);
+    }
+
+    [Fact]
+    public async Task CleanupResult_UnchangedSuccessfulResponse_IsStillAiSuccess()
+    {
+        var result = await CreateService([new FakeLlmProviderPlugin("Hello")])
+            .CleanWithResultAsync("Hello", CleanupLevel.Medium);
+
+        Assert.Equal(CleanupLevel.Medium, result.Outcome.AppliedLevel);
+        Assert.Null(result.Outcome.FallbackReason);
+    }
+
+    [Fact]
     public async Task CleanAsync_Deadline_CancelsProviderAndReturnsLight()
     {
         var provider = new FakeLlmProviderPlugin("unused")

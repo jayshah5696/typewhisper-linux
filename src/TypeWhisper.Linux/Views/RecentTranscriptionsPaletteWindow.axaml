@@ -5,8 +5,9 @@
         x:Class="TypeWhisper.Linux.Views.RecentTranscriptionsPaletteWindow"
         x:DataType="vm:RecentTranscriptionsPaletteViewModel"
         RequestedThemeVariant="Dark"
-        Width="520"
-        Height="360"
+        Title="{loc:Str RecentTranscriptions.Title}"
+        Width="640"
+        Height="700"
         WindowStartupLocation="CenterScreen"
         WindowDecorations="None"
         CanResize="False"
@@ -18,7 +19,7 @@
             BorderBrush="#35FFFFFF"
             BorderThickness="1"
             Padding="14">
-        <Grid RowDefinitions="Auto,Auto,*">
+        <Grid RowDefinitions="Auto,Auto,150,*,Auto">
             <TextBlock Text="{loc:Str RecentTranscriptions.Title}"
                        FontSize="14"
                        FontWeight="SemiBold"
@@ -27,6 +28,7 @@
             <TextBox x:Name="SearchBox"
                      Grid.Row="1"
                      Text="{Binding SearchQuery}"
+                     AutomationProperties.Name="{loc:Str RecentTranscriptions.SearchPlaceholder}"
                      PlaceholderText="{loc:Str RecentTranscriptions.SearchPlaceholder}"
                      Margin="0,0,0,10" />
 
@@ -34,6 +36,7 @@
                 <ListBox x:Name="EntriesList"
                          ItemsSource="{Binding FilteredEntries}"
                          SelectedItem="{Binding SelectedItem}"
+                         AutomationProperties.Name="{loc:Str RecentTranscriptions.Title}"
                          Background="Transparent"
                          BorderThickness="0">
                     <ListBox.ItemTemplate>
@@ -65,6 +68,29 @@
                            VerticalAlignment="Center"
                            IsVisible="{Binding !HasFilteredEntries}" />
             </Grid>
+            <ScrollViewer Grid.Row="3" Margin="0,10,0,10">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding SelectedCleanupStatus}" TextWrapping="Wrap" Foreground="#FFD18B" />
+                    <TextBlock Text="{loc:Str Recovery.PreviousResult}" />
+                    <TextBox Text="{Binding SelectedFinalText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="70"
+                             AutomationProperties.Name="{loc:Str Recovery.PreviousResult}" />
+                    <TextBlock Text="{loc:Str Recovery.Original}" />
+                    <TextBox Text="{Binding SelectedOriginalText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="70"
+                             AutomationProperties.Name="{loc:Str Recovery.Original}" />
+                    <WrapPanel>
+                        <Button Content="{loc:Str Recovery.CopyOriginal}" Command="{Binding CopyOriginalCommand}" Margin="0,0,8,6" />
+                        <Button Content="{loc:Str Recovery.CleanAgain}" Command="{Binding CleanAgainCommand}" Margin="0,0,0,6" />
+                    </WrapPanel>
+                    <TextBlock Text="{loc:Str Recovery.ProviderHint}" TextWrapping="Wrap" Foreground="#8A9AAE" FontSize="11" />
+                    <TextBlock Text="{Binding RecoveryStatus}" TextWrapping="Wrap" Foreground="#FFD18B" />
+                    <TextBlock Text="{loc:Str Recovery.NewResult}" />
+                    <TextBox Text="{Binding RecoveryText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="90"
+                             AutomationProperties.Name="{loc:Str Recovery.NewResult}" />
+                    <Button Content="{loc:Str Recovery.CopyResult}" Command="{Binding CopyRecoveryCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </ScrollViewer>
+            <Button Grid.Row="4" Content="{loc:Str Recovery.InsertSelected}" Click="InsertSelected_Click"
+                    IsEnabled="{Binding HasFilteredEntries}" HorizontalAlignment="Right" />
         </Grid>
     </Border>
 </Window>
