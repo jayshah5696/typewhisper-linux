@@ -42,10 +42,32 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("see you at 5")]
     [InlineData("price plus tax")]
     [InlineData("Hello, world. How are you?")]
+    [InlineData("Read the docs. JS is supported.")]
+    [InlineData("Read the docs.\nJS is supported.")]
     public void Format_DoesNotCollapseCommonProse(string input)
     {
         var result = DeveloperFormattingService.Format(input);
 
-        Assert.Equal(input, result);
+        Assert.Equal(input.Replace('\n', ' '), result);
+    }
+
+    [Theory]
+    [InlineData("update dictation orchestrator dot C S", "update dictation orchestrator.cs")]
+    [InlineData("update DictationOrchestrator.C S", "update DictationOrchestrator.cs")]
+    [InlineData("update dictation orchestrator dot c sharp", "update dictation orchestrator.cs")]
+    [InlineData("open file dot T S", "open file.ts")]
+    [InlineData("edit component.T S", "edit component.ts")]
+    [InlineData("create server dot J S", "create server.js")]
+    [InlineData("run test dot P Y", "run test.py")]
+    [InlineData("see readme dot M D", "see readme.md")]
+    [InlineData("parse package dot J S O N", "parse package.json")]
+    [InlineData("edit config dot Y M L", "edit config.yml")]
+    [InlineData("review workflow dot Y A M L", "review workflow.yaml")]
+    [InlineData("edit config dot Y\tM\tL", "edit config.yml")]
+    public void Format_NormalizesSpokenFileExtensions(string input, string expected)
+    {
+        var result = DeveloperFormattingService.Format(input);
+
+        Assert.Equal(expected, result);
     }
 }

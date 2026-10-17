@@ -2,6 +2,11 @@
 
 TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justfile` as the source of build, test, restart, and benchmark commands.
 
+## Pull requests
+
+- Never open a pull request unless explicitly asked.
+- When asked, PRs belong to our fork (`origin`, `linux` branch), never `upstream`.
+
 ## Commands
 
 - `just build` builds the local Debug app and CLI and bundles the Linux plugins.
