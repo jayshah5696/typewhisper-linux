@@ -64,8 +64,6 @@
             <StackPanel Grid.Row="0">
             <TextBlock Text="{loc:Str History.Title}"
                        Classes="section-header" />
-            <Button Content="{loc:Str RecentTranscriptions.Title}" Command="{Binding OpenRecentTranscriptionsCommand}"
-                    HorizontalAlignment="Left" Margin="0,8,0,0" />
 
             <Grid Margin="0,12,0,8"
                   RowDefinitions="Auto,Auto"
@@ -204,6 +202,7 @@
                                                             <CheckBox IsChecked="{Binding IsSelected}" IsVisible="{Binding IsSelecting}"
                                                                       VerticalAlignment="Center" Margin="0,0,8,0" />
                                                             <Button Grid.Column="1" Classes="card-toggle"
+                                                                    AutomationProperties.Name="{Binding Record.Preview}"
                                                                     Command="{Binding ToggleExpandCommand}">
                                                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                                                     <TextBlock Grid.Column="0"
@@ -387,10 +386,14 @@
                                                                 </StackPanel>
                                                             </Border>
 
-                                                            <StackPanel Orientation="Horizontal"
-                                                                        Spacing="12"
+                                                            <WrapPanel
                                                                         Margin="0,2,0,0"
                                                                         IsVisible="{Binding ShowExpandedActions}">
+                                                                <WrapPanel.Styles>
+                                                                    <Style Selector="Button">
+                                                                        <Setter Property="Margin" Value="0,0,12,6" />
+                                                                    </Style>
+                                                                </WrapPanel.Styles>
                                                                 <Button Classes="link-button"
                                                                         Content="{loc:Str Common.Edit}"
                                                                         Command="{Binding StartEditCommand}" />
@@ -398,6 +401,14 @@
                                                                         Content="{loc:Str Common.Copy}"
                                                                         Click="OnCopyRecord"
                                                                         Tag="{Binding Record.FinalText}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="{loc:Str Recovery.CopyOriginal}"
+                                                                        Click="OnCopyRecord"
+                                                                        IsEnabled="{Binding HasOriginalTranscript}"
+                                                                        Tag="{Binding Record.RawText}" />
+                                                                <Button Classes="link-button"
+                                                                        Content="{loc:Str Recovery.CleanAgain}"
+                                                                        Command="{Binding CleanAgainCommand}" />
                                                                 <Button Classes="link-button"
                                                                         Content="{loc:Str History.AddTerm}"
                                                                         Command="{Binding AddToDictionaryCommand}" />
@@ -418,6 +429,28 @@
                                                                         Click="OnDeleteRecord"
                                                                         Tag="{Binding}"
                                                                         Foreground="#F06A6A" />
+                                                            </WrapPanel>
+
+                                                            <StackPanel IsVisible="{Binding ShowExpandedActions}" Spacing="6">
+                                                                <TextBlock Text="{loc:Str Recovery.ProviderHint}"
+                                                                           IsVisible="{Binding HasOriginalTranscript}"
+                                                                           TextWrapping="Wrap" Foreground="#8A9AAE" FontSize="11" />
+                                                                <Border IsVisible="{Binding ShowRecoveryPanel}" Background="#10202E"
+                                                                        CornerRadius="6" Padding="12" Margin="0,4,0,8">
+                                                                    <StackPanel Spacing="8">
+                                                                        <TextBlock Text="{Binding RecoveryStatus}" TextWrapping="Wrap" Foreground="#FFD18B" />
+                                                                        <StackPanel IsVisible="{Binding HasRecoveryPreview}" Spacing="6">
+                                                                            <TextBlock Text="{loc:Str Recovery.NewResult}" FontWeight="SemiBold" />
+                                                                            <TextBox Text="{Binding RecoveryText, Mode=OneWay}" IsReadOnly="True"
+                                                                                     TextWrapping="Wrap" MinHeight="60" MaxHeight="220"
+                                                                                     AutomationProperties.Name="{loc:Str Recovery.NewResult}" />
+                                                                            <Button Content="{loc:Str Recovery.CopyResult}" Click="OnCopyRecord"
+                                                                                    Tag="{Binding RecoveryText}" HorizontalAlignment="Left" />
+                                                                        </StackPanel>
+                                                                        <Button Content="{loc:Str Common.Dismiss}" Command="{Binding DismissRecoveryCommand}"
+                                                                                HorizontalAlignment="Left" />
+                                                                    </StackPanel>
+                                                                </Border>
                                                             </StackPanel>
 
                                                             <Border Classes="suggestion-panel"

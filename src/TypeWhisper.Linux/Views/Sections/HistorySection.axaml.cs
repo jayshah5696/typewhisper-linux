@@ -14,6 +14,15 @@ public partial class HistorySection : UserControl
     public HistorySection()
     {
         InitializeComponent();
+        DetachedFromVisualTree += (_, _) =>
+        {
+            if (DataContext is HistorySectionViewModel viewModel) viewModel.CancelRecovery();
+        };
+        PropertyChanged += (_, args) =>
+        {
+            if (args.Property == IsVisibleProperty && !IsVisible && DataContext is HistorySectionViewModel viewModel)
+                viewModel.CancelRecovery();
+        };
     }
 
     private void OnHistoryScrollChanged(object? sender, ScrollChangedEventArgs e)

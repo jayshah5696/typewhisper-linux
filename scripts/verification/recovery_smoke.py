@@ -75,11 +75,19 @@ def wait_request(llm: isolated_app.FakeLlm, count: int) -> None:
         time.sleep(.05)
 
 
+def wait_clipboard(clipboard: X11Clipboard, expected: str) -> None:
+    deadline = time.monotonic() + 5
+    while clipboard.read().decode() != expected:
+        if time.monotonic() > deadline:
+            raise AssertionError("Copied text did not match the expected transcript")
+        time.sleep(.05)
+
+
 def run(args: argparse.Namespace) -> dict:
     if not args.audio.is_file():
         raise FileNotFoundError(f"Public audio is missing: {args.audio}. Run just prepare-corpus first.")
-    if not shutil.which("xclip") or not shutil.which("xdotool"):
-        raise RuntimeError("xclip and xdotool are required on PATH for the private X11 desktop")
+    if not shutil.which("xclip"):
+        raise RuntimeError("xclip is required on PATH for the private X11 desktop")
     subprocess.run(["xclip", "-version"], check=True, capture_output=True, timeout=5)
     subprocess.run([str(args.atspi_python), "-c", "import gi; gi.require_version('Atspi', '2.0')"],
                    check=True, capture_output=True, timeout=5)
@@ -118,13 +126,16 @@ def run(args: argparse.Namespace) -> dict:
             records = json.loads(history_before)
             checks["actual_history_saved"] = any(r["RawText"] == raw and r["FinalText"] == final for r in records)
             click(desktop, "History")
-            click(desktop, "Recent transcriptions")
-            wait_for(desktop, lambda names: "Copy original" in names, "recovery palette")
-            checkpoint(desktop, args.out, "palette-original")
-            click(desktop, "Copy original")
-            wait_for(desktop, lambda names: "Copied recent transcription to clipboard." in names, "original copied")
-            checks["original_clipboard_matches"] = clipboard.read().decode() == raw
+            row_name = final if len(final) <= 100 else final[:100] + "..."
+            click(desktop, row_name)
+            tree = wait_for(desktop, lambda names: "Copy original" in names, "expanded History entry")
+            checks["no_picker_button"] = "Recent transcriptions" not in hidden_desktop.all_names(tree)
+            checkpoint(desktop, args.out, "history-original")
             sentinel = "TypeWhisper private recovery verification clipboard"
+            clipboard.write(sentinel)
+            click(desktop, "Copy original")
+            wait_clipboard(clipboard, raw)
+            checks["original_clipboard_matches"] = clipboard.read().decode() == raw
             clipboard.write(sentinel)
             before_request = len(llm.requests)
             click(desktop, "Clean up again")
@@ -133,26 +144,32 @@ def run(args: argparse.Namespace) -> dict:
             checks["preview_did_not_copy"] = clipboard.read().decode() == sentinel
             prompt = llm.requests[-1]["prompt"]
             expected = json.loads(prompt[prompt.index("{"):])["dictated_text"]
-            checkpoint(desktop, args.out, "palette-cleaned")
+            checkpoint(desktop, args.out, "history-cleaned")
             click(desktop, "Copy new result")
-            wait_for(desktop, lambda names: "Copied recent transcription to clipboard." in names, "new result copied")
+            wait_clipboard(clipboard, expected)
             checks["new_clipboard_matches"] = clipboard.read().decode() == expected
             report["recovered_text"] = expected
-            # Closing while the provider works must never copy its eventual response.
+            # Dismissing or collapsing the row must discard an eventual response.
             clipboard.write(sentinel)
             llm.delay_seconds = 2
             before_request = len(llm.requests)
             click(desktop, "Clean up again")
             wait_request(llm, before_request + 1)
-            # Use the window manager's normal close request; Escape is also covered
-            # by the rendered-window input test, without depending on nested keyboard focus.
-            subprocess.run(["xdotool", "search", "--name", "^Recent transcriptions$", "windowclose"],
-                           env=app.env, check=True, capture_output=True, timeout=5)
-            wait_for(desktop, lambda names: "Copy original" not in names, "closed recovery palette")
+            click(desktop, "Dismiss")
+            wait_for(desktop, lambda names: "Cleaning up..." not in names, "dismissed cleanup")
             time.sleep(2.1)
             checks["cancel_kept_clipboard"] = clipboard.read().decode() == sentinel
-            click(desktop, "Recent transcriptions")
-            wait_for(desktop, lambda names: "Copy original" in names, "reopened recovery palette")
+            checks["dismiss_discarded_preview"] = "Copy new result" not in hidden_desktop.all_names(desktop.accessibility()["tree"])
+            before_request = len(llm.requests)
+            click(desktop, "Clean up again")
+            wait_request(llm, before_request + 1)
+            click(desktop, row_name)
+            wait_for(desktop, lambda names: "Copy original" not in names, "collapsed History entry")
+            time.sleep(2.1)
+            checks["collapse_kept_clipboard"] = clipboard.read().decode() == sentinel
+            click(desktop, row_name)
+            tree = wait_for(desktop, lambda names: "Copy original" in names, "reopened History entry")
+            checks["collapse_discarded_preview"] = "Copy new result" not in hidden_desktop.all_names(tree)
             before_request = len(llm.requests)
             click(desktop, "Clean up again")
             wait_request(llm, before_request + 1)
@@ -160,7 +177,7 @@ def run(args: argparse.Namespace) -> dict:
             wait_for(desktop, lambda names: reason in names and "Cleaning up..." not in names, "cleanup timeout")
             checks["timeout_visible"] = True
             checks["timeout_did_not_copy"] = clipboard.read().decode() == sentinel
-            checkpoint(desktop, args.out, "palette-timeout")
+            checkpoint(desktop, args.out, "history-timeout")
             checks["history_unchanged"] = history.read_bytes() == history_before
             result = app.api("/v1/text/process", {"text": "uh preserve the previous result"})
             report["timeout_api"] = result

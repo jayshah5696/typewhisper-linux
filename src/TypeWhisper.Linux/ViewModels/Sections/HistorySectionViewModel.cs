@@ -43,7 +43,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
-    private readonly Action? _openRecentTranscriptions;
+    private readonly Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? _cleanAgain;
     private HistoryRecordRow? _readingRow;
     private IManualReadback? _readback;
     private readonly TimeZoneInfo _timeZone;
@@ -81,7 +81,7 @@ public partial class HistorySectionViewModel : ObservableObject
         AudioPlaybackService audioPlayback,
         SpeechFeedbackService speech,
         DictationOrchestrator? recovery = null,
-        RecentTranscriptionsService? recentTranscriptions = null
+        LlmCleanupService? cleanup = null
     )
         : this(
             history,
@@ -93,7 +93,12 @@ public partial class HistorySectionViewModel : ObservableObject
             () => DateTime.UtcNow,
             recovery is null ? null : recovery.RetryFromHistoryAsync,
             speech,
-            recentTranscriptions is null ? null : recentTranscriptions.TogglePalette
+            cleanup is null ? null : (record, token) => cleanup.CleanWithResultAsync(
+                record.RawText,
+                (record.CleanupOutcome?.RequestedLevel ?? record.CleanupLevelUsed) == CleanupLevel.High
+                    ? CleanupLevel.High : CleanupLevel.Medium,
+                timeout: TimeSpan.FromSeconds(Math.Clamp(settings.Current.CleanupTimeoutSeconds, 0, 120)),
+                ct: token, sourceLanguage: record.Language)
         ) { }
 
     internal HistorySectionViewModel(
@@ -106,12 +111,12 @@ public partial class HistorySectionViewModel : ObservableObject
         Func<DateTime> utcNow,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
         SpeechFeedbackService? speech = null,
-        Action? openRecentTranscriptions = null
+        Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? cleanAgain = null
     )
     {
         _history = history;
         _speech = speech;
-        _openRecentTranscriptions = openRecentTranscriptions;
+        _cleanAgain = cleanAgain;
         _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
@@ -134,8 +139,14 @@ public partial class HistorySectionViewModel : ObservableObject
         _ = LoadAsync();
     }
 
-    [RelayCommand]
-    private void OpenRecentTranscriptions() => _openRecentTranscriptions?.Invoke();
+    internal bool CanCleanAgain => _cleanAgain is not null;
+    internal Task<CleanupResult> CleanAgainAsync(TranscriptionRecord record, CancellationToken token) =>
+        _cleanAgain!(record, token);
+
+    public void CancelRecovery()
+    {
+        foreach (var row in _rows.Values) row.DismissRecoveryCommand.Execute(null);
+    }
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = [Loc.Instance["History.AllApps"]];
@@ -637,7 +648,13 @@ public partial class HistorySectionViewModel : ObservableObject
         var ids = _history.Records.Select(record => record.Id).ToHashSet(StringComparer.Ordinal);
         _selectedIds.IntersectWith(ids);
         foreach (var id in _rows.Keys.Where(id => !ids.Contains(id)).ToList())
+        {
+            _rows[id].DismissRecoveryCommand.Execute(null);
             _rows.Remove(id);
+        }
+        var visibleIds = _filtered.Select(record => record.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var row in _rows.Values.Where(row => !visibleIds.Contains(row.Record.Id)))
+            row.DismissRecoveryCommand.Execute(null);
 
         // Clear-all and retention pruning drop the row along with its stop button,
         // so its readback must not keep playing with no way to stop it.
@@ -769,6 +786,72 @@ public sealed class HistoryGroupViewModel
 public partial class HistoryRecordRow : ObservableObject
 {
     private readonly HistorySectionViewModel _owner;
+    private CancellationTokenSource? _recoveryCts;
+
+    [ObservableProperty]
+    private string _recoveryText = "";
+
+    [ObservableProperty]
+    private string _recoveryStatus = "";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CleanAgainCommand))]
+    private bool _isRecovering;
+
+    public bool HasOriginalTranscript => !Record.IsSpokenCommand && !string.IsNullOrWhiteSpace(Record.RawText);
+    public bool HasRecoveryPreview => !string.IsNullOrWhiteSpace(RecoveryText);
+    public bool ShowRecoveryPanel => IsRecovering || HasRecoveryPreview || !string.IsNullOrEmpty(RecoveryStatus);
+    private bool CanCleanAgain() => HasOriginalTranscript && _owner.CanCleanAgain && !IsRecovering;
+
+    partial void OnRecoveryTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasRecoveryPreview));
+        OnPropertyChanged(nameof(ShowRecoveryPanel));
+    }
+    partial void OnRecoveryStatusChanged(string value) => OnPropertyChanged(nameof(ShowRecoveryPanel));
+    partial void OnIsRecoveringChanged(bool value) => OnPropertyChanged(nameof(ShowRecoveryPanel));
+
+    [RelayCommand(CanExecute = nameof(CanCleanAgain))]
+    private async Task CleanAgainAsync()
+    {
+        using var cts = new CancellationTokenSource();
+        _recoveryCts = cts;
+        RecoveryText = "";
+        RecoveryStatus = Loc.Instance["Recovery.Cleaning"];
+        IsRecovering = true;
+        try
+        {
+            var result = await _owner.CleanAgainAsync(Record, cts.Token);
+            if (cts.IsCancellationRequested || !ReferenceEquals(_recoveryCts, cts)) return;
+            RecoveryText = result.Text;
+            RecoveryStatus = result.Outcome.FallbackReason is { } reason
+                ? CleanupOutcomeText.ForFallback(reason) : Loc.Instance["Recovery.Ready"];
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            if (!cts.IsCancellationRequested && ReferenceEquals(_recoveryCts, cts))
+                RecoveryStatus = Loc.Instance["Recovery.Failed"];
+        }
+        finally
+        {
+            if (ReferenceEquals(_recoveryCts, cts))
+            {
+                _recoveryCts = null;
+                IsRecovering = false;
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void DismissRecovery()
+    {
+        _recoveryCts?.Cancel();
+        _recoveryCts = null;
+        IsRecovering = false;
+        RecoveryText = "";
+        RecoveryStatus = "";
+    }
 
     [ObservableProperty]
     private string _editText = "";
@@ -920,6 +1003,9 @@ public partial class HistoryRecordRow : ObservableObject
 
     partial void OnRecordChanged(TranscriptionRecord value)
     {
+        DismissRecovery();
+        OnPropertyChanged(nameof(HasOriginalTranscript));
+        CleanAgainCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(CleanupFallbackStatus));
         OnPropertyChanged(nameof(HasTranscript));
         OnPropertyChanged(nameof(HasFailure));
@@ -988,6 +1074,7 @@ public partial class HistoryRecordRow : ObservableObject
         }
         else
         {
+            DismissRecovery();
             _owner.StopReadAloud(this);
             IsEditing = false;
             IsInspectorVisible = false;
@@ -1022,6 +1109,7 @@ public partial class HistoryRecordRow : ObservableObject
     [RelayCommand]
     private void StartEdit()
     {
+        DismissRecovery();
         _owner.StopReadAloud(this);
         EditText = Record.FinalText;
         IsEditing = true;

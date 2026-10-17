@@ -12,6 +12,80 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HistorySectionViewModelTests : IDisposable
 {
+    [Fact]
+    public async Task InlineRecovery_UsesOriginalAndLeavesSavedResultUnchanged()
+    {
+        var record = CreateRecord("Previous result", raw: "Original transcript");
+        TranscriptionRecord? requested = null;
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            cleanAgain: (entry, _) =>
+            {
+                requested = entry;
+                return Task.FromResult(new CleanupResult("New result", new CleanupOutcome(CleanupLevel.Medium, CleanupLevel.Medium)));
+            });
+        var row = new HistoryRecordRow(record, owner) { IsExpanded = true };
+
+        await row.CleanAgainCommand.ExecuteAsync(null);
+
+        Assert.Same(record, requested);
+        Assert.NotNull(requested);
+        Assert.Equal("Original transcript", requested.RawText);
+        Assert.Equal("New result", row.RecoveryText);
+        Assert.True(row.HasRecoveryPreview);
+        Assert.Equal("Previous result", row.Record.FinalText);
+        row.DismissRecoveryCommand.Execute(null);
+        Assert.False(row.HasRecoveryPreview);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InlineRecovery_CollapseOrDismissCancelsAndDiscardsLateResult(bool collapse)
+    {
+        var response = new TaskCompletionSource<CleanupResult>();
+        CancellationToken requestToken = default;
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            cleanAgain: (_, token) => { requestToken = token; return response.Task; });
+        var row = new HistoryRecordRow(CreateRecord("Previous"), owner) { IsExpanded = true };
+        var pending = row.CleanAgainCommand.ExecuteAsync(null);
+
+        if (collapse) row.IsExpanded = false;
+        else row.DismissRecoveryCommand.Execute(null);
+        Assert.True(requestToken.IsCancellationRequested);
+        response.SetResult(new CleanupResult("Late result", new CleanupOutcome(CleanupLevel.Medium, CleanupLevel.Medium)));
+        await pending;
+
+        Assert.Empty(row.RecoveryText);
+        Assert.Empty(row.RecoveryStatus);
+        Assert.False(row.HasRecoveryPreview);
+        Assert.False(row.IsRecovering);
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("Command input", true)]
+    public void InlineRecovery_DisablesActionsWithoutOriginalDictation(string raw, bool command)
+    {
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            cleanAgain: (_, _) => throw new InvalidOperationException("Must not run"));
+        var row = new HistoryRecordRow(CreateRecord("Final", raw: raw) with { IsSpokenCommand = command }, owner);
+        Assert.False(row.HasOriginalTranscript);
+        Assert.False(row.CleanAgainCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task InlineRecovery_ExplainsFallbackAndKeepsItsPreview()
+    {
+        var owner = CreateViewModel(CreateHistoryService(), CreateDictionaryService(),
+            cleanAgain: (_, _) => Task.FromResult(new CleanupResult("Basic result",
+                new CleanupOutcome(CleanupLevel.High, CleanupLevel.Light, CleanupFallbackReason.TimedOut))));
+        var row = new HistoryRecordRow(CreateRecord("Previous"), owner) { IsExpanded = true };
+        await row.CleanAgainCommand.ExecuteAsync(null);
+        Assert.Equal("Basic result", row.RecoveryText);
+        Assert.Equal(CleanupOutcomeText.ForFallback(CleanupFallbackReason.TimedOut), row.RecoveryStatus);
+        Assert.Equal("Previous", row.Record.FinalText);
+    }
+
     private static readonly TimeSpan s_readbackGuard = TimeSpan.FromSeconds(5);
 
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
@@ -679,7 +753,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
         TimeZoneInfo? timeZone = null,
         Func<DateTime>? utcNow = null,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
-        SpeechFeedbackService? speech = null
+        SpeechFeedbackService? speech = null,
+        Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? cleanAgain = null
     ) =>
         new(
             history,
@@ -695,7 +770,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
             timeZone ?? TimeZoneInfo.Local,
             utcNow ?? (() => DateTime.UtcNow),
             retry,
-            speech
+            speech,
+            cleanAgain
         );
 #pragma warning restore SYSLIB0050
 

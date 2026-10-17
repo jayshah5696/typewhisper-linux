@@ -1,17 +1,19 @@
 # Recover a dictation
 
-Use the recent-transcriptions palette when a transcript is correct but its cleanup needs another attempt. This does not require the recording to be available.
+Use History when a transcript is correct but its cleanup needs another attempt. This does not require the recording to be available.
 
-1. Open History, then select Recent transcriptions. You can also assign a shortcut under Settings, then Shortcuts.
-2. Select a transcript to see its previous result and original transcript.
+1. Open History and expand the transcript you want to recover.
+2. Use Inspect / view source to compare the original transcript with the saved result.
 3. Select Copy original to recover the exact original transcript, or select Clean up again to preview another cleanup attempt.
 4. Review the new result, then select Copy new result.
 
-The new result goes to the clipboard only when you select a copy action. The previous result stays in History. Select Insert previous result, or press Enter while the search field or list has focus, to use the palette's existing insertion behavior.
+The preview appears inside the History entry. The new result goes to the clipboard only when you select Copy new result. The previous result stays in History. Dismiss clears the preview. Collapsing the entry, editing it, or leaving History cancels pending cleanup and clears the preview.
+
+The recent-transcriptions picker is still available through a shortcut under Settings, then Shortcuts. It provides quick access from another app. In that picker, Insert previous result or Enter uses the existing insertion behavior.
 
 Clean up again uses the current cleanup provider. Cloud providers can charge for the request. It uses High cleanup if that level was recorded for the original attempt. Otherwise, it uses Medium cleanup. It repeats only cleanup. It does not run transcription, translation, profile prompt actions, snippets, or plugin actions again.
 
-Selecting another transcript or closing the palette cancels the pending cleanup attempt. A late response cannot replace the new selection or copy text.
+Expanding another History entry cancels the pending cleanup attempt. A late response cannot restore the dismissed preview or copy text.
 
 If AI cleanup times out, fails, returns no text, or has no provider, the palette shows the reason and previews basic cleanup. It does not copy that fallback automatically. New dictations also show the reason in completion feedback and in their expanded History entry.
 

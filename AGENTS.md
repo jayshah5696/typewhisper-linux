@@ -33,7 +33,7 @@ Use `rg` for searches and `apply_patch` for source edits. Use `uv` for Python to
 
 Use the [project verification skill](.agents/skills/verify-typewhisper-linux/SKILL.md) for app, plugin, model, audio, and acceleration changes. Check app state before stopping a process. Do not restart an existing instance merely to verify a change; a user-requested restart is authorized.
 
-Before handing off a user-facing change, run the skill's relevant build, tests, and real app checks end to end. Exercise the changed controls and verify the final result at its destination. For dictation changes, use public audio through an isolated virtual microphone. For recovery changes, start with an actual dictation, open the recovery UI, and read copied text back from the clipboard. Compilation, a successful API response, a rendered screenshot, or a successful copy return alone does not complete verification.
+Before handing off a user-facing change, run the skill's relevant build, tests, and real app checks end to end. Exercise the changed controls and verify the final result at its destination. For dictation changes, use public audio through an isolated virtual microphone. For recovery changes, start with an actual dictation, expand its History entry, and read copied text back from the clipboard. Compilation, a successful API response, a rendered screenshot, or a successful copy return alone does not complete verification.
 
 If a verification environment blocks a check, first try a safe isolated alternative that preserves user data. Keep the PR in draft and report the exact remaining check only when those alternatives cannot complete it. Save a repeatable verification command and evidence with the change. Update the PR's verification results after fixes and reruns.
 
