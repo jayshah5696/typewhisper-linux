@@ -2,6 +2,13 @@
 
 TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justfile` as the source of build, test, restart, and benchmark commands.
 
+## Repository and pull request targets
+
+- `origin` is the personal fork: `jayshah5696/typewhisper-linux`. All feature branches, worktree branches, and pull requests belong here.
+- `linux` is the default active branch on `origin`. PRs must target `origin/linux` unless explicitly requested otherwise.
+- `upstream` is the original repository: `csmashe/typewhisper-linux`. Never open pull requests against `upstream`. Keep all user work and PRs contained in `jayshah5696/typewhisper-linux`.
+- Always verify the target repository when running `gh pr create` using `--repo jayshah5696/typewhisper-linux`.
+
 ## Commands
 
 - `just build` builds the local Debug app and CLI and bundles the Linux plugins.
