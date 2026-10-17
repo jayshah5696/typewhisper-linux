@@ -14,6 +14,10 @@ Settings, then Dictation: choose Auto cleanup and Clean drafts while recording. 
 
 ## Driving it with an isolated instance
 
+For text recovery, run `just verify-recovery <new-output-directory>` after building Release. Prerequisites are documented in `scripts/verification/README.md`. The helper starts with public audio through a dedicated virtual microphone, saves the actual dictation to History, and opens the recovery palette through its History button. It reads both copy actions back from a private X11 clipboard. A distinct clipboard value detects unwanted copying during preview, cancellation, or timeout. The user's clipboard is never used.
+
+Proven on 2026-10-17: all 16 checks passed with the CPU backend. Evidence is under `artifacts/verification/2026-10-17-recovery-e2e-final/`, including `recovery-smoke.json`, `run.json`, and screenshots. The public clip produced "He bent his face over her hair." Transcription took 107.2 ms, fake-provider cleanup 135.6 ms, delivery 267.8 ms, and stop to delivery 874.4 ms in that single run. These values are verification evidence, not a performance comparison. `RecoveryPaletteInputTests` separately verifies that Escape closes the rendered window and cancels its pending request. This proves shared recovery behavior and X11 copying, not native Wayland clipboard behavior or real LLM writing quality.
+
 End to end, with a fake LLM and clipboard read-back:
 
 ```bash
@@ -34,8 +38,10 @@ Proven on 2026-10-14: 30 of 30 cases completed with 30 LLM requests, and the rev
 
 ## Gotchas
 
+- Text recovery is available from History, then Recent transcriptions. Select an entry, copy its original transcript, or run Clean up again and review the new result before copying. Selecting another entry or closing the palette cancels pending cleanup. Use the private X11 recovery helper for clipboard read-back when the hidden compositor's Wayland clipboard cannot serve text. Do not replace the user's image clipboard to verify this flow.
+
 - `state: ready` means text is ready, not delivered. A run once reported `ready` with `delivery_outcome: Failed`.
-- At Medium or High, a missing or failing provider returns Light text with no error, and the result still says Medium. The only signal is that no `Cleanup` call appears in `llm_calls`. Right after startup the provider registers about one second after the API answers; `capture_text_evals.py` waits for a canary to reach the LLM first.
+- At Medium or High, a missing or failing provider returns Light text. `cleanup_outcome` records the requested level, applied level, and fallback reason independently of optional provenance capture. The text API's `cleanup_level` is the applied level. New dictations show fallback reasons in completion feedback and expanded History. Right after startup the provider registers about one second after the API answers; `capture_text_evals.py` waits for a canary to reach the LLM first.
 - Live cleanup waits 2 s after the last transcript change (`LiveCleanupSession` debounce). A clip followed by less silence never sends a draft; `live_smoke.py` records 4 s of silence by default.
 - The fake LLM echoes its input. It proves request routing, timing, and reuse, not writing quality. Real-provider runs need that provider's credentials inside the isolated instance; decide that with the user.
 - The OpenAI-compatible plugin used to append `/v1/chat/completions` to a base URL that already ended in `/v1`, producing `/v1/v1/...`; it now drops the repeated segment. The fake LLM still rejects any unexpected path.

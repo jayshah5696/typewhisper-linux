@@ -7,6 +7,8 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
+public sealed record CleanupResult(string Text, CleanupOutcome Outcome);
+
 /// <summary>
 ///     Applies rule-based and optional LLM cleanup to transcribed text.
 ///     Light cleanup is always local (no LLM). Medium / High first run the
@@ -48,15 +50,32 @@ public sealed class LlmCleanupService
         ProfileStylePreset? stylePreset = null
     )
     {
+        return (await CleanWithResultAsync(text, level, statusCallback, capture, timeout, ct,
+            sourceLanguage, providerOverride, preparedLightText, stylePreset)).Text;
+    }
+
+    public async Task<CleanupResult> CleanWithResultAsync(
+        string text,
+        CleanupLevel level,
+        Func<string, Task>? statusCallback = null,
+        LlmCallCapture? capture = null,
+        TimeSpan? timeout = null,
+        CancellationToken ct = default,
+        string? sourceLanguage = null,
+        string? providerOverride = null,
+        bool preparedLightText = false,
+        ProfileStylePreset? stylePreset = null
+    )
+    {
         ct.ThrowIfCancellationRequested();
         // Medium/High intentionally fall through to the LLM cleanup path below.
         // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
         switch (level)
         {
             case CleanupLevel.None:
-                return text;
+                return new CleanupResult(text, new CleanupOutcome(level, level));
             case CleanupLevel.Light:
-                return _cleanup.Clean(text, CleanupLevel.Light, sourceLanguage, stylePreset);
+                return new CleanupResult(_cleanup.Clean(text, CleanupLevel.Light, sourceLanguage, stylePreset), new CleanupOutcome(level, level));
         }
 
         var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage, stylePreset);
@@ -66,7 +85,7 @@ public sealed class LlmCleanupService
                 statusCallback,
                 "Cleanup provider unavailable. Using Light cleanup."
             );
-            return lightText;
+            return Fallback(CleanupFallbackReason.ProviderUnavailable);
         }
 
         await NotifyStatusAsync(
@@ -88,7 +107,12 @@ public sealed class LlmCleanupService
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
             _lastLoggedFailure = null;
-            return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
+            if (string.IsNullOrWhiteSpace(cleaned))
+            {
+                await NotifyStatusAsync(statusCallback, CleanupOutcomeText.ForFallback(CleanupFallbackReason.EmptyResponse));
+                return Fallback(CleanupFallbackReason.EmptyResponse);
+            }
+            return new CleanupResult(cleaned.Trim(), new CleanupOutcome(level, level));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -108,7 +132,7 @@ public sealed class LlmCleanupService
             }
             await NotifyStatusAsync(statusCallback, Loc.Instance["Dictation.CleanupTimedOut"]);
             ct.ThrowIfCancellationRequested();
-            return lightText;
+            return Fallback(CleanupFallbackReason.TimedOut);
         }
         catch (Exception ex)
         {
@@ -131,8 +155,11 @@ public sealed class LlmCleanupService
             }
 
             await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
-            return lightText;
+            return Fallback(CleanupFallbackReason.ProviderFailed);
         }
+
+        CleanupResult Fallback(CleanupFallbackReason reason) =>
+            new(lightText, new CleanupOutcome(level, CleanupLevel.Light, reason));
     }
 
     internal string PrepareLiveInput(string text, string? language, ProfileStylePreset? stylePreset = null) =>

@@ -1771,6 +1771,12 @@ public sealed partial class HttpApiService : IDisposable
             profile_id = result.ProfileId,
             profile_name = result.ProfileName,
             cleanup_level = result.CleanupLevel.ToString(),
+            cleanup_outcome = result.CleanupOutcome is { } outcome ? new
+            {
+                requested_level = outcome.RequestedLevel.ToString(),
+                applied_level = outcome.AppliedLevel.ToString(),
+                fallback_reason = outcome.FallbackReason?.ToString(),
+            } : null,
             engine = result.EngineProviderId,
             model = result.EngineModelId,
             steps = result.Steps.Select(step => new

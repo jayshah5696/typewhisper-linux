@@ -64,6 +64,8 @@
             <StackPanel Grid.Row="0">
             <TextBlock Text="{loc:Str History.Title}"
                        Classes="section-header" />
+            <Button Content="{loc:Str RecentTranscriptions.Title}" Command="{Binding OpenRecentTranscriptionsCommand}"
+                    HorizontalAlignment="Left" Margin="0,8,0,0" />
 
             <Grid Margin="0,12,0,8"
                   RowDefinitions="Auto,Auto"
@@ -268,6 +270,7 @@
                                                                     Background="#1AFFFFFF"
                                                                     Margin="0,8,0,7" />
 
+                                                            <TextBlock Text="{Binding CleanupFallbackStatus}" TextWrapping="Wrap" Foreground="#FFD18B" />
                                                             <TextBlock Text="{Binding Record.FinalText}"
                                                                        TextWrapping="Wrap"
                                                                        FontSize="13"

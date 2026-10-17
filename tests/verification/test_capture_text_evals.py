@@ -12,6 +12,29 @@ CASE = {"id": "facts-01", "input": "do not delete the backup", "language": "en",
 
 
 class ResultRowTests(unittest.TestCase):
+    def test_actual_light_level_with_requested_medium_is_a_fallback_error(self):
+        response = {"text": "Do not delete the backup", "cleanup_level": "Light", "llm_calls": [],
+                    "cleanup_outcome": {"requested_level": "Medium", "applied_level": "Light", "fallback_reason": "TimedOut"}}
+        row = capture.result_row(CASE, response, None, 3.0, "fake")
+        self.assertEqual("error", row["status"])
+        self.assertIn("TimedOut", row["error"])
+        self.assertEqual(response["cleanup_outcome"], row["metadata"]["cleanup_outcome"])
+
+    def test_provider_canary_waits_for_requested_ai_even_when_actual_level_is_light(self):
+        class App:
+            calls = 0
+
+            def api(self, _path, _body):
+                self.calls += 1
+                if self.calls == 1:
+                    return {"cleanup_level": "Light", "cleanup_outcome": {"requested_level": "Medium", "fallback_reason": "ProviderUnavailable"}}
+                return {"cleanup_level": "Medium", "cleanup_outcome": {"requested_level": "Medium", "fallback_reason": None},
+                        "llm_calls": [{"stage": "Cleanup", "succeeded": True}]}
+
+        app = App()
+        capture.wait_for_cleanup_provider(app, timeout=2)
+        self.assertEqual(2, app.calls)
+
     def test_failed_request_is_an_error_row_never_a_completed_one(self):
         row = capture.result_row(CASE, None, "HTTP 502: provider failed", 12.0, "fake")
         self.assertEqual("error", row["status"])

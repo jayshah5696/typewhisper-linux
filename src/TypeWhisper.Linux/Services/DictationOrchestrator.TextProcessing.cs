@@ -35,7 +35,10 @@ public sealed record TextProcessingResult(
     string? EngineModelId,
     IReadOnlyList<TextProcessingStep> Steps,
     IReadOnlyList<TextProcessingLlmCall> LlmCalls
-);
+)
+{
+    public CleanupOutcome? CleanupOutcome { get; init; }
+}
 
 public sealed partial class DictationOrchestrator
 {
@@ -92,7 +95,7 @@ public sealed partial class DictationOrchestrator
             .ToList();
 
         return new TextProcessingResult(finalText, request.Text, language, profile?.Id, profile?.Name,
-            ResolveCleanupLevel(context, promptAction), engineProviderId == "" ? null : engineProviderId, engineModelId,
-            steps, calls);
+            context.CleanupOutcome?.AppliedLevel ?? ResolveCleanupLevel(context, promptAction), engineProviderId == "" ? null : engineProviderId, engineModelId,
+            steps, calls) { CleanupOutcome = context.CleanupOutcome };
     }
 }

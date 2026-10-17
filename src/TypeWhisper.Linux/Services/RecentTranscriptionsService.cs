@@ -24,6 +24,8 @@ public sealed class RecentTranscriptionsService
     private readonly bool _isWaylandSession;
     private readonly Func<RecentTranscriptionPasteToolHint> _pasteToolHintProvider;
     private readonly RecentTranscriptionStore _store;
+    private readonly LlmCleanupService? _cleanup;
+    private readonly ISettingsService? _settings;
 
     private bool _paletteOpening;
     private RecentTranscriptionsPaletteWindow? _paletteWindow;
@@ -34,7 +36,8 @@ public sealed class RecentTranscriptionsService
         TextInsertionService textInsertion,
         ISettingsService settings,
         ActiveWindowService activeWindow,
-        SystemCommandAvailabilityService commands
+        SystemCommandAvailabilityService commands,
+        LlmCleanupService cleanup
     )
         : this(
             history,
@@ -48,6 +51,8 @@ public sealed class RecentTranscriptionsService
             WaylandSessionDetector.IsWaylandSession()
         )
     {
+        _cleanup = cleanup;
+        _settings = settings;
     }
 
     internal RecentTranscriptionsService(
@@ -79,10 +84,13 @@ public sealed class RecentTranscriptionsService
         string finalText,
         DateTime timestamp,
         string? appName,
-        string? appProcessName
+        string? appProcessName,
+        string? rawText = null,
+        string? language = null,
+        CleanupOutcome? cleanupOutcome = null
     )
     {
-        _store.RecordTranscription(id, finalText, timestamp, appName, appProcessName);
+        _store.RecordTranscription(id, finalText, timestamp, appName, appProcessName, rawText, language, cleanupOutcome);
     }
 
     public void TogglePalette()
@@ -155,7 +163,9 @@ public sealed class RecentTranscriptionsService
             var target = await CaptureInsertionTargetAsync();
             var viewModel = new RecentTranscriptionsPaletteViewModel(
                 entries,
-                item => InsertEntryFireAndForget(item.Entry, target)
+                item => InsertEntryFireAndForget(item.Entry, target),
+                CleanAgainAsync,
+                text => _insertTextAsync(new TextInsertionRequest(text, AutoPaste: false))
             );
             var window = new RecentTranscriptionsPaletteWindow(viewModel);
             _paletteWindow = window;
@@ -212,6 +222,18 @@ public sealed class RecentTranscriptionsService
             windowId,
             HasUsableIdentity(snapshot) ? snapshot : null
         );
+    }
+
+    // Re-run only cleanup. Prompt actions, translation, snippets and plugin actions must
+    // not execute again when a person asks to repair the wording of a transcript.
+    private Task<CleanupResult> CleanAgainAsync(RecentTranscriptionEntry entry, CancellationToken ct)
+    {
+        if (_cleanup is null || string.IsNullOrWhiteSpace(entry.RawText))
+            throw new InvalidOperationException("Original transcript or cleanup service unavailable.");
+        var level = entry.CleanupOutcome?.RequestedLevel is CleanupLevel.High ? CleanupLevel.High : CleanupLevel.Medium;
+        return _cleanup.CleanWithResultAsync(entry.RawText, level,
+            timeout: TimeSpan.FromSeconds(Math.Clamp(_settings?.Current.CleanupTimeoutSeconds ?? 5, 0, 120)),
+            ct: ct, sourceLanguage: entry.Language);
     }
 
     private void InsertEntryFireAndForget(

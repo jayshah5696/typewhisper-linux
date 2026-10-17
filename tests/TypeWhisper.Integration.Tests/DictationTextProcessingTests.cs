@@ -131,7 +131,10 @@ public sealed class DictationTextProcessingTests
             var result = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("um send the report"));
 
             Assert.Equal(succeeded, Assert.Single(result.LlmCalls).Succeeded);
-            Assert.Equal(CleanupLevel.Medium, result.CleanupLevel);
+            Assert.Equal(succeeded ? CleanupLevel.Medium : CleanupLevel.Light, result.CleanupLevel);
+            Assert.Equal(CleanupLevel.Medium, result.CleanupOutcome!.RequestedLevel);
+            Assert.Equal(result.CleanupLevel, result.CleanupOutcome.AppliedLevel);
+            Assert.Equal(succeeded, result.CleanupOutcome.FallbackReason is null);
             Assert.Equal(succeeded ? "Send the report." : "Send the report", result.Text);
         });
     }

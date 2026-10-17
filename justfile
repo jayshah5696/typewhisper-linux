@@ -75,6 +75,11 @@ ui-check out=("artifacts/verification/" + `date +%F` + "-ui"):
 ui-live out=("artifacts/verification/" + `date +%F` + "-hidden-desktop"):
     uv run --no-project scripts/verification/hidden_desktop.py --out "{{out}}"
 
+# Public audio to History, recovery UI, and clipboard read-back in a private desktop.
+# Requires xclip, xdotool, and system Python GI bindings. Never touches the user's clipboard.
+verify-recovery out=("artifacts/verification/" + `date +%F` + "-recovery-e2e"):
+    uv run --no-project scripts/verification/recovery_smoke.py --out "{{out}}"
+
 # Warm end-to-end dictation timings: n dictations in one isolated instance, median and max
 # per stage (transcription, each processing step, queue, delivery). Fake LLM, public clip.
 perf n="5" out=("artifacts/verification/" + `date +%F` + "-perf"):

@@ -43,6 +43,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
+    private readonly Action? _openRecentTranscriptions;
     private HistoryRecordRow? _readingRow;
     private IManualReadback? _readback;
     private readonly TimeZoneInfo _timeZone;
@@ -79,7 +80,8 @@ public partial class HistorySectionViewModel : ObservableObject
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback,
         SpeechFeedbackService speech,
-        DictationOrchestrator? recovery = null
+        DictationOrchestrator? recovery = null,
+        RecentTranscriptionsService? recentTranscriptions = null
     )
         : this(
             history,
@@ -90,7 +92,8 @@ public partial class HistorySectionViewModel : ObservableObject
             TimeZoneInfo.Local,
             () => DateTime.UtcNow,
             recovery is null ? null : recovery.RetryFromHistoryAsync,
-            speech
+            speech,
+            recentTranscriptions is null ? null : recentTranscriptions.TogglePalette
         ) { }
 
     internal HistorySectionViewModel(
@@ -102,11 +105,13 @@ public partial class HistorySectionViewModel : ObservableObject
         TimeZoneInfo timeZone,
         Func<DateTime> utcNow,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
-        SpeechFeedbackService? speech = null
+        SpeechFeedbackService? speech = null,
+        Action? openRecentTranscriptions = null
     )
     {
         _history = history;
         _speech = speech;
+        _openRecentTranscriptions = openRecentTranscriptions;
         _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
@@ -128,6 +133,9 @@ public partial class HistorySectionViewModel : ObservableObject
         Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         _ = LoadAsync();
     }
+
+    [RelayCommand]
+    private void OpenRecentTranscriptions() => _openRecentTranscriptions?.Invoke();
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = [Loc.Instance["History.AllApps"]];
@@ -812,6 +820,9 @@ public partial class HistoryRecordRow : ObservableObject
         TextInsertionStatus.Failed or TextInsertionStatus.ActionFailed or TextInsertionStatus.ActionUnavailable
         or TextInsertionStatus.MissingClipboardTool or TextInsertionStatus.MissingPasteTool);
 
+    public string CleanupFallbackStatus => Record.CleanupOutcome?.FallbackReason is { } reason
+        ? CleanupOutcomeText.ForFallback(reason) : "";
+
     partial void OnRetryResultChanged(string value)
     {
         OnPropertyChanged(nameof(HasRetryResult));
@@ -909,6 +920,7 @@ public partial class HistoryRecordRow : ObservableObject
 
     partial void OnRecordChanged(TranscriptionRecord value)
     {
+        OnPropertyChanged(nameof(CleanupFallbackStatus));
         OnPropertyChanged(nameof(HasTranscript));
         OnPropertyChanged(nameof(HasFailure));
         OnPropertyChanged(nameof(FailureMessage));

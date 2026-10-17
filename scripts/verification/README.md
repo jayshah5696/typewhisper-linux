@@ -1,5 +1,13 @@
 # Performance verification
 
+## Recovery verification
+
+Run `just doctor`, then `just build-release` and `just verify-recovery <new-output-directory>` for dictation recovery changes. The recovery helper uses the hidden desktop dependencies plus `xclip`, `xdotool`, and system Python with GI and AT-SPI bindings. It defaults to the existing public clip under `/tmp/typewhisper-benchmark/`; run `just prepare-corpus` if that clip is missing.
+
+The helper starts an isolated Release app and copies the existing Sherpa model without modifying the source files. It records only a virtual microphone. It verifies public audio through dictation and saved History, then opens the recovery palette through the actual History button. Both copy actions must match text read back from the private X11 clipboard. A separate clipboard value detects unwanted copying during preview, cancellation, or timeout. The original history file must remain unchanged.
+
+Screenshots, the actual backend, separate stage timings, and check results go into the output directory. Every required check must pass for the command to succeed. The cleanup endpoint is a local fake provider, so this proves behavior and routing rather than LLM writing quality. The check proves X11 clipboard behavior and the shared recovery controls; it does not establish native Wayland clipboard behavior. It never reads or replaces the user's clipboard.
+
 For before/after cleanup quality, dictionary cases, audio scenarios, and optional LLM judging, use the [dictation eval workflow](../../evals/dictation/README.md). Keep quality verdicts separate from performance timings.
 
 Use the same public audio corpus and order when comparing engines, backends, or code changes. Keep the first request separate from later requests. Do not call a preloaded first request a cold model load.

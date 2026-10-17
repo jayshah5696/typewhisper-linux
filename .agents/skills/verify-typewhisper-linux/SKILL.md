@@ -55,6 +55,7 @@ Use the real user path. Internal setters and test-only endpoints are not proof o
 - HTTP API on an isolated instance: `/v1/dictation/start`, `/v1/dictation/stop`, and `/v1/dictation/transcription?sessionId=` for dictation; `/v1/transcribe/local-file` for files; `/v1/models/load` to load a model; `/v1/text/process` to run raw text through the final dictation pipeline without inserting it.
 - Microphone: play public audio into the isolated instance's null sink with `VirtualMic.play`. `IsolatedApp.capture_sources()` must list only the fixture monitor. Record a physical microphone only with an approved test phrase.
 - Delivery: the session result's `state: ready` and a successful insertion return do not prove delivery. Read the text back from the destination; `live_smoke.py` reads the clipboard and compares it with the session text.
+- Recovery: run `just verify-recovery` after building Release. It dictates public audio through a virtual microphone, opens History and the recovery palette, and reads both copy actions back from a private X11 clipboard. It checks cancellation, timeout feedback, and history preservation. It requires `xclip`, `xdotool`, and system Python GI bindings. It does not use the user's clipboard. This proves the shared recovery flow on X11, not native Wayland clipboard behavior.
 - Settings: the Settings window, or settings written into an isolated instance before launch. Confirm `acceleration.active_backend` from `/v1/status` after model load; a selected preference does not prove the backend ran.
 
 ## Evidence
@@ -87,6 +88,7 @@ All Python helpers use the standard library and run with `uv run --no-project`. 
 | `scripts/verification/doctor.py` | Read-only health report (`just doctor`) |
 | `scripts/verification/isolated_app.py` | Isolated instance, virtual mic, fake OpenAI-compatible LLM, run manifest |
 | `scripts/verification/live_smoke.py` | End-to-end dictation with clipboard read-back (`just live-smoke`) |
+| `scripts/verification/recovery_smoke.py` | Public audio through History, recovery controls, cancellation, and private X11 clipboard read-back (`just verify-recovery`) |
 | `scripts/verification/capture_text_evals.py` | Eval capture through `/v1/text/process` (`just eval-capture`) |
 | `scripts/verification/benchmark_transcription.py`, `compare_benchmarks.py` | File ASR benchmark and before/after comparison (`just benchmark`) |
 | `scripts/verification/prepare_librispeech.py` | Fixed public corpus (`just prepare-corpus`) |
