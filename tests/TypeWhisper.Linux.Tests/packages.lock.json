@@ -522,6 +522,12 @@
       },
       "typewhisper.processtestchild": {
         "type": "Project"
+      },
+      "typewhisper.transcriptionworkerprobe": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
+        }
       }
     }
   }

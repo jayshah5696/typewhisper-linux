@@ -1844,9 +1844,21 @@ public sealed partial class DictationOrchestrator : IDisposable
                     );
                     duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
 
-                    var path = _sessionAudioFiles.SaveDictationCapture(wav);
-                    RecordingCaptured?.Invoke(this, path);
-                    Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+                    // The text matters more than the recording: when the capture cannot be written,
+                    // transcription continues from memory.
+                    var path = _sessionAudioFiles.TrySaveDictationCapture(wav, out var saveFailure);
+                    if (path is null)
+                    {
+                        _errorLog.AddEntry(
+                            $"Dictation audio could not be saved ({saveFailure?.GetType().Name}); transcription continues without a recording to retry from.",
+                            ErrorCategory.Recording
+                        );
+                    }
+                    else
+                    {
+                        RecordingCaptured?.Invoke(this, path);
+                        Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+                    }
 
                     await TranscribeAndInsertAsync(
                         wav,
@@ -1959,6 +1971,14 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         return _inFlightTracker.Contains(sessionId);
     }
+
+    /// <summary>
+    ///     True while any dictation is starting, recording or still delivering its text, so
+    ///     another insertion could race its clipboard snapshot and restore.
+    /// </summary>
+    // The in-flight set clears when the result is published, before the text is inserted;
+    // the insertion-order slot is held until insertion finishes.
+    public bool HasDictationInFlight => _inFlightTracker.HasActivity || _insertionOrder.HasPending;
 
     /// <summary>
     ///     Maps an overlay StatusText to one of the <c>typewhisper status</c>
@@ -2214,7 +2234,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private async Task TranscribeAndInsertAsync(
         byte[] wav,
-        string wavPath,
+        string? wavPath,
         double duration,
         double recordedDuration,
         RecordingContext context
@@ -3148,13 +3168,14 @@ public sealed partial class DictationOrchestrator : IDisposable
             var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
                 _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token,
-                    retryBudget: retryBudget),
+                    retryBudget: retryBudget, memorySourceId: context.Profile?.MemorySourceId),
                 () => _promptProcessing.ProcessAsync(
                     promptAction,
                     text,
                     context.Capture,
                     token,
-                    retryBudget: retryBudget
+                    retryBudget: retryBudget,
+                    memorySourceId: context.Profile?.MemorySourceId
                 ),
                 accumulated =>
                 {
@@ -3418,7 +3439,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             if (!canStreamDirectly)
             {
                 var oneShot = await _promptProcessing
-                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput)
+                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput,
+                        memorySourceId: context.Profile?.MemorySourceId)
                     .ConfigureAwait(false);
                 failureOutput = oneShot;
                 if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
@@ -3441,6 +3463,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 action,
                 input,
                 wrapInput,
+                context.Profile?.MemorySourceId,
                 context.Capture,
                 context.AppProcess,
                 async () =>
@@ -3629,6 +3652,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         PromptAction action,
         string input,
         bool wrapInput,
+        string? memorySourceId,
         LlmCallCapture? capture,
         string? targetProcessName,
         Func<Task<bool>> onFirstType,
@@ -3645,7 +3669,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         try
         {
             await foreach (var delta in _promptProcessing
-                               .ProcessStreamingAsync(action, input, capture, token, wrapInput))
+                               .ProcessStreamingAsync(action, input, capture, token, wrapInput,
+                                   memorySourceId: memorySourceId))
             {
                 if (string.IsNullOrEmpty(delta))
                 {
@@ -3752,7 +3777,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             // faulted/empty streaming attempt and the batch retry that produced the result,
             // instead of a history entry whose recorded response doesn't match the inserted
             // text (mirrors the prompt-action streaming→batch fallback).
-            var batch = await _promptProcessing.ProcessAsync(action, input, capture, token, wrapInput)
+            var batch = await _promptProcessing
+                .ProcessAsync(action, input, capture, token, wrapInput, memorySourceId: memorySourceId)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(batch))
             {
@@ -3946,32 +3972,10 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private TextInsertionStrategy ResolveInsertionStrategy(string? processName)
     {
-        if (string.IsNullOrWhiteSpace(processName))
-        {
-            return TextInsertionStrategy.Auto;
-        }
-
-        var strategies = _settings.Current.AppInsertionStrategies;
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- AppInsertionStrategies is JSON-deserialized and can be null when omitted; the guard is defensive.
-        if (strategies is null || strategies.Count == 0)
-        {
-            return TextInsertionStrategy.Auto;
-        }
-
-        var process = ProcessNameNormalizer.Normalize(processName);
-        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- explicit loop with dual-key (raw + normalized) matching is clearer than a LINQ rewrite.
-        foreach (var entry in strategies)
-        {
-            if (
-                string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return entry.Value;
-            }
-        }
-
-        return TextInsertionStrategy.Auto;
+        return AppInsertionStrategyResolver.Resolve(
+            _settings.Current.AppInsertionStrategies,
+            processName
+        );
     }
 
     private static string ClipboardToolMissingMessage()
@@ -4219,7 +4223,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         string finalText,
         double duration,
         PluginTranscriptionResult? result,
-        string wavPath,
+        string? wavPath,
         string engineUsed,
         string? modelUsed
     )
@@ -4263,7 +4267,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         string finalText,
         double duration,
         PluginTranscriptionResult? result,
-        string wavPath,
+        string? wavPath,
         string engineUsed,
         string? modelUsed,
         TextInsertionStatus insertionStatus
@@ -4325,7 +4329,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         string finalText,
         double duration,
         PluginTranscriptionResult? result,
-        string wavPath,
+        string? wavPath,
         InsertionResult insertion,
         PostProcessingResult pipelineResult,
         CleanupLevel cleanupLevel,

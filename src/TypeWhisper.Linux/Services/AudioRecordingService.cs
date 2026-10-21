@@ -226,6 +226,9 @@ public sealed class AudioRecordingService : IDisposable
     // Must be allocation-free and non-blocking; sink borrows processedBuffer (no copy).
     // A throw detaches the sink via CAS so the same exception can't kill every frame.
     private LiveFrameSubscription? _liveFrameSink;
+
+    // Fed only by preview frames; written under _captureLock, read lock-free by the callback.
+    private MicrophoneTest? _microphoneTest;
     private int? _openStreamDeviceIndex;
     private int _sampleCount;
     private int? _selectedDeviceIndex;
@@ -409,6 +412,7 @@ public sealed class AudioRecordingService : IDisposable
 
             Volatile.Write(ref _disposed, 1);
             var activeSession = Volatile.Read(ref _activeCaptureSession);
+            EndMicrophoneTestLocked(MicrophoneTestEnd.PreviewStopped);
             Volatile.Write(ref _activeCaptureSession, null);
             activeSession?.Dispose();
             Volatile.Write(ref _liveFrameSink, null);
@@ -522,6 +526,7 @@ public sealed class AudioRecordingService : IDisposable
                 return null;
             }
 
+            EndMicrophoneTestLocked(MicrophoneTestEnd.DictationStarted);
             return _captureReservation = new CaptureReservation(this);
         }
     }
@@ -540,6 +545,7 @@ public sealed class AudioRecordingService : IDisposable
                 return null;
             }
 
+            EndMicrophoneTestLocked(MicrophoneTestEnd.DictationStarted);
             try
             {
                 if (!EnsureInputStreamStarted())
@@ -726,44 +732,157 @@ public sealed class AudioRecordingService : IDisposable
     {
         lock (_captureLock)
         {
-            if (
-                Volatile.Read(ref _disposed) == 1
-                || _activeCaptureSession is not null
-                || IsPreviewing
-            )
+            return StartPreviewLocked() == PreviewStartResult.Started;
+        }
+    }
+
+    private enum PreviewStartResult
+    {
+        Started,
+        Unavailable,
+        NoDevice,
+        Failed,
+    }
+
+    private PreviewStartResult StartPreviewLocked()
+    {
+        if (
+            Volatile.Read(ref _disposed) == 1
+            || _activeCaptureSession is not null
+            || IsPreviewing
+        )
+        {
+            return PreviewStartResult.Unavailable;
+        }
+
+        try
+        {
+            if (!EnsureInputStreamStarted())
             {
-                return false;
+                return PreviewStartResult.NoDevice;
             }
 
-            try
+            Volatile.Write(ref _isPreviewing, 1);
+            PublishLevelGenerationLocked(
+                acceptsFrameUpdates: true,
+                captureSession: null
+            );
+            return PreviewStartResult.Started;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
+            _errorLog?.AddEntry(
+                $"Microphone preview could not start: {ex.Message}",
+                ErrorCategory.Recording
+            );
+            Volatile.Write(ref _isPreviewing, 0);
+            if (_activeCaptureSession is null)
             {
-                if (!EnsureInputStreamStarted())
+                StopAndDisposeInputStream();
+            }
+
+            return PreviewStartResult.Failed;
+        }
+    }
+
+    /// <summary>
+    ///     Starts a microphone test over the preview stream, opening the preview first when
+    ///     it is not running. Refused while dictation owns or has reserved the capture.
+    /// </summary>
+    internal MicrophoneTest? TryStartMicrophoneTest(out MicrophoneTestStartFailure failure)
+    {
+        LevelDeliveryGeneration? closedPreview = null;
+        try
+        {
+            lock (_captureLock)
+            {
+                if (_activeCaptureSession is not null || _captureReservation is not null)
                 {
-                    return false;
+                    failure = MicrophoneTestStartFailure.Busy;
+                    return null;
                 }
 
-                Volatile.Write(ref _isPreviewing, 1);
-                PublishLevelGenerationLocked(
-                    acceptsFrameUpdates: true,
-                    captureSession: null
-                );
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[AudioRecordingService] Failed to start preview: {ex.Message}");
-                _errorLog?.AddEntry(
-                    $"Microphone preview could not start: {ex.Message}",
-                    ErrorCategory.Recording
-                );
-                Volatile.Write(ref _isPreviewing, 0);
-                if (_activeCaptureSession is null)
+                EndMicrophoneTestLocked(MicrophoneTestEnd.StoppedByUser);
+
+                // Always reopen: a stream stalled by an unplug or suspend reports no failure,
+                // and the follow-default device table refreshes only while no stream is open.
+                if (IsPreviewing)
                 {
+                    Volatile.Write(ref _isPreviewing, 0);
                     StopAndDisposeInputStream();
+                    closedPreview = PublishLevelGenerationLocked(
+                        acceptsFrameUpdates: false,
+                        captureSession: null
+                    );
                 }
 
-                return false;
+                var started = StartPreviewLocked();
+                if (started != PreviewStartResult.Started)
+                {
+                    failure = started == PreviewStartResult.NoDevice
+                        ? MicrophoneTestStartFailure.NoDevice
+                        : MicrophoneTestStartFailure.OpenFailed;
+                    return null;
+                }
+
+                closedPreview = null;
+                var test = new MicrophoneTest(
+                    TryGetOpenDeviceName(),
+                    SpeechEnergyThreshold,
+                    _timeProvider
+                );
+                Volatile.Write(ref _microphoneTest, test);
+                failure = MicrophoneTestStartFailure.None;
+                return test;
             }
+        }
+        finally
+        {
+            // A failed reopen leaves the meter on the closed preview; zero it like StopPreview.
+            if (closedPreview is not null)
+            {
+                UpdateLevel(closedPreview, 0f, allowClosingGeneration: true);
+            }
+        }
+    }
+
+    internal void StopMicrophoneTest(MicrophoneTest test, MicrophoneTestEnd reason)
+    {
+        lock (_captureLock)
+        {
+            test.Stop(reason);
+            if (ReferenceEquals(_microphoneTest, test))
+            {
+                Volatile.Write(ref _microphoneTest, null);
+            }
+        }
+    }
+
+    private void EndMicrophoneTestLocked(MicrophoneTestEnd reason)
+    {
+        var test = _microphoneTest;
+        if (test is null)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _microphoneTest, null);
+        test.Stop(reason);
+    }
+
+    private string? TryGetOpenDeviceName()
+    {
+        try
+        {
+            var index = _openStreamDeviceIndex;
+            return index is null
+                ? null
+                : _inputDeviceListProvider().FirstOrDefault(device => device.Index == index)?.Name;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -773,6 +892,7 @@ public sealed class AudioRecordingService : IDisposable
 
         lock (_captureLock)
         {
+            EndMicrophoneTestLocked(MicrophoneTestEnd.PreviewStopped);
             if (!IsPreviewing)
             {
                 return;
@@ -805,10 +925,15 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
-    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
-    {
-        var devices = _inputDeviceListProvider();
+    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId) =>
+        ResolveConfiguredDevice(_inputDeviceListProvider(), preferredIndex, preferredDeviceId);
 
+    internal static AudioInputDevice? ResolveConfiguredDevice(
+        IReadOnlyList<AudioInputDevice> devices,
+        int? preferredIndex,
+        string? preferredDeviceId
+    )
+    {
         // Follow-default sentinel: ignore any pinned index/id and take the current
         // default, so a user who once pinned a device can opt back into auto-follow.
         if (IsFollowSystemDefault(preferredDeviceId))
@@ -1001,14 +1126,20 @@ public sealed class AudioRecordingService : IDisposable
             callbackContext.CaptureSession is not null
                 && Volatile.Read(ref _whisperModeEnabled) == 1
         );
-        UpdateLevel(
-            callbackContext.LevelGeneration,
-            ComputeRmsLevel(processedBuffer),
-            allowClosingGeneration: false
-        );
+        var rms = ComputeRmsLevel(processedBuffer);
+        UpdateLevel(callbackContext.LevelGeneration, rms, allowClosingGeneration: false);
 
         if (callbackContext.CaptureSession is not { } captureSession)
         {
+            // A generation that stopped accepting frames belongs to a stream being replaced.
+            if (
+                callbackContext.LevelGeneration.AcceptsFrameUpdates
+                && Volatile.Read(ref _microphoneTest) is { } test
+            )
+            {
+                test.Observe(buffer, rms);
+            }
+
             return StreamCallbackResult.Continue;
         }
 
@@ -1403,6 +1534,8 @@ public sealed class AudioRecordingService : IDisposable
             // Idle: the new default is applied lazily on the next capture start.
             return;
         }
+
+        EndMicrophoneTestLocked(MicrophoneTestEnd.DeviceChanged);
 
         PublishLevelGenerationLocked(
             acceptsFrameUpdates: false,
@@ -1895,6 +2028,14 @@ public sealed class AudioRecordingService : IDisposable
             }
         }
     }
+}
+
+public enum MicrophoneTestStartFailure
+{
+    None,
+    Busy,
+    NoDevice,
+    OpenFailed,
 }
 
 /// <summary>Minimal descriptor for an audio input device the user can pick from.</summary>

@@ -128,14 +128,18 @@ public sealed class StreamingProviderAdapterConformanceTests
         var gladia = await new GladiaWebSocketAdapter(
                 gladiaHttp,
                 "gladia-key",
-                "de"
+                "de",
+                []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
-                "de"
+                new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl),
+                "de",
+                "enhanced",
+                []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var xai = await new XaiWebSocketAdapter("xai-key", "de")
@@ -152,7 +156,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
 
         Assert.Equal("assembly-key", assembly.Headers!["Authorization"]);
-        Assert.Contains("speech_model=universal-streaming-multilingual", assembly.Uri.Query);
+        Assert.Contains("speech_model=universal-3-6-pro", assembly.Uri.Query);
+        Assert.Contains("language_codes=%5B%22de%22%5D", assembly.Uri.Query);
         Assert.Equal("Token deepgram-key", deepgram.Headers!["Authorization"]);
         Assert.Contains("language=multi", deepgram.Uri.Query);
         Assert.Equal("eleven-key", eleven.Headers!["xi-api-key"]);
@@ -163,6 +168,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         Assert.Equal("/base/v1/speech-to-text/realtime", reson8.Uri.AbsolutePath);
         Assert.Equal("test-token", ParseQuery(gladia.Uri)["token"]);
         Assert.Equal("stt-rt.soniox.com", soniox.Uri.Host);
+        Assert.Equal("wss://eu.rt.speechmatics.com/v2", speechmatics.Uri.ToString());
+        Assert.Equal("Bearer soniox-key", soniox.Headers!["Authorization"]);
         Assert.Equal(
             "Bearer speechmatics-key",
             speechmatics.Headers!["Authorization"]
@@ -338,11 +345,6 @@ public sealed class StreamingProviderAdapterConformanceTests
         string provider
     )
     {
-        // Skipped for Gemini: it documents no signal after audioStreamEnd, so a clean close
-        // before one is the normal end of its session rather than a fault.
-        if (!CreateAdditionalProviderAdapter(provider).Terminal.Required)
-            return;
-
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAdditionalProviderAsync(
             provider,
@@ -383,7 +385,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         // race the receive loop, so let the fault land first.
         await WaitForFaultAsync(pump);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAnyAsync<InvalidOperationException>(
             () => pump.FinalizeAsync(CancellationToken.None).WaitAsync(s_timeout)
         );
         Assert.Contains("rejected", exception.Message, StringComparison.OrdinalIgnoreCase);
@@ -448,6 +450,7 @@ public sealed class StreamingProviderAdapterConformanceTests
 
         var finalize = pump.FinalizeAsync(CancellationToken.None);
         await transport.NextSentAsync();
+        transport.EnqueueText("""{"type":"stop_recording","acknowledged":true}""");
         transport.EnqueueText("""{"type":"end_recording"}""");
         await Task.Delay(50);
         Assert.False(finalize.IsCompleted);
@@ -475,7 +478,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     }
 
     [Fact]
-    public async Task Gemini_FinalizeCompletesWithoutDocumentedTerminalSignal()
+    public async Task Gemini_FinalizeEndsTheActivityAndAwaitsBothCompletionSignals()
     {
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAdditionalProviderAsync("Gemini", transport);
@@ -483,11 +486,14 @@ public sealed class StreamingProviderAdapterConformanceTests
         var finalize = pump.FinalizeAsync(CancellationToken.None);
         var frame = await transport.NextSentAsync();
 
-        Assert.Contains(
-            "audioStreamEnd",
-            Encoding.UTF8.GetString(frame.Payload.Span),
-            StringComparison.Ordinal
+        Assert.Equal(
+            """{"realtimeInput":{"activityEnd":{}}}""",
+            Encoding.UTF8.GetString(frame.Payload.Span)
         );
+        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Done."}}}""");
+        await Task.Delay(50);
+        Assert.False(finalize.IsCompleted);
+        transport.EnqueueText("""{"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"0.0001s"}}""");
         await finalize.WaitAsync(s_timeout);
     }
 
@@ -678,8 +684,9 @@ public sealed class StreamingProviderAdapterConformanceTests
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
-            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en"),
-            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
+            "Speechmatics" => new SpeechmaticsWebSocketAdapter(
+                "key", new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl), "en", "enhanced", []),
+            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null, []),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
@@ -733,7 +740,14 @@ public sealed class StreamingProviderAdapterConformanceTests
                 );
                 await FirstSentOrStartFailureAsync(starting, transport);
                 transport.EnqueueText("""{"setupComplete":{}}""");
-                return await starting.WaitAsync(s_timeout);
+                var gemini = await starting.WaitAsync(s_timeout);
+                // Audio opens the activity; without it finalize has nothing to wait for.
+                await gemini
+                    .SendAudioAsync(new byte[] { 1, 0 }, CancellationToken.None)
+                    .WaitAsync(s_timeout);
+                await transport.NextSentAsync();
+                await transport.NextSentAsync();
+                return gemini;
             }
         }
 

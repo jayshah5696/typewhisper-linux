@@ -27,6 +27,7 @@ public sealed class PromptPaletteService
         Loc.Instance["Prompts.NoProviderConfigure"];
 
     private bool _opening;
+    private int _activeRuns;
 
     public PromptPaletteService(
         IServiceProvider services,
@@ -51,6 +52,9 @@ public sealed class PromptPaletteService
         _commands = commands;
     }
 
+    /// <summary>True from selection capture until the result is delivered: the clipboard is in use.</summary>
+    public bool IsActive => Volatile.Read(ref _activeRuns) > 0;
+
     public async Task TogglePaletteAsync()
     {
         if (_opening)
@@ -59,12 +63,14 @@ public sealed class PromptPaletteService
         }
 
         _opening = true;
+        Interlocked.Increment(ref _activeRuns);
         try
         {
             await OpenPaletteAsync();
         }
         finally
         {
+            Interlocked.Decrement(ref _activeRuns);
             _opening = false;
         }
     }
@@ -74,8 +80,10 @@ public sealed class PromptPaletteService
     ///     without opening the palette. Manual-only actions are not filtered here
     ///     (that's the B13 flag's purpose). Disabled actions are filtered by
     ///     <see cref="IPromptActionService.EnabledActions" /> so stale hotkeys are no-ops.
+    ///     <paramref name="memorySourceId" /> is the triggering profile's
+    ///     <see cref="Profile.MemorySourceId" />; null follows the global memory setting.
     /// </summary>
-    public async Task ExecuteActionDirectAsync(string actionId)
+    public async Task ExecuteActionDirectAsync(string actionId, string? memorySourceId = null)
     {
         var action = _promptActions.EnabledActions.FirstOrDefault(a => a.Id == actionId);
         if (action is null)
@@ -84,18 +92,27 @@ public sealed class PromptPaletteService
         }
 
         var targetSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
-        var captured = await _textInsertion.CaptureSelectedTextAsync(
-            TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
-        );
-        if (string.IsNullOrWhiteSpace(captured))
-        {
-            await ShowWarningAsync("TypeWhisper", "Select text before running a correction.");
-            return;
-        }
 
-        // No palette window: streaming has no UI sink (null → no-op renders),
-        // but the result still streams + falls back to batch before configured delivery.
-        await ExecuteActionAsync(action, captured, null, targetSnapshot);
+        Interlocked.Increment(ref _activeRuns);
+        try
+        {
+            var captured = await _textInsertion.CaptureSelectedTextAsync(
+                TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
+            );
+            if (string.IsNullOrWhiteSpace(captured))
+            {
+                await ShowWarningAsync("TypeWhisper", "Select text before running a correction.");
+                return;
+            }
+
+            // No palette window: streaming has no UI sink (null → no-op renders),
+            // but the result still streams + falls back to batch before configured delivery.
+            await ExecuteActionAsync(action, captured, null, targetSnapshot, memorySourceId);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeRuns);
+        }
     }
 
     private async Task OpenPaletteAsync()
@@ -137,14 +154,15 @@ public sealed class PromptPaletteService
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText, window, targetSnapshot);
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetSnapshot, null);
     }
 
     private async Task ExecuteActionAsync(
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
-        ActiveWindowSnapshot? targetSnapshot
+        ActiveWindowSnapshot? targetSnapshot,
+        string? memorySourceId
     )
     {
         if (_processing.HasNoProviderForRequest(action.ProviderOverride))
@@ -169,7 +187,7 @@ public sealed class PromptPaletteService
         string result;
         try
         {
-            result = await RunActionAsync(action, capturedText, window, userCts.Token);
+            result = await RunActionAsync(action, capturedText, window, memorySourceId, userCts.Token);
 
             // Don't paste a result the user aborted while it was being finalized.
             userCts.Token.ThrowIfCancellationRequested();
@@ -375,6 +393,7 @@ public sealed class PromptPaletteService
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
@@ -390,7 +409,8 @@ public sealed class PromptPaletteService
         try
         {
             streamed = await pump.RunAsync(
-                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token),
+                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token,
+                    memorySourceId: memorySourceId),
                 streamCts.Token
             );
         }
@@ -407,7 +427,7 @@ public sealed class PromptPaletteService
         )
         {
             // Streaming timed out (no user cancel) — fall back to batch.
-            return await BatchAsync(action, capturedText, userToken);
+            return await BatchAsync(action, capturedText, memorySourceId, userToken);
         }
 
         pump.ThrowIfNonRetryableFault();
@@ -415,13 +435,14 @@ public sealed class PromptPaletteService
         // Fall back to batch when the pump faulted or yielded nothing. A single
         // empty chunk (bulk-yield path) still sets ReceivedAnyChunk so it is not re-run.
         return pump.Faulted || !pump.ReceivedAnyChunk
-            ? await BatchAsync(action, capturedText, userToken)
+            ? await BatchAsync(action, capturedText, memorySourceId, userToken)
             : streamed;
     }
 
     private async Task<string> BatchAsync(
         PromptAction action,
         string capturedText,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
@@ -430,7 +451,8 @@ public sealed class PromptPaletteService
         batchCts.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token);
+            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token,
+                memorySourceId: memorySourceId);
         }
         catch (Exception ex) when (
             ClassifyCancellationOrigin(ex, userToken, batchCts.Token)

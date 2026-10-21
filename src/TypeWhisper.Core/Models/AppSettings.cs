@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Services.Diagnostics;
+
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
@@ -38,6 +40,7 @@ public record AppSettings
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string ReadLastTranscriptionHotkey { get; init; } = "";
+    public string PasteLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     /// <summary>Ordered spoken-language hints; the first entry mirrors Language, empty means unrestricted auto-detection.</summary>
@@ -172,6 +175,10 @@ public record AppSettings
 
     // Opt-in Sentry crash + performance reporting; default off (see docs/PRIVACY.md).
     public bool CrashReportingEnabled { get; init; }
+
+    // Opt-in local, content-free diagnostic log (Logs/diagnostics.jsonl); never sent anywhere.
+    public bool DiagnosticLogEnabled { get; init; }
+    public int DiagnosticLogRetentionDays { get; init; } = DiagnosticLogPreferences.DefaultRetentionDays;
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }

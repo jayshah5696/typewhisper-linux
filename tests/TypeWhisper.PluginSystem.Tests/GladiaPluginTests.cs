@@ -949,18 +949,131 @@ public class GladiaPluginTests
     }
 
     [Fact]
+    public void DeclaresStructuredDictionaryTermsWithVocabularyBudget()
+    {
+        using var sut = new GladiaPlugin();
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxTotalChars: 4_000), sut.DictionaryTermsBudget);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SendsDictionaryTermsWholeAsCustomVocabulary()
+    {
+        JsonElement? initiation = null;
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+                initiation = JsonDocument.Parse(body!).RootElement.Clone();
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            PluginTranscriptionPrompt.Encode(
+                "Likely spoken languages: en, de.",
+                ["Washington, D.C.", "TypeWhisper"]
+            ),
+            CancellationToken.None
+        );
+
+        var root = Assert.NotNull(initiation);
+        Assert.True(root.GetProperty("custom_vocabulary").GetBoolean());
+        AssertVocabularyConfig(root.GetProperty("custom_vocabulary_config"), "Washington, D.C.", "TypeWhisper");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PromptTextWithoutTermsSendsNoCustomVocabulary()
+    {
+        JsonElement? initiation = null;
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+                initiation = JsonDocument.Parse(body!).RootElement.Clone();
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3],
+            null,
+            translate: false,
+            PluginTranscriptionPrompt.Encode("Alpha, Beta", []),
+            CancellationToken.None
+        );
+
+        var root = Assert.NotNull(initiation);
+        Assert.Equal(["audio_url"], root.EnumerateObject().Select(property => property.Name).ToArray());
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MalformedPromptEnvelopeFailsBeforeHttp()
+    {
+        var handler = new CountingHandler();
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.TranscribeAsync(
+            [1, 2, 3],
+            null,
+            translate: false,
+            PluginTranscriptionPrompt.EnvelopePrefix + "[]",
+            CancellationToken.None
+        ));
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_ClipsTermsToTheBudget()
+    {
+        var terms = Enumerable.Range(1, 150).Select(index => $"Term {index}").ToArray();
+
+        var vocabulary = GladiaPlugin.ExtractVocabulary(PluginTranscriptionPrompt.Encode(null, terms));
+
+        Assert.Equal(terms.Take(100), vocabulary);
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_SendsTermsAsRealtimeCustomVocabulary()
+    {
+        JsonElement? init = null;
+        var handler = new CapturingHandler((request, body) =>
+        {
+            AssertApiKey(request);
+            Assert.Equal(GladiaSession.InitUrl, request.RequestUri?.ToString());
+            init = JsonDocument.Parse(body!).RootElement.Clone();
+            return JsonResponse("""{ "message": "stop after init" }""", HttpStatusCode.ServiceUnavailable);
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            [" ", "fr"],
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None
+        ));
+
+        var root = Assert.NotNull(init);
+        Assert.Equal("fr", root.GetProperty("language_config").GetProperty("languages")[0].GetString());
+        Assert.False(root.TryGetProperty("custom_vocabulary", out _));
+        var realtime = root.GetProperty("realtime_processing");
+        Assert.True(realtime.GetProperty("custom_vocabulary").GetBoolean());
+        AssertVocabularyConfig(realtime.GetProperty("custom_vocabulary_config"), "Washington, D.C.", "TypeWhisper");
+    }
+
+    [Fact]
     public void BuildInitRequest_UsesWavPcmAndEnablesPartials()
     {
-        var json = GladiaSession.BuildInitRequest("de", 16000);
+        var json = GladiaSession.BuildInitRequest("de", [], 16000);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         Assert.Equal("wav/pcm", root.GetProperty("encoding").GetString());
         Assert.Equal(16, root.GetProperty("bit_depth").GetInt32());
         Assert.Equal(16000, root.GetProperty("sample_rate").GetInt32());
-        Assert.True(
-            root.GetProperty("messages_config").GetProperty("receive_partial_transcripts").GetBoolean()
-        );
+        var messages = root.GetProperty("messages_config");
+        Assert.True(messages.GetProperty("receive_partial_transcripts").GetBoolean());
+        // Finalize waits for end_session, a lifecycle event Gladia sends only on request.
+        Assert.True(messages.GetProperty("receive_lifecycle_events").GetBoolean());
         Assert.Equal(
             "de",
             root.GetProperty("language_config").GetProperty("languages")[0].GetString()
@@ -972,10 +1085,11 @@ public class GladiaPluginTests
     [InlineData("")]
     public void BuildInitRequest_OmitsLanguageConfig_ForUnspecifiedLanguage(string? language)
     {
-        var json = GladiaSession.BuildInitRequest(language, 16000);
+        var json = GladiaSession.BuildInitRequest(language, [], 16000);
 
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("language_config", out _));
+        Assert.False(doc.RootElement.TryGetProperty("realtime_processing", out _));
     }
 
     [Fact]
@@ -1001,13 +1115,16 @@ public class GladiaPluginTests
         var msg = GladiaSession.ParseMessage(
             """
             { "type": "transcript",
-              "data": { "is_final": true, "utterance": { "text": " Hello world" } } }
+              "data": { "id": "00-00000011", "is_final": true,
+                        "utterance": { "text": " Hello world", "language": "en" } } }
             """
         );
 
         Assert.Equal("transcript", msg.MessageType);
+        Assert.Equal("00-00000011", msg.UtteranceId);
         Assert.Equal(" Hello world", msg.Text);
         Assert.True(msg.IsFinal);
+        Assert.Equal("en", msg.Language);
     }
 
     [Fact]
@@ -1016,30 +1133,54 @@ public class GladiaPluginTests
         var msg = GladiaSession.ParseMessage(
             """
             { "type": "transcript",
-              "data": { "is_final": false, "utterance": { "text": "Hello" } } }
+              "data": { "id": "00-00000011", "is_final": false, "utterance": { "text": "Hello" } } }
             """
         );
 
         Assert.Equal("Hello", msg.Text);
         Assert.False(msg.IsFinal);
+        Assert.Null(msg.Language);
     }
 
     [Fact]
     public void ParseMessage_IgnoresNonTranscriptTypes()
     {
-        var msg = GladiaSession.ParseMessage("""{ "type": "audio_chunk_acknowledgment" }""");
+        var msg = GladiaSession.ParseMessage(
+            """{ "type": "audio_chunk", "acknowledged": true, "error": null, "data": {} }"""
+        );
 
-        Assert.Equal("audio_chunk_acknowledgment", msg.MessageType);
+        Assert.Equal("audio_chunk", msg.MessageType);
         Assert.Null(msg.Text);
+        Assert.Null(msg.Error);
+    }
+
+    [Theory]
+    [InlineData("garbage {")]
+    [InlineData("[]")]
+    [InlineData("""{ "type": "transcript", "data": { "is_final": true, "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "is_final": "yes", "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "is_final": true, "utterance": {} } }""")]
+    public void ParseMessage_RejectsMalformedMessages(string json)
+    {
+        // HandleMessage turns only these into an incomplete-response fault.
+        var exception = Record.Exception(() => GladiaSession.ParseMessage(json));
+        Assert.NotNull(exception);
+        Assert.True(exception is JsonException or FormatException, $"Unexpected: {exception.GetType()}");
     }
 
     [Fact]
-    public void ParseMessage_ReturnsEmpty_OnMalformedJson()
+    public void ParseMessage_ReadsRejectedAcknowledgment()
     {
-        var msg = GladiaSession.ParseMessage("garbage {");
+        var msg = GladiaSession.ParseMessage(
+            """
+            { "type": "stop_recording", "acknowledged": false,
+              "error": { "status_code": 409, "exception": "ConflictError", "message": "Recording already stopped" },
+              "data": {} }
+            """
+        );
 
-        Assert.Equal("", msg.MessageType);
-        Assert.Null(msg.Text);
+        Assert.Equal(new GladiaSession.GladiaError(409, "ConflictError", "Recording already stopped"), msg.Error);
     }
 
     private static async Task<GladiaPlugin> CreateConfiguredPluginAsync(
@@ -1063,6 +1204,16 @@ public class GladiaPluginTests
             }
         );
         return sut;
+    }
+
+    private static void AssertVocabularyConfig(JsonElement config, params string[] expected)
+    {
+        Assert.Equal(
+            ["vocabulary", "default_intensity"],
+            config.EnumerateObject().Select(property => property.Name).ToArray()
+        );
+        Assert.Equal(expected, config.GetProperty("vocabulary").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(0.7, config.GetProperty("default_intensity").GetDouble());
     }
 
     private static void AssertApiKey(HttpRequestMessage request)

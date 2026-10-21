@@ -9,6 +9,8 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -18,7 +20,9 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
+    private readonly LocalDataExportService _dataExport;
     private readonly SettingsBackupService _settingsBackup;
+    private readonly SupportReportService? _supportReport;
     private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
     private readonly UrlLauncher _urlLauncher;
@@ -28,6 +32,22 @@ public partial class AboutSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isBackupBusy;
+
+    [ObservableProperty]
+    private bool _isExportingData;
+
+    [ObservableProperty]
+    private bool _includeRecordingsInExport = true;
+
+    private CancellationTokenSource? _dataExportCancellation;
+
+    [ObservableProperty]
+    private bool _isSupportReportBusy;
+
+    private string _supportReportStatusKey = "About.SupportReportDescription";
+
+    [ObservableProperty]
+    private string _supportReportStatusText = Loc.Instance["About.SupportReportDescription"];
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
     private bool _isCheckingForUpdates;
@@ -52,10 +72,12 @@ public partial class AboutSectionViewModel : ObservableObject
     public AboutSectionViewModel(
         IErrorLogService errorLog,
         SettingsBackupService settingsBackup,
+        LocalDataExportService dataExport,
         UpdateCheckService updateCheck,
-        UrlLauncher urlLauncher
+        UrlLauncher urlLauncher,
+        SupportReportService supportReport
     )
-        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local) { }
+        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local, dataExport, supportReport) { }
 
     internal AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -76,11 +98,15 @@ public partial class AboutSectionViewModel : ObservableObject
         SettingsBackupService settingsBackup,
         UpdateCheckService updateCheck,
         UrlLauncher urlLauncher,
-        TimeZoneInfo timeZone
+        TimeZoneInfo timeZone,
+        LocalDataExportService? dataExport = null,
+        SupportReportService? supportReport = null
     )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
+        _dataExport = dataExport ?? new LocalDataExportService();
+        _supportReport = supportReport;
         _updateCheck = updateCheck;
         _urlLauncher = urlLauncher;
         _timeZone = timeZone;
@@ -114,6 +140,7 @@ public partial class AboutSectionViewModel : ObservableObject
             UpdateStatusText = updateDefault;
         _updateStatusDefault = updateDefault;
         ApplyUpdateResult(_updateCheck.LastResult);
+        SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
         RefreshErrors();
     }
 
@@ -171,6 +198,35 @@ public partial class AboutSectionViewModel : ObservableObject
         return _errorLog.ExportDiagnostics();
     }
 
+    /// <summary>Writes the support report to <paramref name="path" /> and reports the outcome in the status text.</summary>
+    public async Task ExportSupportReportAsync(string path)
+    {
+        if (_supportReport is null || IsSupportReportBusy)
+        {
+            return;
+        }
+
+        IsSupportReportBusy = true;
+        try
+        {
+            var report = await _supportReport.CaptureAsync();
+            await Task.Run(() => report.Export(path));
+            _supportReportStatusKey = report.CollectionErrors.Count == 0
+                ? "About.SupportReportExported"
+                : "About.SupportReportPartial";
+            SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _supportReportStatusKey = "About.SupportReportFailed";
+            SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
+        }
+        finally
+        {
+            IsSupportReportBusy = false;
+        }
+    }
+
     public async Task<SettingsBackupResult> CreateSettingsBackupAsync(string path)
     {
         if (IsBackupBusy)
@@ -214,6 +270,77 @@ public partial class AboutSectionViewModel : ObservableObject
             IsBackupBusy = false;
         }
     }
+
+    public async Task<LocalDataExportResult> ExportAllDataAsync(string path)
+    {
+        if (IsBackupBusy)
+        {
+            throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
+
+        IsBackupBusy = true;
+        IsExportingData = true;
+        BackupStatusText = Loc.Instance["About.ExportingData"];
+        using var cancellation = new CancellationTokenSource();
+        _dataExportCancellation = cancellation;
+        // A progress report can arrive after the export finished; it must not replace the outcome.
+        var gate = new object();
+        var running = true;
+        var progress = new Progress<LocalDataExportProgress>(update =>
+        {
+            lock (gate)
+            {
+                // ReSharper disable once AccessToModifiedClosure -- intended: Finish clears it under the same lock.
+                if (running)
+                {
+                    BackupStatusText = Loc.Instance.GetString(
+                        "About.ExportingDataProgress",
+                        update.FileCount,
+                        update.Bytes / (1024.0 * 1024.0)
+                    );
+                }
+            }
+        });
+        void Finish(string status)
+        {
+            lock (gate)
+            {
+                running = false;
+                BackupStatusText = status;
+            }
+        }
+
+        try
+        {
+            var result = await _dataExport.ExportAsync(
+                path,
+                new LocalDataExportOptions(IncludeRecordingsInExport),
+                progress,
+                cancellation.Token
+            );
+            Finish(Loc.Instance.GetString("About.DataExported", result.FileCount));
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            Finish(Loc.Instance["About.DataExportCanceled"]);
+            throw;
+        }
+        catch
+        {
+            Finish(Loc.Instance["About.DataExportFailed"]);
+            throw;
+        }
+        finally
+        {
+            _dataExportCancellation = null;
+            IsExportingData = false;
+            IsBackupBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelDataExport() => _dataExportCancellation?.Cancel();
 
     [RelayCommand]
     private async Task CheckForUpdatesAsync()

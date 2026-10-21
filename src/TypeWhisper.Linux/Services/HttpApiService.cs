@@ -351,7 +351,7 @@ public sealed partial class HttpApiService : IDisposable
 
     // ReSharper disable once InconsistentlySynchronizedField -- racy-read-tolerant status probe;
     // _host is published under _lifecycleLock and a stale read only skews advisory status text.
-    private bool IsRunning => _host is not null;
+    internal bool IsRunning => _host is not null;
 
     // ReSharper disable once InconsistentlySynchronizedField -- same advisory-read tolerance as IsRunning.
     internal IHostLifetime? HostLifetime => _host?.Services.GetService<IHostLifetime>();
@@ -1015,16 +1015,20 @@ public sealed partial class HttpApiService : IDisposable
 
     private WebApplication BuildHost(int port, string socketPath)
     {
-        var builder = WebApplication.CreateSlimBuilder(
+        // Empty, not slim: the slim builder's reload-on-change appsettings.json source
+        // recursively inotify-watches the working directory — seconds of boot and one
+        // watch per directory when launched from $HOME.
+        var builder = WebApplication.CreateEmptyBuilder(
             new WebApplicationOptions
             {
                 Args = [],
                 ApplicationName = typeof(HttpApiService).Assembly.GetName().Name,
             }
         );
-        // Drop appsettings.json / environment / command-line sources: Kestrel *adds*
-        // an ambient Kestrel:Endpoints entry to the listeners configured below rather
-        // than replacing them, which would bind this local-only API to a public interface.
+        // UseKestrelCore never binds the Kestrel config section, and sources stay cleared:
+        // Kestrel *adds* an ambient Kestrel:Endpoints entry to the listeners below, which
+        // would bind this local-only API to a public interface.
+        builder.WebHost.UseKestrelCore();
         builder.Configuration.Sources.Clear();
         builder.Logging.ClearProviders();
         // ConsoleLifetime would install SIGINT/SIGQUIT/SIGTERM handlers that cancel

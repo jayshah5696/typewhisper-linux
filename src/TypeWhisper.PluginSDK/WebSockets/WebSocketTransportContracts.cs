@@ -91,6 +91,8 @@ public sealed record WebSocketReadinessPolicy(bool Required, string SignalName)
 
 public sealed record WebSocketTerminalPolicy(bool Required, string SignalName)
 {
+    // ReSharper disable once UnusedMember.Global -- SDK surface for adapters whose provider sends
+    // no terminal signal; no in-tree adapter needs it since Gemini moved to manual activity.
     public static WebSocketTerminalPolicy None { get; } = new(false, "completion");
 
     public static WebSocketTerminalPolicy Require(string signalName) =>
@@ -157,3 +159,15 @@ public interface IWebSocketSessionAdapter
     );
 }
 // ReSharper restore UnusedParameter.Global
+
+/// <summary>
+///     Optional for adapters whose protocol can end with a close frame instead of a terminal
+///     message. When the server closes while a required terminal signal is still missing, the
+///     pump asks the adapter first: a result carrying <see cref="WebSocketSessionSignal.Terminal" />
+///     completes the session, a fault fails it, and anything else keeps the pump's default fault.
+///     Runs on the receive loop, like <see cref="IWebSocketSessionAdapter.HandleMessage" />.
+/// </summary>
+public interface IWebSocketCloseAwareAdapter
+{
+    WebSocketInboundResult HandleClose(WebSocketCloseStatus? status, string? description);
+}

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -8,8 +9,6 @@ namespace TypeWhisper.Plugin.Speechmatics;
 
 internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    private const string EndpointUrl = "wss://eu.rt.speechmatics.com/v2";
-
     private readonly WebSocketSessionPump _pump;
 
     private SpeechmaticsStreamingSession(WebSocketSessionPump pump)
@@ -27,12 +26,15 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
 
     public static async Task<SpeechmaticsStreamingSession> ConnectAsync(
         string apiKey,
-        string? language,
+        Uri realtimeUri,
+        string language,
+        string model,
+        IReadOnlyList<string> vocabulary,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SpeechmaticsWebSocketAdapter(apiKey, language),
+            new SpeechmaticsWebSocketAdapter(apiKey, realtimeUri, language, model, vocabulary),
             ct
         );
         return new SpeechmaticsStreamingSession(pump);
@@ -45,7 +47,12 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static string BuildStartRecognition(string? language, int sampleRate)
+    internal static string BuildStartRecognition(
+        string? language,
+        string model,
+        IReadOnlyList<string> vocabulary,
+        int sampleRate
+    )
     {
         var normalizedLanguage =
             !string.IsNullOrWhiteSpace(language)
@@ -55,6 +62,15 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
                     "Speechmatics requires an explicit language.",
                     nameof(language)
                 );
+
+        var transcriptionConfig = new Dictionary<string, object>
+        {
+            ["language"] = normalizedLanguage,
+            ["model"] = model,
+            ["enable_partials"] = true,
+            ["max_delay"] = 2,
+        };
+        SpeechmaticsPlugin.AddAdditionalVocab(transcriptionConfig, vocabulary);
 
         return JsonSerializer.Serialize(
             new Dictionary<string, object>
@@ -66,13 +82,7 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
                     ["encoding"] = "pcm_s16le",
                     ["sample_rate"] = sampleRate,
                 },
-                ["transcription_config"] = new Dictionary<string, object>
-                {
-                    ["language"] = normalizedLanguage,
-                    ["operating_point"] = "enhanced",
-                    ["enable_partials"] = true,
-                    ["max_delay"] = 2,
-                },
+                ["transcription_config"] = transcriptionConfig,
             }
         );
     }
@@ -153,13 +163,14 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
             return new SpeechmaticsMessage("", null, null);
         }
     }
-
-    internal static Uri RealtimeUri => new(EndpointUrl);
 }
 
 internal sealed class SpeechmaticsWebSocketAdapter(
     string apiKey,
-    string? language
+    Uri realtimeUri,
+    string language,
+    string model,
+    IReadOnlyList<string> vocabulary
 ) : IWebSocketSessionAdapter
 {
     private readonly SpeechmaticsTranscriptAggregator _aggregator = new();
@@ -185,7 +196,7 @@ internal sealed class SpeechmaticsWebSocketAdapter(
             };
         return ValueTask.FromResult(
             new WebSocketConnectionOptions(
-                SpeechmaticsStreamingSession.RealtimeUri,
+                realtimeUri,
                 headers
             )
         );
@@ -200,6 +211,8 @@ internal sealed class SpeechmaticsWebSocketAdapter(
                     Encoding.UTF8.GetBytes(
                         SpeechmaticsStreamingSession.BuildStartRecognition(
                             language,
+                            model,
+                            vocabulary,
                             16000
                         )
                     ),
@@ -308,7 +321,11 @@ internal sealed class SpeechmaticsWebSocketAdapter(
                         new StreamingTranscriptEvent(
                             update.FinalText,
                             IsFinal: true
-                        ),
+                        )
+                        {
+                            // The session runs in one language; a bilingual pack reports none.
+                            DetectedLanguage = SpeechmaticsPlugin.ToReportedLanguage(language),
+                        },
                     ];
             return new WebSocketInboundResult(
                 transcripts,
@@ -346,7 +363,7 @@ internal sealed class SpeechmaticsTranscriptAggregator
         switch (message.MessageType)
         {
             case "AddTranscript":
-                _final.Append(message.Transcript);
+                AppendSegment(_final, message.Transcript ?? "");
                 _partialTail = "";
                 break;
             case "AddPartialTranscript":
@@ -355,11 +372,31 @@ internal sealed class SpeechmaticsTranscriptAggregator
         }
 
         var completed = message.MessageType == "EndOfTranscript";
-        var preview = (_final + _partialTail).Trim();
+        var preview = new StringBuilder().Append(_final);
+        AppendSegment(preview, _partialTail);
         return new SpeechmaticsStreamingSession.SpeechmaticsUpdate(
-            preview,
+            preview.ToString().Trim(),
             completed,
             FinalText
         );
     }
+
+    // A segment can open with punctuation for the previous one (" ." or " ,"); the space before it
+    // would otherwise land inside the sentence.
+    private static void AppendSegment(StringBuilder target, string segment)
+    {
+        var trimmed = segment.TrimStart();
+        if (target.Length > 0 && trimmed.Length > 0 && IsClosingPunctuation(trimmed[0]))
+        {
+            while (target.Length > 0 && char.IsWhiteSpace(target[^1]))
+                target.Length--;
+            segment = trimmed;
+        }
+
+        target.Append(segment);
+    }
+
+    private static bool IsClosingPunctuation(char c) =>
+        ".,!?:;。！，？：；、".Contains(c)
+        || char.GetUnicodeCategory(c) is UnicodeCategory.ClosePunctuation or UnicodeCategory.FinalQuotePunctuation;
 }

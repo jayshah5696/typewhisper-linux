@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -626,6 +625,137 @@ public sealed class GeminiTranscriptionTests
     }
 
     [Fact]
+    public async Task TranscriptionRole_OptsIntoStructuredDictionaryTerms()
+    {
+        using var sut = new GeminiPlugin();
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxTotalChars: 4_000), sut.DictionaryTermsBudget);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_KeepsEnvelopeTermsWhole()
+    {
+        string[] terms =
+        [
+            "Washington, D.C.",
+            "Äpfel; Öl",
+            "quoted \"name\"",
+            "line\nbreak",
+            "a term with more than eight words in it stays whole",
+        ];
+
+        Assert.Equal(terms, GeminiPlugin.ExtractVocabulary(PluginTranscriptionPrompt.Encode(null, terms)));
+    }
+
+    [Fact]
+    public void ExtractVocabulary_PutsApiPromptItemsBeforeDictionaryTermsWithinBudget()
+    {
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "Kubernetes, BigQuery\nThe speaker discusses Kubernetes at length in this recording",
+            ["bigquery", "Washington, D.C."]);
+
+        Assert.Equal(["Kubernetes", "BigQuery", "Washington, D.C."], GeminiPlugin.ExtractVocabulary(prompt));
+
+        var manyTerms = PluginTranscriptionPrompt.Encode(
+            "first",
+            Enumerable.Range(0, 200).Select(index => $"term{index}"));
+        var clipped = GeminiPlugin.ExtractVocabulary(manyTerms);
+        Assert.Equal(100, clipped.Count);
+        Assert.Equal("first", clipped[0]);
+        Assert.Equal("term98", clipped[^1]);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_RejectsMalformedEnvelope()
+    {
+        Assert.Throws<FormatException>(
+            () => GeminiPlugin.ExtractVocabulary(PluginTranscriptionPrompt.EnvelopePrefix + "{\"dictionaryTerms\":[1]}"));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SendsEnvelopeTermsWholeAsCustomVocabulary()
+    {
+        string? interactionBody = null;
+        using var client = new HttpClient(new GeminiCapturingHandler((request, body) =>
+        {
+            var uri = request.RequestUri!.ToString();
+            if (uri.EndsWith("/upload/v1beta/files", StringComparison.Ordinal))
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK);
+                response.Headers.TryAddWithoutValidation("X-Goog-Upload-URL", "https://upload.example/session-1");
+                return response;
+            }
+
+            if (uri == "https://upload.example/session-1")
+                return JsonResponse("""{"file":{"name":"files/audio-123","uri":"https://files.example/audio-123"}}""");
+
+            // ReSharper disable once InvertIf -- one branch per route, as in the other fixtures.
+            if (uri.EndsWith("/v1beta/interactions", StringComparison.Ordinal))
+            {
+                interactionBody = body;
+                return JsonResponse(
+                    """{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}""");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+        }));
+        using var sut = new GeminiPlugin(client);
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        await sut.TranscribeAsync(
+            CreatePcm16Wav(),
+            "en",
+            translate: false,
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(Assert.IsType<string>(interactionBody));
+        Assert.Equal(
+            ["Washington, D.C.", "TypeWhisper"],
+            payload.RootElement
+                .GetProperty("generation_config")
+                .GetProperty("transcription_config")
+                .GetProperty("custom_vocabulary")
+                .EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToArray());
+    }
+
+    [Fact]
+    public async Task StartStreaming_SendsPromptTermsToTheLiveSession()
+    {
+        List<GeminiLiveConnectionOptions> connections = [];
+        using var sut = new GeminiPlugin(
+            new HttpClient(),
+            (options, _) =>
+            {
+                connections.Add(options);
+                return Task.FromResult<IStreamingSession>(new StubSession());
+            });
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        await using (await sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de", "en"],
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None))
+        {
+        }
+
+        await using (await sut.StartStreamingAsync("en", CancellationToken.None))
+        {
+        }
+
+        Assert.Equal(2, connections.Count);
+        Assert.Equal(GeminiPlugin.DefaultLiveTranscriptionModel, connections[0].LiveModelId);
+        Assert.Equal(["de", "en"], connections[0].LanguageHints);
+        Assert.Equal(["Washington, D.C.", "TypeWhisper"], connections[0].CustomVocabulary);
+        Assert.Equal(["en"], connections[1].LanguageHints);
+        Assert.Empty(connections[1].CustomVocabulary);
+    }
+
+    [Fact]
     public async Task StreamingAdapter_RunsTheLiveTranscriptionProtocol()
     {
         var transport = new ScriptedWebSocketTransport();
@@ -658,99 +788,98 @@ public sealed class GeminiTranscriptionTests
             transcription.GetProperty("languageCodes").EnumerateArray()
                 .Select(value => value.GetString()!).ToArray());
         Assert.Equal("TypeWhisper", transcription.GetProperty("customVocabulary")[0].GetString());
+        Assert.True(
+            setupRoot.GetProperty("realtimeInputConfig").GetProperty("automaticActivityDetection")
+                .GetProperty("disabled").GetBoolean());
 
         List<StreamingTranscriptEvent> events = [];
-        var final = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        pump.TranscriptReceived += transcript =>
-        {
-            events.Add(transcript);
-            if (transcript.IsFinal)
-                final.TrySetResult();
-        };
+        pump.TranscriptReceived += events.Add;
 
+        // The first audio opens the recording's only activity; later audio follows it directly.
         await pump.SendAudioAsync(new byte[] { 1, 2, 3, 4 }, CancellationToken.None).WaitAsync(s_timeout);
+        Assert.Equal(
+            """{"realtimeInput":{"activityStart":{}}}""",
+            Encoding.UTF8.GetString((await transport.NextSentAsync()).Payload.Span));
         var audioFrame = await transport.NextSentAsync();
         using var audio = JsonDocument.Parse(audioFrame.Payload);
         var audioPart = audio.RootElement.GetProperty("realtimeInput").GetProperty("audio");
         Assert.Equal("AQIDBA==", audioPart.GetProperty("data").GetString());
         Assert.Equal("audio/pcm;rate=16000", audioPart.GetProperty("mimeType").GetString());
+        await pump.SendAudioAsync(new byte[] { 5, 6 }, CancellationToken.None).WaitAsync(s_timeout);
+        Assert.Contains(
+            "\"audio\"",
+            Encoding.UTF8.GetString((await transport.NextSentAsync()).Payload.Span),
+            StringComparison.Ordinal);
 
         transport.EnqueueText("""{"server_content":{"interim_input_transcription":{"text":" Hallo "}}}""");
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(
+            """{"realtimeInput":{"activityEnd":{}}}""",
+            Encoding.UTF8.GetString((await transport.NextSentAsync()).Payload.Span));
         transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":" Hallo Welt "}}}""");
-        await final.Task.WaitAsync(s_timeout);
+        transport.EnqueueText("""{"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"0.000188s"}}""");
+        await finalize.WaitAsync(s_timeout);
 
         Assert.Equal(
             [new StreamingTranscriptEvent("Hallo", false), new StreamingTranscriptEvent("Hallo Welt", true)],
             events);
-
-        // No terminal signal is documented after audioStreamEnd, so finalize completes on its own.
-        var finalize = pump.FinalizeAsync(CancellationToken.None);
-        var finalizeFrame = await transport.NextSentAsync();
-        Assert.Equal(
-            """{"realtimeInput":{"audioStreamEnd":true}}""",
-            Encoding.UTF8.GetString(finalizeFrame.Payload.Span));
-        await finalize.WaitAsync(s_timeout);
     }
 
     [Fact]
-    public async Task StreamingAdapter_NeverRaisesTerminalAndReadsSignalValues()
+    public async Task StreamingAdapter_CompletesOnlyWithTheFinalAndTheAcknowledgedEnd()
     {
-        var terminal = new GeminiWebSocketAdapter(
+        var adapter = new GeminiWebSocketAdapter(
             "key", "gemini-3.5-transcribe-live", [], [], GeminiTranscriptionMode.Smart);
-        const string turnComplete =
-            """{"serverContent":{"turnComplete":true,"inputTranscription":{"text":"Done."}}}""";
-        var result = terminal.HandleMessage(
-            WebSocketMessageType.Binary,
-            Encoding.UTF8.GetBytes(turnComplete));
+        await adapter.EncodeAudioAsync(new byte[32000], CancellationToken.None);
+        await adapter.BeginFinalizeAsync(CancellationToken.None);
 
-        // A turn boundary mid-dictation carries its transcript but does not end the session.
-        Assert.Equal(WebSocketSessionSignal.None, result.Signals);
-        Assert.Equal(new StreamingTranscriptEvent("Done.", true), Assert.Single(result.Transcripts));
+        // A turn boundary is not the end of the transcription.
+        var final = Handle(
+            adapter,
+            """{"serverContent":{"turnComplete":true,"inputTranscription":{"text":"Done."}}}""",
+            WebSocketMessageType.Binary);
+        Assert.Equal(WebSocketSessionSignal.None, final.Signals);
+        Assert.Equal(new StreamingTranscriptEvent("Done.", true), Assert.Single(final.Transcripts));
+        Assert.Same(WebSocketInboundResult.Empty, Handle(adapter, """{"serverContent":{"turnComplete":true}}"""));
+        Assert.Same(
+            WebSocketInboundResult.Empty,
+            Handle(adapter, """{"serverContent":{"interimInputTranscription":{"text":"Late"}}}"""));
+        Assert.Same(
+            WebSocketInboundResult.Empty,
+            Handle(adapter, """{"voiceActivity":{"type":"ACTIVITY_START","audioOffset":"0s"}}"""));
 
-        await terminal.BeginFinalizeAsync(CancellationToken.None);
+        var end = Handle(adapter, """{"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"1s"}}""");
+        Assert.Null(end.Fault);
+        Assert.Equal(WebSocketSessionSignal.Terminal, end.Signals);
+    }
 
-        // Nor after finalize: the receive loop has to outlive the grace window.
-        Assert.Equal(
-            WebSocketSessionSignal.None,
-            terminal.HandleMessage(
-                WebSocketMessageType.Binary,
-                Encoding.UTF8.GetBytes(turnComplete)).Signals);
-        Assert.Equal(
-            WebSocketSessionSignal.None,
-            terminal.HandleMessage(
-                WebSocketMessageType.Text,
-                """{"serverContent":{}}"""u8.ToArray()).Signals);
+    [Fact]
+    public void StreamingAdapter_ReadsSignalValuesAndIgnoresMalformedContainers()
+    {
+        var adapter = new GeminiWebSocketAdapter(
+            "key", "gemini-3.5-transcribe-live", [], [], GeminiTranscriptionMode.Smart);
+
+        Assert.Same(WebSocketInboundResult.Empty, Handle(adapter, """{"serverContent":{}}"""));
         // A container that is null or a scalar where an object is documented is ignored.
+        Assert.Same(WebSocketInboundResult.Empty, Handle(adapter, """{"serverContent":null}"""));
+        Assert.Same(WebSocketInboundResult.Empty, Handle(adapter, """{"serverContent":"x"}"""));
         Assert.Same(
             WebSocketInboundResult.Empty,
-            terminal.HandleMessage(
-                WebSocketMessageType.Text,
-                """{"serverContent":null}"""u8.ToArray()));
-        Assert.Same(
-            WebSocketInboundResult.Empty,
-            terminal.HandleMessage(
-                WebSocketMessageType.Text,
-                """{"serverContent":"x"}"""u8.ToArray()));
-        Assert.Same(
-            WebSocketInboundResult.Empty,
-            terminal.HandleMessage(
-                WebSocketMessageType.Text,
-                """{"serverContent":{"inputTranscription":"x"}}"""u8.ToArray()));
+            Handle(adapter, """{"serverContent":{"inputTranscription":"x"}}"""));
+        Assert.Same(WebSocketInboundResult.Empty, Handle(adapter, """{"voiceActivity":null}"""));
         // A null error is not a failure.
-        Assert.Null(terminal.HandleMessage(
-            WebSocketMessageType.Text,
-            """{"error":null}"""u8.ToArray()).Fault);
-        Assert.NotNull(terminal.HandleMessage(
-            WebSocketMessageType.Text,
-            "not json"u8.ToArray()).Fault);
+        Assert.Null(Handle(adapter, """{"error":null}""").Fault);
+        Assert.NotNull(Handle(adapter, "not json").Fault);
         Assert.Contains(
             "rejected",
-            terminal.HandleMessage(
-                WebSocketMessageType.Text,
-                """{"error":{"message":"rejected"}}"""u8.ToArray()).Fault!.Message,
+            Handle(adapter, """{"error":{"message":"rejected"}}""").Fault!.Message,
             StringComparison.Ordinal);
+    }
 
-        // The snake_case spelling of the readiness signal is accepted too.
+    [Fact]
+    public async Task StreamingAdapter_AcceptsSnakeCaseReadiness()
+    {
         var transport = new ScriptedWebSocketTransport();
         var starting = WebSocketSessionPump.StartConnectedAsync(
             new GeminiWebSocketAdapter(
@@ -764,56 +893,11 @@ public sealed class GeminiTranscriptionTests
         Assert.Equal(WebSocketSessionState.Active, pump.State);
     }
 
-    [Fact]
-    public async Task StreamingSession_KeepsReceivingAfterTurnBoundariesEvenPastFinalize()
-    {
-        var transport = new ScriptedWebSocketTransport();
-        var starting = WebSocketSessionPump.StartConnectedAsync(
-            new GeminiWebSocketAdapter(
-                "key", "gemini-3.5-transcribe-live", [], [], GeminiTranscriptionMode.Smart),
-            transport,
-            CancellationToken.None);
-        await transport.NextSentAsync();
-        transport.EnqueueText("""{"setupComplete":{}}""");
-        await using var pump = await starting.WaitAsync(s_timeout);
-
-        var finals = new ConcurrentQueue<string>();
-        var secondFinal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thirdFinal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        pump.TranscriptReceived += transcript =>
-        {
-            if (!transcript.IsFinal)
-                return;
-
-            finals.Enqueue(transcript.Text);
-            switch (transcript.Text)
-            {
-                case "Second.":
-                    secondFinal.TrySetResult();
-                    break;
-                case "Third.":
-                    thirdFinal.TrySetResult();
-                    break;
-            }
-        };
-
-        transport.EnqueueText(
-            """{"serverContent":{"turnComplete":true,"inputTranscription":{"text":"First."}}}""");
-        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Second."}}}""");
-        await secondFinal.Task.WaitAsync(s_timeout);
-
-        var finalize = pump.FinalizeAsync(CancellationToken.None);
-        await transport.NextSentAsync();
-        await finalize.WaitAsync(s_timeout);
-
-        // A turn that began before the user stopped can complete after finalize, ahead of the
-        // tail transcript; the receive loop has to survive it for the coordinator's grace window.
-        transport.EnqueueText("""{"serverContent":{"turnComplete":true}}""");
-        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Third."}}}""");
-        await thirdFinal.Task.WaitAsync(s_timeout);
-
-        Assert.Equal(["First.", "Second.", "Third."], finals);
-    }
+    private static WebSocketInboundResult Handle(
+        GeminiWebSocketAdapter adapter,
+        string json,
+        WebSocketMessageType type = WebSocketMessageType.Text) =>
+        adapter.HandleMessage(type, Encoding.UTF8.GetBytes(json));
 
     [Fact]
     public async Task TranscribeStreamingWithLanguageHintsAsync_KeepsEveryHint()
@@ -964,6 +1048,14 @@ public sealed class GeminiTranscriptionTests
         writer.Write(new byte[dataSize]);
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private sealed class StubSession : IStreamingSession
+    {
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived { add { } remove { } }
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) => Task.CompletedTask;
+        public Task FinalizeAsync(CancellationToken ct) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static HttpResponseMessage JsonResponse(string json) =>

@@ -16,6 +16,7 @@ using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -189,6 +190,7 @@ internal static class ServiceRegistrations
         {
             var audioRecording = sp.GetRequiredService<AudioRecordingService>();
             var settings = sp.GetRequiredService<ISettingsService>();
+            var sessionActivity = sp.GetRequiredService<ISessionActivityMonitor>();
             return new TextInsertionService(
                 sp.GetRequiredService<IErrorLogService>(),
                 sp.GetRequiredService<SystemCommandAvailabilityService>(),
@@ -196,7 +198,8 @@ internal static class ServiceRegistrations
                 sp.GetRequiredService<IProcessRunner>(),
                 isAnotherSessionRecording: () => audioRecording.IsRecording,
                 atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
-                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled
+                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled,
+                inputAllowed: () => sessionActivity.IsInputAllowed
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();
@@ -217,7 +220,11 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<OverlayCoordinator>();
         services.AddSingleton<SentryTelemetryService>();
-        services.AddSingleton<IDiagnosticsReporter>(p => p.GetRequiredService<SentryTelemetryService>());
+        services.AddSingleton<LocalDiagnosticLogService>();
+        services.AddSingleton<IDiagnosticsReporter>(p => new CompositeDiagnosticsReporter(
+            p.GetRequiredService<SentryTelemetryService>(),
+            p.GetRequiredService<LocalDiagnosticLogService>()));
+        services.AddSingleton<SupportReportService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();
@@ -237,6 +244,7 @@ internal static class ServiceRegistrations
                 secretMigration: sp.GetRequiredService<SecretProtectionMigrationService>()
             )
         );
+        services.AddSingleton<LocalDataExportService>();
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
@@ -294,7 +302,7 @@ internal static class ServiceRegistrations
         var statistics = new UsageStatisticsService(
             Path.Join(dataPath, "usage-statistics.json"),
             historyBackfillSource: () => ReadHistoryForBackfill(history));
-        if (ReadHistoryForBackfill(history) is { } records)
+        if (statistics.IsHistoryBackfillPending() && ReadHistoryForBackfill(history) is { } records)
         {
             statistics.BackfillFromHistoryIfNeeded(records);
         }

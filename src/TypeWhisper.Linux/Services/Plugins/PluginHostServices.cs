@@ -107,9 +107,21 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         get
         {
-            Directory.CreateDirectory(_pluginDataDirectory);
+            EnsurePluginDataDirectory();
             return _pluginDataDirectory;
         }
+    }
+
+    // Whichever host path runs first creates the directory owner-only, whatever the umask: it
+    // holds settings and secrets, and plugins may refuse a group-writable data directory.
+    private void EnsurePluginDataDirectory()
+    {
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+        Directory.CreateDirectory(
+            _pluginDataDirectory,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        );
+#pragma warning restore CA1416
     }
 
     // Large model/runtime assets follow the user-configured storage path when set;
@@ -339,6 +351,21 @@ public sealed class PluginHostServices : IPluginHostServices
         );
     }
 
+    /// <summary>
+    ///     The saved settings without secrets, as text that changes only when a value does. A
+    ///     transcription worker reads them once, so it is replaced when this changes.
+    /// </summary>
+    internal string SettingsFingerprint()
+    {
+        return string.Join(
+            '\n',
+            LoadSettings()
+                .Where(entry => !entry.Key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => entry.Key + "=" + entry.Value.GetRawText())
+        );
+    }
+
     public IPluginStateStore<T> OpenStateStore<T>(
         string fileName,
         Func<T> createDefault,
@@ -390,6 +417,7 @@ public sealed class PluginHostServices : IPluginHostServices
         }
 
         var normalizedOptions = options ?? s_defaultStateStoreOptions;
+        EnsurePluginDataDirectory();
         lock (_stateStoresLock)
         {
             if (_stateStores.TryGetValue(path, out var existing))
@@ -481,6 +509,7 @@ public sealed class PluginHostServices : IPluginHostServices
     {
         try
         {
+            EnsurePluginDataDirectory();
             _settingsStore.Update(update);
         }
         catch (Exception ex)

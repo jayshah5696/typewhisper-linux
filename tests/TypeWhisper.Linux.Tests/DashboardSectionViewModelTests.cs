@@ -351,7 +351,7 @@ public sealed class DashboardSectionViewModelTests : IDisposable
     }
 
     [Fact]
-    public void DayRollover_RefreshesThroughUiAndRearmsUntilDisposed()
+    public async Task DayRollover_RefreshesThroughUiAndRearmsUntilDisposed()
     {
         var zone = TimeZoneInfo.CreateCustomTimeZone("UTC+3", TimeSpan.FromHours(3), "UTC+3", "UTC+3");
         var clock = new ControllableTimeProvider
@@ -361,8 +361,10 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         };
         var statistics = new FakeStatistics { Days = [Day(new DateOnly(2026, 9, 8), 100, 60)] };
         var pending = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
+        await history.EnsureLoadedAsync();
         var sut = new DashboardSectionViewModel(
-            new HistoryService(Path.Join(_tempDir, "history.json")),
+            history,
             new SettingsService(Path.Join(_tempDir, "settings.json")),
             new HistoryInsightsService(), statistics, zone, timeProvider: clock, postToUi: pending.Enqueue);
         ControllableTimeProvider.FakeTimer nextTimer;

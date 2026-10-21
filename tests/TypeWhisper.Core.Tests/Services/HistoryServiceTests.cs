@@ -34,6 +34,21 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetRecords_TreatsACorruptHistoryResetToEmptyAsUntrustworthy()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new HistoryService(_filePath, _audioDirectory);
+
+        Assert.False(corrupt.TryGetRecords(out var records));
+        Assert.Empty(records);
+
+        corrupt.AddRecord(CreateRecord("record", DateTime.UtcNow));
+
+        Assert.True(corrupt.TryGetRecords(out var healed));
+        Assert.Single(healed);
+    }
+
+    [Fact]
     public void RecordsAvailable_IsFalseAfterUnreadableFileAndTrueAfterSuccessfulRetry()
     {
         Directory.CreateDirectory(_filePath);
@@ -280,6 +295,18 @@ public sealed class HistoryServiceTests : IDisposable
 
         Assert.DoesNotContain(_sut.Records, record => record.Id == stale.Id);
         Assert.Contains(_sut.Records, record => record.Id == fresh.Id);
+    }
+
+    [Fact]
+    public void PurgeOldRecords_WithNothingExpired_StillHealsACorruptHistoryResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new HistoryService(_filePath, _audioDirectory);
+
+        corrupt.PurgeOldRecords(TimeSpan.FromHours(1));
+
+        Assert.True(corrupt.TryGetRecords(out var records));
+        Assert.Empty(records);
     }
 
     [Fact]

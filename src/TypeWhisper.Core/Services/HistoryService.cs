@@ -50,9 +50,9 @@ public sealed partial class HistoryService : IHistoryService
     public bool RecordsAvailable { get; private set; } = true;
     public bool TryGetRecords(out IReadOnlyList<TranscriptionRecord> records)
     {
-        var available = ReadRecords(out var read);
+        var available = ReadRecords(out var read, out var reset);
         records = read.ToArray();
-        return available;
+        return available && !reset;
     }
 
     public event Action? RecordsChanged;
@@ -68,15 +68,16 @@ public sealed partial class HistoryService : IHistoryService
     /// </summary>
     private ImmutableArray<TranscriptionRecord> ReadRecords()
     {
-        ReadRecords(out var records);
+        ReadRecords(out var records, out _);
         return records;
     }
 
-    private bool ReadRecords(out ImmutableArray<TranscriptionRecord> records)
+    private bool ReadRecords(out ImmutableArray<TranscriptionRecord> records, out bool resetAfterCorruption)
     {
+        resetAfterCorruption = false;
         try
         {
-            records = _store.Current;
+            records = _store.GetCurrent(out resetAfterCorruption);
             RecordsAvailable = true;
             return true;
         }
@@ -278,6 +279,14 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         var cutoff = DateTime.UtcNow - retention.Value;
+        // Update serializes the whole history to detect a change; skip it when nothing expired,
+        // unless a corrupt file was reset and this no-op write is what commits a clean primary.
+        var snapshot = _store.GetCurrent(out var resetAfterCorruption);
+        if (!resetAfterCorruption && !snapshot.Any(r => r.CreatedAt < cutoff))
+        {
+            return;
+        }
+
         List<string?> removedAudioFiles = [];
         var changed = false;
         _store.Update(

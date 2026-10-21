@@ -21,6 +21,7 @@
         <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.SherpaOnnx\TypeWhisper.Plugin.SherpaOnnx.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ParakeetCtc\TypeWhisper.Plugin.ParakeetCtc.csproj"/>
+        <ProjectReference Include="..\TypeWhisper.TranscriptionWorkerProbe\TypeWhisper.TranscriptionWorkerProbe.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

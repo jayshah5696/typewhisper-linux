@@ -180,8 +180,9 @@ internal static class SherpaOnnxNativeRuntime
             {
                 "libonnxruntime_providers_shared.so",
                 "libonnxruntime.so.1",
-                "libsherpa-onnx-cxx-api.so",
                 CApiSoName,
+                // The WebGPU C++ library links against the C API and has no runtime search path.
+                "libsherpa-onnx-cxx-api.so",
             })
             {
                 var path = Path.Join(runtimeDirectory, soname);
