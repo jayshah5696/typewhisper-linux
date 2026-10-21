@@ -22,13 +22,31 @@ build-release:
     "{{dotnet}}" build src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Release --no-restore
 
 # Rebuild and restart the local Debug app with the bundled plugin set.
-restart: build
+restart:
+    uv run --no-project scripts/restart_local_app.py --stop-only
+    just build
     DOTNET="{{dotnet}}" bash scripts/restart-local-app.sh
+
+# Build, verify an upgrade in isolation, install, and restart the installed app.
+upgrade out=("artifacts/verification/" + `date +%F-%H%M%S` + "-upgrade"):
+    DOTNET="{{dotnet}}" bash scripts/upgrade-local-app.sh "{{out}}"
+
+# Check every deployed plugin with the actual host loader. No activation or user-data writes.
+verify-plugins host="src/TypeWhisper.Linux/bin/Release/net10.0" plugins="src/TypeWhisper.Linux/bin/Release/net10.0/Plugins":
+    "{{dotnet}}" run --project scripts/verification/plugin_compatibility -- "{{host}}" "{{plugins}}" '*'
+
+# Public audio through Needle file transcription, dictation, and private clipboard read-back.
+verify-needle out=("artifacts/verification/" + `date +%F-%H%M%S` + "-needle") app="src/TypeWhisper.Linux/bin/Release/net10.0":
+    uv run --no-project scripts/verification/needle_smoke.py --audio tests/fixtures/librispeech-1462-170145-0012.wav --out "{{out}}" --app-dir "{{app}}"
+
+# Exercise the managed installer over an older payload and verify the installed result.
+verify-upgrade out=("artifacts/verification/" + `date +%F-%H%M%S` + "-upgrade-check"):
+    DOTNET="{{dotnet}}" uv run --no-project scripts/verification/verify_upgrade.py --out "{{out}}"
 
 # Run one named CI test project, for example: just test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj
 test project:
     mkdir -p "{{test_results}}"
-    "{{dotnet}}" test "{{project}}" -c Release --no-build --logger "trx" --results-directory "{{test_results}}" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+    PATH="$(dirname "{{dotnet}}"):$PATH" "{{dotnet}}" test "{{project}}" -c Release --no-build --logger "trx" --results-directory "{{test_results}}" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
 
 test-core:
     just test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj
@@ -88,6 +106,8 @@ perf n="5" out=("artifacts/verification/" + `date +%F` + "-perf"):
 # Every verification layer that needs no credentials, against the current Release build.
 verify: eval-tests
     just doctor || true
+    just verify-plugins
+    just verify-needle
     just live-smoke
     just ui-check
     just ui-live

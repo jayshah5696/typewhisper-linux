@@ -95,8 +95,16 @@ dotnet run --project src/TypeWhisper.Linux
 To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove (keeps your data; add --purge to delete it too)
+./scripts/install-linux-app.sh
+# ./scripts/uninstall-linux-app.sh removes the app and keeps your data.
 ```
+
+For later version upgrades, run `just upgrade`. It builds the app and matching
+plugins, tests the upgrade in isolation, then installs and restarts the installed
+app. This check requires the downloaded Whistle model and the hidden desktop
+dependencies, including `xclip`. See [upgrade verification](scripts/verification/README.md).
+Use `just restart` for development. It keeps development plugin assemblies in
+`artifacts/local-dev/Plugins` while retaining your models and settings.
 
 ## Project Layout
 

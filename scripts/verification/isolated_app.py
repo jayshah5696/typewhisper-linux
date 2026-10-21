@@ -124,6 +124,7 @@ def isolated_env(base: dict[str, str], instance: Path, runtime: Path, display: s
     """
     check_runtime_dir(runtime)
     env = dict(base)
+    env.pop("TYPEWHISPER_PLUGINS_PATH", None)
     user_runtime = base.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     env.update(
         HOME=str(instance / "home"),
@@ -367,10 +368,13 @@ class IsolatedApp:
     def __init__(self, workdir: Path, *, configuration: str = "Debug", settings: dict[str, object] | None = None,
                  plugin_data: list[str] | None = None, plugin_settings: dict[str, dict[str, object]] | None = None,
                  virtual_mic: bool = False, display: str = "inherit", user_data: Path = USER_DATA,
-                 ready_timeout: float = 45.0, minimized: bool = True, extra_env: dict[str, str] | None = None):
+                 ready_timeout: float = 45.0, minimized: bool = True, extra_env: dict[str, str] | None = None,
+                 assembly: Path | None = None, executable: Path | None = None):
         self.workdir = workdir.resolve()
         self.instance = self.workdir / "instance"
         self.configuration = configuration
+        self.assembly = assembly.resolve() if assembly is not None else None
+        self.executable = executable.resolve() if executable is not None else None
         self.overrides = dict(settings or {})
         self.plugin_data = list(plugin_data or [])
         self.plugin_settings = dict(plugin_settings or {})
@@ -402,7 +406,7 @@ class IsolatedApp:
 
     def start(self) -> None:
         dotnet = find_dotnet()
-        assembly = app_assembly(self.configuration)
+        assembly = self.assembly or app_assembly(self.configuration)
         for name in ("home", "data", "config", "state", "cache"):
             (self.instance / name).mkdir(parents=True, exist_ok=True)
         self.runtime = make_runtime_dir()
@@ -435,7 +439,7 @@ class IsolatedApp:
         write_json(data / "settings.json", settings)
 
         log = (self.workdir / "app.log").open("w", encoding="utf-8")
-        arguments = [dotnet, str(assembly)] + (["--minimized"] if self.minimized else [])
+        arguments = ([str(self.executable)] if self.executable else [dotnet, str(assembly)]) + (["--minimized"] if self.minimized else [])
         self.process = subprocess.Popen(arguments, env=self.env, stdout=log,
                                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                                         cwd=str(self.instance / "home"))

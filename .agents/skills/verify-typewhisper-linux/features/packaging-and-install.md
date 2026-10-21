@@ -12,6 +12,26 @@ Download a release package and install it with the system package manager, or ex
 
 ## Driving it with the package scripts
 
+For a local source upgrade, use `just upgrade`. It publishes and checks matching
+app and plugin assemblies, upgrades a scratch installation, verifies synthetic
+user-data preservation and public audio through Needle, then installs and restarts
+the real installed app. Its runtime status must identify the new version and
+installed path. `just verify-upgrade` repeats the isolated installation check
+against existing Release linux-x64 publish output. See
+`scripts/verification/README.md` for prerequisites and evidence locations.
+
+Development launches through `just restart` use `artifacts/local-dev/Plugins`.
+They must not rewrite the installed `TypeWhisper/Plugins` directory. Models and
+provider settings continue to use the existing PluginData directory.
+
+Proven on 2026-10-21: `just upgrade` upgraded the local 0.17 installation to
+0.18, passed all seven installation-preservation checks and nine Needle checks,
+and verified the installed process's version and SDK. All 110 recorded hashes
+for existing History, recordings, model files, and the credential key stayed
+unchanged. A private `just restart` check passed all four checks, including an
+unchanged installed plugin folder. Evidence is under
+`artifacts/verification/2026-10-21-upgrade/`.
+
 Build into a scratch folder, never into the repository:
 
 ```bash

@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -30,6 +34,44 @@ public sealed class PluginLoaderTests : IDisposable
         {
             // Best-effort cleanup in tests
         }
+    }
+
+    [Fact]
+    public void DiscoverAndLoad_NewerSdkRequirementReportsRequiredAndAvailableVersions()
+    {
+        // The manifest allows this host, but the assembly was rebuilt against a newer SDK.
+        var directory = StageConstructorTrackingPlugin(null, includeMinimum: false);
+        var metadata = new MetadataBuilder();
+        metadata.AddModule(0, metadata.GetOrAddString("future.dll"), metadata.GetOrAddGuid(Guid.NewGuid()), default, default);
+        metadata.AddAssembly(metadata.GetOrAddString("FuturePlugin"), new Version(1, 0, 0, 0), default, default, 0, AssemblyHashAlgorithm.None);
+        metadata.AddAssemblyReference(metadata.GetOrAddString("TypeWhisper.PluginSDK"), new Version(999, 0, 0, 0), default, default, 0, default);
+        var image = new BlobBuilder();
+        new ManagedPEBuilder(new PEHeaderBuilder(imageCharacteristics: Characteristics.Dll),
+            new MetadataRootBuilder(metadata), new BlobBuilder()).Serialize(image);
+        File.WriteAllBytes(Path.Join(directory, "future.dll"), image.ToArray());
+        File.WriteAllText(Path.Join(directory, PluginManifest.FileName), JsonSerializer.Serialize(
+            CreateManifest("com.test.future") with { AssemblyName = "future.dll", PluginClass = "Future.Plugin" }));
+
+        Assert.Empty(_loader.DiscoverAndLoad([_tempDir]));
+        var failure = Assert.Single(_loader.LastLoadFailures);
+        Assert.Contains("requires PluginSDK 999.0.0.0", failure.Message);
+        Assert.Contains($"provides {typeof(ITypeWhisperPlugin).Assembly.GetName().Version}", failure.Message);
+        Assert.False(File.Exists(Path.Join(directory, ConstructorMarkerFileName)));
+    }
+
+    [Fact]
+    public void DiscoverAndLoad_MissingEntryTypePreservesTypeLoadError()
+    {
+        var directory = StageConstructorTrackingPlugin(null, includeMinimum: false);
+        var manifestPath = Path.Join(directory, PluginManifest.FileName);
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(manifestPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest with { PluginClass = "Missing.EntryType" }));
+
+        Assert.Empty(_loader.DiscoverAndLoad([_tempDir]));
+        var failure = Assert.Single(_loader.LastLoadFailures);
+        Assert.Contains("Could not resolve type", failure.Message);
+        Assert.Contains("Missing.EntryType", failure.Message);
     }
 
     [Fact]

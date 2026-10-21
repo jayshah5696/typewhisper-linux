@@ -45,15 +45,18 @@ def typewhisper_processes() -> list[dict[str, object]]:
             continue
         try:
             name = (entry / "comm").read_text().strip()
-            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            arguments = [part.decode(errors="replace") for part in (entry / "cmdline").read_bytes().split(b"\0") if part]
         except OSError:
             continue
         if (
             name.casefold() == "typewhisper"
-            or "typewhisper.dll" in command.casefold()
-            or "TypeWhisper.Linux.dll" in command
-        ):
-            processes.append({"pid": int(entry.name), "process": name})
+            or any(Path(argument).name.casefold() in ("typewhisper.dll", "typewhisper.linux.dll") for argument in arguments)
+        ) and "--transcription-worker" not in arguments:
+            try:
+                executable = str((entry / "exe").resolve(strict=True))
+            except OSError:
+                executable = None
+            processes.append({"pid": int(entry.name), "process": name, "executable": executable})
     return processes
 
 
@@ -213,7 +216,11 @@ def main() -> int:
             "sdk_installed": sdk_version(),
         },
         "host": {"system": platform.system(), "release": platform.release(), "architecture": platform.machine()},
-        "app": {"processes": processes, "control_status": status, "status_error": status_error},
+        "app": {"processes": processes, "control_status": status, "status_error": status_error,
+                "running_version": (status or {}).get("app_version"),
+                "running_assembly": (status or {}).get("app_path"),
+                "plugin_sdk_version": (status or {}).get("plugin_sdk_version"),
+                "plugins_path": (status or {}).get("plugins_path")},
         "api": {
             "discovery_file": str(discovery_path),
             "discovery_present": discovery_path.is_file(),

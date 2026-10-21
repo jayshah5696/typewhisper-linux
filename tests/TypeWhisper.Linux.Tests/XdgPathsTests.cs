@@ -17,6 +17,7 @@ public sealed class XdgPathsTests : IDisposable
 
     private readonly string? _originalHome = Environment.GetEnvironmentVariable("HOME");
     private readonly string? _originalDataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+    private readonly string? _originalPluginsPath = Environment.GetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH");
 
     public XdgPathsTests()
     {
@@ -31,6 +32,7 @@ public sealed class XdgPathsTests : IDisposable
     {
         Environment.SetEnvironmentVariable("HOME", _originalHome);
         Environment.SetEnvironmentVariable("XDG_DATA_HOME", _originalDataHome);
+        Environment.SetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH", _originalPluginsPath);
         try
         {
             Directory.Delete(_tempHome, true);
@@ -39,6 +41,35 @@ public sealed class XdgPathsTests : IDisposable
         {
             /* best effort */
         }
+    }
+
+    [Fact]
+    public void DevelopmentPluginOverrideDoesNotMoveModelsOrUserData()
+    {
+        var modelPath = TypeWhisperEnvironment.PluginDataPath;
+        var settingsPath = TypeWhisperEnvironment.SettingsFilePath;
+        var plugins = Path.Join(_tempHome, "development-plugins");
+        Environment.SetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH", plugins);
+
+        Assert.Equal(plugins, TypeWhisperEnvironment.PluginsPath);
+        Assert.Equal(modelPath, TypeWhisperEnvironment.PluginDataPath);
+        Assert.Equal(settingsPath, TypeWhisperEnvironment.SettingsFilePath);
+    }
+
+    [Fact]
+    public void RelativePluginOverrideIsRejectedBeforeDeployment()
+    {
+        Environment.SetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH", "relative/plugins");
+        Assert.Throws<ArgumentException>(() => TypeWhisperEnvironment.PluginsPath);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void InstalledPluginsUseTheExistingDirectory(string? value)
+    {
+        Environment.SetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH", value);
+        Assert.Equal(Path.Join(TypeWhisperEnvironment.BasePath, "Plugins"), TypeWhisperEnvironment.PluginsPath);
     }
 
     [Fact]

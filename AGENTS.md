@@ -1,6 +1,6 @@
 # Project instructions
 
-TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justfile` as the source of build, test, restart, and benchmark commands.
+TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justfile` as the source of build, upgrade, test, restart, and benchmark commands.
 
 ## Pull requests
 
@@ -10,9 +10,13 @@ TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justf
 ## Commands
 
 - `just build` builds the local Debug app and CLI and bundles the Linux plugins.
-- `just restart` builds and replaces the running local app. Use it when the user requests a restart or asks to try the updated build.
+- `just upgrade` publishes matching app and plugin assemblies, verifies an upgrade in isolation, then installs and restarts the installed app. Use it after a version upgrade or upstream merge when the user asks to update their installation. It requires the downloaded Whistle model and the hidden desktop dependencies, including `xclip`. Missing tools stop the command before installation.
+- `just restart` stops the session's idle app before building and starting Debug. Use it when the user requests a development restart or asks to try the updated build. Development plugins go to `artifacts/local-dev/Plugins`; models and provider settings stay in their existing locations.
 - `just build-release` builds the Release app and CLI. Run `just restore` first for a fresh checkout.
-- `just doctor` checks the running app and local environment without printing credentials.
+- `just doctor` checks the running app and local environment without printing credentials. Its control status reports the responding process's version, SDK, assembly path, and plugin directory. The repository version does not prove which app is running.
+- `just verify-plugins` checks every plugin in the selected bundle with that app's actual loader. Pass the host and plugin directories as positional arguments to check an installed payload.
+- `just verify-needle` checks Needle file transcription, virtual-microphone dictation, CPU execution, and private X11 clipboard read-back with the public fixture in `tests/fixtures/`.
+- `just verify-upgrade` upgrades a scratch copy of the installed program, checks user-data preservation and launcher paths, and runs the Needle check. It expects the Release linux-x64 publish output. See `scripts/verification/README.md` for preparation and prerequisites.
 - `just verify-recovery` verifies public audio through dictation, History, the recovery UI, and clipboard read-back in a private X11 desktop. Build Release first. See `scripts/verification/README.md` for prerequisites.
 - `just test-linux`, `just test-core`, `just test-plugins`, `just test-cli`, and `just test-integration` run the corresponding Release test projects. Build Release before these commands.
 - `just ci` restores, builds Release, and runs the full test set.
@@ -28,6 +32,16 @@ Prefer simple systems and complete user-visible behavior. Fix root causes and av
 Write unit tests before production code. Keep tests focused on failure cases and real behavior. Do not remove failing tests or replace errors with dummy success results. Run the build and relevant tests before reporting completion. Read complete failure logs and distinguish existing failures from new ones.
 
 Use `rg` for searches and `apply_patch` for source edits. Use `uv` for Python tools. Do not create phased plans unless requested.
+
+## Version upgrades and development
+
+Keep the installed app and its bundled plugins compatible with the same PluginSDK. A successful source build does not upgrade the desktop launcher. Verify the running process after installation, and preserve the underlying SDK or type-load error when a plugin cannot load.
+
+Use `just restart` for development so a development launch does not replace installed plugin assemblies. `TYPEWHISPER_PLUGINS_PATH` overrides only the deployed plugin directory and must be absolute. Isolated verification must clear an inherited override before setting up its own directories.
+
+Do not build over assemblies used by a running development instance. The restart command stops the app serving the current session's control socket before rebuilding. Do not replace this with a command that stops every TypeWhisper process; other instances can belong to isolated verification sessions.
+
+After changing upgrade, deployment, or plugin loading behavior, check an older installation followed by the new payload. Verify that user data survives and that Needle transcribes public audio through the installed executable. Save evidence under `artifacts/verification/`.
 
 ## Maintainer review conventions
 

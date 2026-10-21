@@ -67,6 +67,11 @@ class TokenTests(unittest.TestCase):
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_development_plugin_directory_cannot_escape_the_isolated_instance(self):
+        env = isolated.isolated_env({"TYPEWHISPER_PLUGINS_PATH": "/real/development/Plugins"},
+                                    Path("/w/i"), Path("/tmp/tw-x"))
+        self.assertNotIn("TYPEWHISPER_PLUGINS_PATH", env)
+
     def test_every_user_state_location_moves_into_the_instance(self):
         base = {"HOME": "/home/u", "XDG_RUNTIME_DIR": "/run/user/1000", "WAYLAND_DISPLAY": "wayland-0",
                 "DISPLAY": ":0", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",

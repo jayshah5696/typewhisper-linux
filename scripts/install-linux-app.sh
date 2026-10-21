@@ -29,6 +29,12 @@ ICON_TARGET="$ICONS_DIR/typewhisper.png"
 BIN_LINK="$BIN_DIR/typewhisper"
 EXECUTABLE_PATH="$APP_DIR/typewhisper"
 STATE_DIR="$STATE_HOME/typewhisper/installer"
+MODE="${1:-install}"
+if [ "$#" -gt 1 ] || { [ "$MODE" != install ] && [ "$MODE" != --publish-only ] && [ "$MODE" != --from-publish ]; }; then
+  printf 'Usage: %s [--publish-only|--from-publish]\n' "$0" >&2
+  exit 2
+fi
+DOTNET="${DOTNET:-dotnet}"
 
 case "$APP_DIR" in
   ""|/|"$HOME"|"$HOME/"|"$DATA_DIR")
@@ -37,28 +43,39 @@ case "$APP_DIR" in
     ;;
 esac
 
-if ! command -v dotnet >/dev/null 2>&1; then
+if ! command -v "$DOTNET" >/dev/null 2>&1; then
   printf 'dotnet SDK is required to build and install %s.\n' "$APP_NAME" >&2
   exit 1
 fi
 
-printf 'Publishing %s (%s, %s)...\n' "$APP_NAME" "$CONFIG" "$RID"
-dotnet publish "$PROJECT" \
-  -c "$CONFIG" \
-  -r "$RID" \
-  --self-contained true \
-  /p:PublishSingleFile=false \
-  /p:DebugType=None \
-  /p:DebugSymbols=false \
-  --nologo
+if [ "$MODE" != --from-publish ]; then
+  printf 'Publishing %s (%s, %s)...\n' "$APP_NAME" "$CONFIG" "$RID"
+  "$DOTNET" publish "$PROJECT" \
+    -c "$CONFIG" \
+    -r "$RID" \
+    --self-contained true \
+    /p:PublishSingleFile=false \
+    /p:DebugType=None \
+    /p:DebugSymbols=false \
+    /p:DeployBundledLinuxPlugins=false \
+    --nologo
 
-printf 'Bundling Linux plugins...\n'
-bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG"
+  printf 'Bundling Linux plugins...\n'
+  DOTNET="$DOTNET" bash "$ROOT/scripts/deploy-linux-plugins.sh" "$CONFIG"
 
-mkdir -p "$PUBLISH_DIR/Plugins"
-if [ -d "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" ]; then
-  rm -rf -- "$PUBLISH_DIR/Plugins"
-  cp -R "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" "$PUBLISH_DIR/Plugins"
+  mkdir -p "$PUBLISH_DIR/Plugins"
+  if [ -d "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" ]; then
+    rm -rf -- "$PUBLISH_DIR/Plugins"
+    cp -R "$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins" "$PUBLISH_DIR/Plugins"
+  fi
+fi
+
+# Refuse stale or incompatible output before replacing any installed files.
+VERSION="$(python3 -c 'import sys, xml.etree.ElementTree as E; print(next(n.text.strip() for n in E.parse(sys.argv[1]).getroot().iter("Version") if n.text))' "$ROOT/Directory.Build.props")"
+"$DOTNET" run --project "$ROOT/scripts/verification/plugin_compatibility" -- \
+  "$PUBLISH_DIR" "$PUBLISH_DIR/Plugins" '*' "$VERSION"
+if [ "$MODE" = --publish-only ]; then
+  exit 0
 fi
 
 # A historical installer wrote published binaries into the user-data directory.

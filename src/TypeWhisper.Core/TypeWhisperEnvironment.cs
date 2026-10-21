@@ -12,7 +12,19 @@ public static class TypeWhisperEnvironment
     public static string ModelsPath => Path.Join(BasePath, "Models");
     public static string DataPath => Path.Join(BasePath, "Data");
     public static string LogsPath => Path.Join(BasePath, "Logs");
-    public static string PluginsPath => Path.Join(BasePath, "Plugins");
+    // Local development can deploy assemblies separately while retaining existing models and settings.
+    public static string PluginsPath
+    {
+        get
+        {
+            var path = Environment.GetEnvironmentVariable("TYPEWHISPER_PLUGINS_PATH");
+            if (string.IsNullOrEmpty(path))
+                return Path.Join(BasePath, "Plugins");
+            if (!Path.IsPathFullyQualified(path))
+                throw new ArgumentException("TYPEWHISPER_PLUGINS_PATH must be an absolute path.");
+            return Path.GetFullPath(path);
+        }
+    }
     public static string AudioPath => Path.Join(BasePath, "Audio");
     public static string PluginDataPath => Path.Join(BasePath, "PluginData");
     public static string SettingsFilePath => Path.Join(BasePath, "settings.json");

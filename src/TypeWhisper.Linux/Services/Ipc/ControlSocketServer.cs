@@ -682,6 +682,7 @@ internal sealed class ControlSocketServer : IDisposable
         {
             Ok = true,
             State = SnapshotState(),
+            DictationInFlight = _orchestrator.HasDictationInFlight,
             Backend = _hotkey?.ActiveBackendId,
             SupportsPressRelease = _hotkey?.ActiveBackendSupportsPressRelease ?? false,
             ActiveBinding = _hotkey?.CurrentHotkeyString,

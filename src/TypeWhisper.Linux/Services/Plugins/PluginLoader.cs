@@ -208,19 +208,28 @@ public sealed class PluginLoader
         }
 
         var loadContext = new PluginAssemblyLoadContext(assemblyPath);
-        var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
-
-        var pluginType = assembly.GetType(manifest.PluginClass);
-        if (pluginType is null)
+        Type pluginType;
+        try
         {
-            _lastLoadFailures.Add(
-                new PluginLoadFailure(pluginDir, $"Plugin class not found: {manifest.PluginClass}")
-            );
-            Trace.WriteLine(
-                $"[PluginLoader] Plugin class '{manifest.PluginClass}' not found in {assemblyPath}"
-            );
+            var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+            var availableSdk = typeof(ITypeWhisperPlugin).Assembly.GetName();
+            var requiredSdk = assembly.GetReferencedAssemblies()
+                .FirstOrDefault(reference => reference.Name == availableSdk.Name);
+            if (requiredSdk is not null && requiredSdk.Version > availableSdk.Version)
+            {
+                throw new FileLoadException(
+                    $"Plugin '{manifest.Id}' requires PluginSDK {requiredSdk.Version}; this host provides {availableSdk.Version}. "
+                    + "Upgrade the app and plugin together."
+                );
+            }
+
+            // Preserve missing dependencies instead of reporting every type-load failure as a missing class.
+            pluginType = assembly.GetType(manifest.PluginClass, throwOnError: true)!;
+        }
+        catch
+        {
             loadContext.Unload();
-            return null;
+            throw;
         }
 
         if (!typeof(ITypeWhisperPlugin).IsAssignableFrom(pluginType))

@@ -131,6 +131,15 @@ internal static class JsonControlProtocol
     /// </summary>
     public sealed class StatusResponse
     {
+        // Runtime identity lets upgrades distinguish the responding app from the client executable.
+        public int ProcessId { get; set; } = Environment.ProcessId;
+        public string AppVersion { get; set; } = Services.AppVersion.Display;
+        public string? AppPath { get; set; } = typeof(Program).Assembly.Location;
+        public string? ExecutablePath { get; set; } = Environment.ProcessPath;
+        public string? PluginSdkVersion { get; set; } = typeof(PluginSDK.ITypeWhisperPlugin).Assembly.GetName().Version?.ToString();
+        public string PluginsPath { get; set; } = Core.TypeWhisperEnvironment.PluginsPath;
+        public bool DictationInFlight { get; set; }
+
         [JsonPropertyName("v")]
         // ReSharper disable once UnusedMember.Global  get read by the reflection JSON serializer (JsonControlProtocol.JsonOptions) in SerializeStatus; part of the status response wire shape
         public int Version { get; set; } = CurrentVersion;
