@@ -121,6 +121,30 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _liveCleanupEnabled;
 
+    // Match the scheduler's guard: plugin processors have no safe preview contract.
+    public bool CanUseLiveCleanup => !_pluginManager.PostProcessors.Any(processor => processor.Priority <= 250);
+    public bool ShowLiveCleanupUnavailableReason => !CanUseLiveCleanup;
+    public string LiveCleanupUnavailableReason
+    {
+        get
+        {
+            var blockers = _pluginManager.PostProcessors
+                .Where(processor => processor.Priority <= 250)
+                .Select(processor => processor.ProcessorName)
+                .Distinct()
+                .ToArray();
+            return blockers.Length == 0 ? "" : Loc.Instance.GetString(
+                "Dictation.LiveCleanupBlockedByPlugins", string.Join(", ", blockers));
+        }
+    }
+
+    private void RefreshLiveCleanupAvailability()
+    {
+        OnPropertyChanged(nameof(CanUseLiveCleanup));
+        OnPropertyChanged(nameof(ShowLiveCleanupUnavailableReason));
+        OnPropertyChanged(nameof(LiveCleanupUnavailableReason));
+    }
+
     [ObservableProperty]
     private SpokenFormattingStrategy _spokenFormattingStrategy = SpokenFormattingStrategy.Automatic;
 
@@ -360,8 +384,9 @@ public partial class DictationSectionViewModel : ObservableObject
         _dictation.StatusMessage += (_, msg) => Dispatcher.UIThread.Post(() => StatusText = msg);
 
         _audio.LevelChanged += OnLevelChanged;
-        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
+        _models.PropertyChanged += (_, _) => dispatchNotification(OnModelStatusChanged);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
+        _pluginManager.PluginStateChanged += (_, _) => dispatchNotification(RefreshLiveCleanupAvailability);
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
 
@@ -456,7 +481,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AccessibilityBridgeActivated && _settings.Current.AccessibilityBridgeEnabledByApp;
 
     public bool CanDeleteSelectedModel =>
-        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
+        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId) && !_models.IsDownloading(selected.ModelId);
 
     // The loader-path fix only applies when the system CUDA libraries exist on disk but
     // aren't currently loadable. Once they are loadable (HasCudaRuntimeLibraries) there is
@@ -495,7 +520,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 : _commands.HasCudaRuntimeLibraries
         );
 
-    public bool CanUseVulkan => SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+    public bool CanUseVulkan => _commands.HasVulkanGpu && SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
         TranscriptionAccelerationBackend.Vulkan
     ) == true;
 
@@ -567,8 +592,14 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
-                    AppSettings.LocalModelAccelerationVulkan => "Vulkan selected",
+                    AppSettings.LocalModelAccelerationVulkan when !_commands.HasVulkanGpu =>
+                        Loc.Instance["Dictation.AccelVulkanUnavailable"],
+                    AppSettings.LocalModelAccelerationVulkan when !CanUseVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanNotSupported"],
+                    AppSettings.LocalModelAccelerationVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanReady"],
                     AppSettings.LocalModelAccelerationAmdMigraphx => "AMD MIGraphX selected",
+                    AppSettings.LocalModelAccelerationWebGpu => "WebGPU selected",
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
@@ -855,31 +886,35 @@ public partial class DictationSectionViewModel : ObservableObject
         PreviewLevel = 0;
     }
 
-    public async Task DeleteSelectedModelAsync()
-    {
-        var selected = SelectedModel;
-        if (selected is null || !CanDeleteSelectedModel)
-        {
-            return;
-        }
+    public Task DeleteSelectedModelAsync() =>
+        SelectedModel is { } selected && CanDeleteSelectedModel
+            ? DeleteModelFilesAsync(selected.ModelId, selected.DisplayLabel)
+            : Task.CompletedTask;
 
-        if (_modelSelectionCts is not null)
+    private async Task DeleteModelFilesAsync(string modelId, string label)
+    {
+        var isSelected = SelectedModel?.ModelId == modelId;
+        if (isSelected && _modelSelectionCts is not null)
         {
             await _modelSelectionCts.CancelAsync();
         }
 
-        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", selected.DisplayLabel);
+        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", label);
 
         try
         {
-            await _models.DeleteModelAsync(selected.ModelId);
-            if (_settings.Current.SelectedModelId == selected.ModelId)
+            await _models.DeleteModelAsync(modelId);
+            if (_settings.Current.SelectedModelId == modelId)
             {
                 _settings.Update(current => current with { SelectedModelId = null });
             }
 
-            SelectedModel = null;
-            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", selected.DisplayLabel);
+            if (isSelected)
+            {
+                SelectedModel = null;
+            }
+
+            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", label);
         }
         catch (Exception ex)
         {
@@ -887,6 +922,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         finally
         {
+            RefreshLocalModelCards(checkDisk: true);
             RefreshModelState();
         }
     }
@@ -1004,6 +1040,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         SelectedModel = ModelOptions.FirstOrDefault(option => option.ModelId == previousSelectedId);
+        RebuildLocalModelCards();
         RefreshModelState();
     }
 
@@ -1150,12 +1187,12 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
             OnPropertyChanged(nameof(MediaPauseUnavailableReason));
             OnPropertyChanged(nameof(SoundFeedbackUnavailableReason));
+            OnPropertyChanged(nameof(LiveCleanupUnavailableReason));
             OnPropertyChanged(nameof(CudaLibraryPathActionText));
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
             OnPropertyChanged(nameof(AccelerationStatusText));
-            // Engine, model status, and active-model labels are computed text, not bindings
-            // to the catalog, so they are recomputed in the new language.
+            // Engine, model status, and active-model labels are computed text; recompute them in the new language.
             RefreshModelState();
         }
         finally
@@ -1194,6 +1231,12 @@ public partial class DictationSectionViewModel : ObservableObject
             new("sv", "Svenska"),
             new("da", "Dansk"),
             new("fi", "Suomi"),
+            new("el", "Ελληνικά"),
+            new("ar", "العربية"),
+            new("ja", "日本語"),
+            new("ko", "한국어"),
+            new("zh", "中文"),
+            new("vi", "Tiếng Việt"),
         ];
     }
 
@@ -1441,11 +1484,34 @@ public partial class DictationSectionViewModel : ObservableObject
     private void OnModelStatusChanged()
     {
         UpdateDownloadProgress();
+        RefreshLocalModelCards(checkDisk: false);
 
-        if (!IsModelDownloading)
+        // Another card's download ticks leave the selected model unchanged.
+        var snapshot = CaptureModelStateSnapshot();
+        if (!IsModelDownloading && snapshot != _lastModelStateSnapshot)
         {
             RefreshModelState();
         }
+    }
+
+    private ModelStateSnapshot? _lastModelStateSnapshot;
+
+    private sealed record ModelStateSnapshot(
+        string? SelectedModelId,
+        ModelStatusType? SelectedType,
+        string? SelectedError,
+        string? ActiveModelId,
+        string BusyCards);
+
+    private ModelStateSnapshot CaptureModelStateSnapshot()
+    {
+        var selected = SelectedModel is { } model ? _models.GetStatus(model.ModelId) : null;
+        return new ModelStateSnapshot(
+            SelectedModel?.ModelId,
+            selected?.Type,
+            selected?.ErrorMessage,
+            _models.ActiveModelId,
+            string.Join('\n', LocalModelCards.Where(card => card.WasBusy).Select(card => card.ModelId)));
     }
 
     private void UpdateDownloadProgress()
@@ -1471,6 +1537,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void RefreshModelState()
     {
+        RefreshLocalModelCards(checkDisk: false);
+        _lastModelStateSnapshot = CaptureModelStateSnapshot();
         RefreshSpokenFormattingVerification();
         OnPropertyChanged(nameof(AccelerationHelpText));
         var active = _models.ActiveModelId;
@@ -1506,6 +1574,9 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
+        OnPropertyChanged(nameof(CanUseVulkan));
+        OnPropertyChanged(nameof(CanUseAmdMigraphx));
+        OnPropertyChanged(nameof(CanUseWebGpu));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
         OnPropertyChanged(nameof(AccelerationStatusText));
@@ -1544,10 +1615,14 @@ public partial class DictationSectionViewModel : ObservableObject
 
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent availability guards with their own revert handling; braced switch arms read worse.
         if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
-            const string message = "Vulkan acceleration is available only for local models that support Vulkan.";
-            Dispatcher.UIThread.Post(() =>
+            var supportsVulkan = SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+                TranscriptionAccelerationBackend.Vulkan) == true;
+            var message = Loc.Instance[supportsVulkan
+                ? "Dictation.AccelVulkanUnavailable" : "Dictation.AccelVulkanNotSupported"];
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));
@@ -1556,22 +1631,13 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        if (normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
+        if ((normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
+            || (normalized == AppSettings.LocalModelAccelerationWebGpu && !CanUseWebGpu))
         {
-            const string message = "AMD MIGraphX is available only for sherpa-onnx local models.";
-            Dispatcher.UIThread.Post(() =>
-            {
-                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
-                OnPropertyChanged(nameof(SelectedAccelerationOption));
-                StatusText = message;
-            });
-            return;
-        }
-
-        if (normalized == AppSettings.LocalModelAccelerationWebGpu && !CanUseWebGpu)
-        {
-            const string message = "WebGPU is available only for supported sherpa-onnx local models.";
-            Dispatcher.UIThread.Post(() =>
+            var message = normalized == AppSettings.LocalModelAccelerationAmdMigraphx
+                ? "AMD MIGraphX is available only for supported sherpa-onnx local models."
+                : "WebGPU is available only for supported sherpa-onnx local models.";
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));
@@ -1593,7 +1659,7 @@ public partial class DictationSectionViewModel : ObservableObject
             // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
             // own selection-change cycle, leaving the dropdown stuck on "NVIDIA CUDA".
             // Write the message after the revert — the CPU re-entry clears CudaSetupStatus.
-            Dispatcher.UIThread.Post(() =>
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));
@@ -1642,7 +1708,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // the folder path picked via the platform folder picker.
     public async Task ChangeModelStorageAsync(string? folderPath)
     {
-        if (string.IsNullOrWhiteSpace(folderPath) || IsMigratingModelStorage)
+        if (string.IsNullOrWhiteSpace(folderPath) || !CanChangeModelStorage)
         {
             return;
         }
@@ -1681,13 +1747,14 @@ public partial class DictationSectionViewModel : ObservableObject
             IsUsingCustomModelStorage =
                 AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath)
                 is not null;
+            RefreshLocalModelCards(checkDisk: true);
         }
     }
 
     [RelayCommand]
     private void ResetModelStorage()
     {
-        if (!IsUsingCustomModelStorage || IsMigratingModelStorage)
+        if (!IsUsingCustomModelStorage || !CanChangeModelStorage)
         {
             return;
         }
@@ -1696,6 +1763,7 @@ public partial class DictationSectionViewModel : ObservableObject
         // at the default app-data location.
         _modelStorage.ResetToDefault();
         ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
+        RefreshLocalModelCards(checkDisk: true);
     }
 
     private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)

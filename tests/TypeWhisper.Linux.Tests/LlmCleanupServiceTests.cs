@@ -70,7 +70,7 @@ public sealed class LlmCleanupServiceTests
     }
 
     [Fact]
-    public async Task CleanAsync_Deadline_CancelsProviderAndReturnsLight()
+    public async Task CleanAsync_DraftDeadline_CancelsProviderAndReturnsLight()
     {
         var provider = new FakeLlmProviderPlugin("unused")
         {
@@ -85,15 +85,38 @@ public sealed class LlmCleanupServiceTests
 
         var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium,
             message => { statuses.Add(message); return Task.CompletedTask; },
-            timeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2));
+            isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal("Hello", result);
+        Assert.True(provider.LastToken.IsCancellationRequested);
+        Assert.DoesNotContain(statuses, status => status.Contains("wait limit"));
+    }
+
+    [Fact]
+    public async Task CleanAsync_ExplicitFinalWaitLimit_ReportsTimeoutAndPreservesLightText()
+    {
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            Process = async token =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return "late result";
+            },
+        };
+        var statuses = new List<string>();
+        var result = await CreateService([provider]).CleanWithResultAsync("uh hello", CleanupLevel.High,
+            message => { statuses.Add(message); return Task.CompletedTask; },
+            timeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(CleanupFallbackReason.TimedOut, result.Outcome.FallbackReason);
+        Assert.Equal(CleanupLevel.Light, result.Outcome.AppliedLevel);
         Assert.True(provider.LastToken.IsCancellationRequested);
         Assert.Contains(Loc.Instance["Dictation.CleanupTimedOut"], statuses);
     }
 
     [Fact]
-    public async Task CleanAsync_ProviderIgnoresCancellation_DoesNotHoldUpOrAccumulateRequests()
+    public async Task CleanAsync_ProviderIgnoresCancellation_DoesNotBlockOtherCleanup()
     {
         var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new FakeLlmProviderPlugin("unused") { Process = _ => release.Task };
@@ -101,16 +124,62 @@ public sealed class LlmCleanupServiceTests
         try
         {
             Assert.Equal("Hello", await sut.CleanAsync("uh hello", CleanupLevel.High,
-                timeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
-            Assert.Equal("World", await sut.CleanAsync("uh world", CleanupLevel.Medium,
-                timeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
-            Assert.Equal(1, provider.ProcessCalls);
-            Assert.True(provider.LastToken.IsCancellationRequested);
+                isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
+            var draftToken = provider.LastToken;
+            provider.Process = _ => Task.FromResult("Final cleanup");
+            Assert.Equal("Final cleanup", await sut.CleanAsync("uh world", CleanupLevel.Medium, ct: CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
+            Assert.Equal(2, provider.ProcessCalls);
+            Assert.True(draftToken.IsCancellationRequested);
         }
         finally
         {
             release.TrySetResult("late result must not be inserted");
         }
+    }
+
+    [Fact]
+    public async Task CleanAsync_DefaultHasNoDeadline()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            Process = _ => { entered.SetResult(); return release.Task; },
+        };
+        var cleanup = CreateService([provider]).CleanAsync("hello", CleanupLevel.High);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.Delay(TimeSpan.FromSeconds(5.2));
+            Assert.False(cleanup.IsCompleted);
+            Assert.False(provider.LastToken.IsCancellationRequested);
+            release.SetResult("Final cleanup");
+            Assert.Equal("Final cleanup", await cleanup);
+        }
+        finally { release.TrySetResult("released"); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DraftFailure_DoesNotLogOrSuppressFinalFailure(bool configurationFailure)
+    {
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            IsAvailable = !configurationFailure,
+            ProcessException = new InvalidOperationException("Provider failed."),
+        };
+        var entries = new List<string>();
+        var sut = CreateService([provider], RecordingErrorLog(entries),
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.cleanup:model-a" });
+        await sut.CleanAsync("hello", CleanupLevel.High, isDraft: true);
+        Assert.Empty(entries);
+        await sut.CleanAsync("hello", CleanupLevel.High);
+        Assert.Single(entries);
+        await sut.CleanAsync("hello", CleanupLevel.High, isDraft: true);
+        await sut.CleanAsync("hello", CleanupLevel.High);
+        Assert.Single(entries);
     }
 
     [Fact]
@@ -124,7 +193,7 @@ public sealed class LlmCleanupServiceTests
         var sut = CreateService([provider]);
 
         Assert.Equal("Hello", await sut.CleanAsync("uh hello", CleanupLevel.Medium,
-            timeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
+            isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(1, provider.ProcessCalls);
     }
 
@@ -142,10 +211,11 @@ public sealed class LlmCleanupServiceTests
         try
         {
             var cleanup = sut.CleanAsync("uh hello", CleanupLevel.Medium,
-                timeout: TimeSpan.FromSeconds(10), ct: caller.Token);
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                isDraft: true, draftTimeout: TimeSpan.FromSeconds(10), ct: caller.Token);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
             await caller.CancelAsync();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cleanup.WaitAsync(TimeSpan.FromSeconds(2)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                cleanup.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             Assert.True(provider.LastToken.IsCancellationRequested);
         }
         finally
@@ -164,7 +234,7 @@ public sealed class LlmCleanupServiceTests
             Process = _ => { entered.SetResult(); return release.Task; },
         };
         var sut = CreateService([provider]);
-        var cleanup = sut.CleanAsync("uh hello", CleanupLevel.High, timeout: TimeSpan.Zero);
+        var cleanup = sut.CleanAsync("uh hello", CleanupLevel.High, isDraft: true, draftTimeout: TimeSpan.Zero);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -184,6 +254,7 @@ public sealed class LlmCleanupServiceTests
         using var caller = new CancellationTokenSource();
         var provider = new FakeLlmProviderPlugin("must not be inserted")
         {
+            // ReSharper disable once AccessToDisposedClosure -- the provider runs inside the awaited CleanAsync, before the using disposes caller.
             BeforeProcess = _ => caller.Cancel(),
         };
         var sut = CreateService([provider]);
@@ -528,7 +599,7 @@ public sealed class LlmCleanupServiceTests
         public bool ThrowOnProcess { get; init; }
         public Exception? ProcessException { get; set; }
         public Action<CancellationToken>? BeforeProcess { get; init; }
-        public Func<CancellationToken, Task<string>>? Process { get; init; }
+        public Func<CancellationToken, Task<string>>? Process { get; set; }
         public CancellationToken LastToken { get; private set; }
         public int ProcessCalls { get; private set; }
 

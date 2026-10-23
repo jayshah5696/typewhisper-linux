@@ -1,41 +1,42 @@
 diff --git a/sherpa-onnx/csrc/provider-config.cc b/sherpa-onnx/csrc/provider-config.cc
 --- a/sherpa-onnx/csrc/provider-config.cc
 +++ b/sherpa-onnx/csrc/provider-config.cc
-@@ -109,7 +109,7 @@ void ProviderConfig::Register(ParseOptions *po) {
- 
+@@ -110,7 +110,7 @@
    po->Register("device", &device, "GPU device index for CUDA and Trt EP");
    po->Register("provider", &provider,
--               "Specify a provider to use: cpu, cuda, coreml");
-+               "Specify a provider to use: cpu, cuda, coreml, webgpu");
+                "Specify a provider to use: cpu, cuda, coreml, openvino, trt, "
+-               "rknn, qnn");
++               "rknn, qnn, webgpu");
  }
  
  bool ProviderConfig::Validate() const {
 diff --git a/sherpa-onnx/csrc/provider.cc b/sherpa-onnx/csrc/provider.cc
 --- a/sherpa-onnx/csrc/provider.cc
 +++ b/sherpa-onnx/csrc/provider.cc
-@@ -31,6 +31,8 @@ Provider StringToProvider(std::string s) {
+@@ -31,6 +31,8 @@
      return Provider::kDirectML;
    } else if (s == "spacemit") {
      return Provider::kSpacemiT;
 +  } else if (s == "webgpu") {
 +    return Provider::kWebGPU;
+   } else if (s == "openvino") {
+     return Provider::kOpenVINO;
    } else {
-     SHERPA_ONNX_LOGE("Unsupported string: %s. Fallback to cpu", s.c_str());
-     return Provider::kCPU;
 diff --git a/sherpa-onnx/csrc/provider.h b/sherpa-onnx/csrc/provider.h
 --- a/sherpa-onnx/csrc/provider.h
 +++ b/sherpa-onnx/csrc/provider.h
-@@ -22,5 +22,6 @@ enum class Provider {
+@@ -23,6 +23,7 @@
    kDirectML = 6,  // DmlExecutionProvider
    kSpacemiT = 7,  // SpacemiTExecutionProvider
-+  kWebGPU = 8,    // WebGpuExecutionProvider
+   kOpenVINO = 8,  // OpenVINOExecutionProvider
++  kWebGPU = 9,  // WebGpuExecutionProvider
  };
  
  /**
 diff --git a/sherpa-onnx/csrc/CMakeLists.txt b/sherpa-onnx/csrc/CMakeLists.txt
 --- a/sherpa-onnx/csrc/CMakeLists.txt
 +++ b/sherpa-onnx/csrc/CMakeLists.txt
-@@ -155,6 +155,7 @@ set(sources
+@@ -156,6 +156,7 @@
    vad-model.cc
    version.cc
    voice-activity-detector.cc
@@ -46,14 +47,16 @@ diff --git a/sherpa-onnx/csrc/CMakeLists.txt b/sherpa-onnx/csrc/CMakeLists.txt
 diff --git a/sherpa-onnx/csrc/session.cc b/sherpa-onnx/csrc/session.cc
 --- a/sherpa-onnx/csrc/session.cc
 +++ b/sherpa-onnx/csrc/session.cc
-@@ -17,5 +17,6 @@
+@@ -16,6 +16,7 @@
+ #include "sherpa-onnx/csrc/macros.h"
  #include "sherpa-onnx/csrc/provider.h"
+ #include "sherpa-onnx/csrc/text-utils.h"
 +#include "sherpa-onnx/csrc/webgpu-provider.h"
  #if defined(__APPLE__) && (ORT_API_VERSION >= 15) && \
      !defined(SHERPA_ONNX_DISABLE_COREML)
  #include "coreml_provider_factory.h"  // NOLINT
- #endif
-@@ -270,5 +271,20 @@ Ort::SessionOptions GetSessionOptionsImpl(
+@@ -356,6 +357,21 @@
+       }
        break;
      }
 +    case Provider::kWebGPU: {
@@ -71,9 +74,9 @@ diff --git a/sherpa-onnx/csrc/session.cc b/sherpa-onnx/csrc/session.cc
 +#endif
 +      break;
 +    }
-   }
-   return sess_opts;
- }
+     case Provider::kDirectML: {
+ #if defined(_WIN32) && SHERPA_ONNX_ENABLE_DIRECTML == 1
+       sess_opts.DisableMemPattern();
 diff --git a/sherpa-onnx/csrc/webgpu-provider.h b/sherpa-onnx/csrc/webgpu-provider.h
 new file mode 100644
 --- /dev/null

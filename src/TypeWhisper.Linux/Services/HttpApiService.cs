@@ -1718,10 +1718,8 @@ public sealed partial class HttpApiService : IDisposable
     );
 
     /// <summary>
-    ///     Runs raw text through the final dictation pipeline (profile matching, cleanup,
-    ///     snippets, dictionary, formatting) and returns the result. Nothing is inserted or
-    ///     saved. Quality evals use this to score cleanup on fixed inputs; it does not prove
-    ///     the audio-to-delivery path.
+    ///     Runs raw text through the final dictation pipeline without inserting or saving it.
+    ///     For quality evals; it does not exercise the audio path.
     /// </summary>
     private async Task<HttpApiResponse> HandleTextProcessAsync(HttpContext context, CancellationToken ct)
     {
@@ -1746,6 +1744,18 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing required field: text" }));
         }
 
+        if (!string.IsNullOrWhiteSpace(payload.Language))
+        {
+            try
+            {
+                LanguageSelectionResolver.Resolve(payload.Language);
+            }
+            catch (InvalidLanguageSelectionException ex)
+            {
+                return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+            }
+        }
+
         TextProcessingResult result;
         try
         {
@@ -1754,9 +1764,17 @@ public sealed partial class HttpApiService : IDisposable
                 ct
             );
         }
+        catch (InvalidLanguageSelectionException ex)
+        {
+            return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+        }
         catch (KeyNotFoundException ex)
         {
             return (404, Serialize(new { error = ex.Message, reason = "profile_not_found" }));
+        }
+        catch (NotSupportedException ex)
+        {
+            return (501, Serialize(new { error = ex.Message, reason = "not_supported" }));
         }
         catch (PluginRequestException ex) when (!ct.IsCancellationRequested)
         {

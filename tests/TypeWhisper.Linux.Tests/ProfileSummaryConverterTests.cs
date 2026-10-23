@@ -50,6 +50,27 @@ public sealed class ProfileSummaryConverterTests
         Assert.Equal("0 app rule(s), 0 URL rule(s)", result);
     }
 
+    [Fact]
+    public void Convert_MultiValue_ReturnsFormattedSummary()
+    {
+        var profile = new Profile
+        {
+            Id = "p1",
+            Name = "Auto Format",
+            ProcessNames = ["code", "cursor"],
+            UrlPatterns = ["github.com"],
+        };
+
+        var result = ProfileSummaryConverter.Instance.Convert(
+            [profile, "en"],
+            typeof(string),
+            null,
+            CultureInfo.InvariantCulture
+        );
+
+        Assert.Equal("2 app rule(s), 1 URL rule(s)", result);
+    }
+
     [Theory]
     [InlineData("en", "0 app rule(s), 0 URL rule(s)")]
     [InlineData("de", "0 App-Regel(n), 0 URL-Regel(n)")]

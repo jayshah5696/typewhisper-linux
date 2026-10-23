@@ -12,6 +12,7 @@ using Xunit;
 
 namespace TypeWhisper.UiTests;
 
+// ReSharper disable once ClassNeverInstantiated.Global -- created by xunit as the "ui" collection fixture.
 public sealed class UiSession : IDisposable
 {
     public UiSession()
@@ -59,7 +60,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
         var findings = await ui.Session.Dispatch(() => RenderAll(language), CancellationToken.None);
 
         var outFile = Path.Join(UiEnvironment.SnapshotDir, $"findings-{language}.json");
-        await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(findings, new JsonSerializerOptions { WriteIndented = true }));
+        await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(findings, s_indented));
         // Report every kind together so one category cannot hide another.
         var report = string.Join("\n\n", new[] { UiInspector.RawKey, UiInspector.ClippedText, UiInspector.UnnamedControl, UiInspector.WrongLanguage }
             .Select(kind => Describe(findings, kind, language, outFile))
@@ -70,39 +71,45 @@ public sealed class MainWindowRenderTests(UiSession ui)
     private List<RenderedFinding> RenderAll(string language)
     {
         Loc.Instance.CurrentLanguage = language;
-        var knownKeys = KnownKeys();
-        var foreignText = ForeignText(language);
-        var findings = new List<RenderedFinding>();
-        var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
-        foreach (var (themeName, theme) in s_themes)
+        try
         {
-            Application.Current!.RequestedThemeVariant = theme;
-            foreach (var (sizeName, width, height) in s_sizes)
+            var knownKeys = KnownKeys();
+            var foreignText = ForeignText(language);
+            var findings = new List<RenderedFinding>();
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            foreach (var (themeName, theme) in s_themes)
             {
-                var window = new MainWindow(viewModel) { Width = width, Height = height };
-                window.Show();
-                try
+                Application.Current!.RequestedThemeVariant = theme;
+                foreach (var (sizeName, width, height) in s_sizes)
                 {
-                    foreach (var item in viewModel.NavItems.Where(item => item.Content is not null))
+                    var window = new MainWindow(viewModel) { Width = width, Height = height };
+                    window.Show();
+                    try
                     {
-                        viewModel.SelectedItem = item;
-                        Settle();
-                        var section = item.Content!.GetType().Name.Replace("SectionViewModel", "", StringComparison.Ordinal);
-                        var variant = $"{section}-{language}-{themeName}-{sizeName}";
-                        window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"));
-                        findings.AddRange(UiInspector.Inspect(window, knownKeys, foreignText)
-                            .Distinct()
-                            .Select(finding => new RenderedFinding(section, language, themeName, sizeName, finding)));
+                        foreach (var item in viewModel.NavItems.Where(item => item.Content is not null))
+                        {
+                            viewModel.SelectedItem = item;
+                            Settle();
+                            var section = item.Content!.GetType().Name.Replace("SectionViewModel", "", StringComparison.Ordinal);
+                            var variant = $"{section}-{language}-{themeName}-{sizeName}";
+                            window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"));
+                            findings.AddRange(UiInspector.Inspect(window, knownKeys, foreignText)
+                                .Distinct()
+                                .Select(finding => new RenderedFinding(section, language, themeName, sizeName, finding)));
+                        }
+                    }
+                    finally
+                    {
+                        window.Close();
                     }
                 }
-                finally
-                {
-                    window.Close();
-                }
             }
+            return findings;
         }
-        Loc.Instance.CurrentLanguage = "en";
-        return findings;
+        finally
+        {
+            Loc.Instance.CurrentLanguage = "en";
+        }
     }
 
     private static void Settle()
@@ -131,7 +138,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
     /// <summary>Text that only another UI language uses. Short words are shared across languages, so skipped.</summary>
     private static HashSet<string> ForeignText(string language)
     {
-        var allowed = Catalog(language).Values.Concat(Catalog("en").Values).ToHashSet(StringComparer.Ordinal);
+        var allowed = Catalog(language).Values.ToHashSet(StringComparer.Ordinal);
         return s_languages.Where(other => other != language)
             .SelectMany(other => Catalog(other).Values)
             .Where(text => text.Length > 3 && !text.Contains('{') && !allowed.Contains(text))
@@ -150,6 +157,8 @@ public sealed class MainWindowRenderTests(UiSession ui)
             ? null
             : $"{distinct.Count} {kind} finding(s) in '{language}' (full list: {file}):\n" + string.Join("\n", distinct.Take(40));
     }
+
+    private static readonly JsonSerializerOptions s_indented = new() { WriteIndented = true };
 
     internal sealed record RenderedFinding(string Section, string Language, string Theme, string Size, UiFinding Finding);
 }

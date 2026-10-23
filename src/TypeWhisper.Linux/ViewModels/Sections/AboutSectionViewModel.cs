@@ -21,6 +21,8 @@ public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
     private readonly LocalDataExportService _dataExport;
+    private readonly LocalDataResetService _dataReset;
+    private readonly Func<bool> _requestRestart;
     private readonly SettingsBackupService _settingsBackup;
     private readonly SupportReportService? _supportReport;
     private readonly TimeZoneInfo _timeZone;
@@ -42,9 +44,13 @@ public partial class AboutSectionViewModel : ObservableObject
     private CancellationTokenSource? _dataExportCancellation;
 
     [ObservableProperty]
+    private bool _deleteModelsOnReset;
+
+    [ObservableProperty]
     private bool _isSupportReportBusy;
 
     private string _supportReportStatusKey = "About.SupportReportDescription";
+    private string _supportReportRenderedText = Loc.Instance["About.SupportReportDescription"];
 
     [ObservableProperty]
     private string _supportReportStatusText = Loc.Instance["About.SupportReportDescription"];
@@ -73,11 +79,21 @@ public partial class AboutSectionViewModel : ObservableObject
         IErrorLogService errorLog,
         SettingsBackupService settingsBackup,
         LocalDataExportService dataExport,
+        LocalDataResetService dataReset,
         UpdateCheckService updateCheck,
         UrlLauncher urlLauncher,
         SupportReportService supportReport
     )
-        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local, dataExport, supportReport) { }
+        : this(
+            errorLog,
+            settingsBackup,
+            updateCheck,
+            urlLauncher,
+            TimeZoneInfo.Local,
+            dataExport,
+            supportReport,
+            dataReset
+        ) { }
 
     internal AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -100,12 +116,16 @@ public partial class AboutSectionViewModel : ObservableObject
         UrlLauncher urlLauncher,
         TimeZoneInfo timeZone,
         LocalDataExportService? dataExport = null,
-        SupportReportService? supportReport = null
+        SupportReportService? supportReport = null,
+        LocalDataResetService? dataReset = null,
+        Func<bool>? requestRestart = null
     )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
         _dataExport = dataExport ?? new LocalDataExportService();
+        _dataReset = dataReset ?? new LocalDataResetService();
+        _requestRestart = requestRestart ?? App.RequestRestart;
         _supportReport = supportReport;
         _updateCheck = updateCheck;
         _urlLauncher = urlLauncher;
@@ -139,8 +159,12 @@ public partial class AboutSectionViewModel : ObservableObject
         if (UpdateStatusText == _updateStatusDefault)
             UpdateStatusText = updateDefault;
         _updateStatusDefault = updateDefault;
-        ApplyUpdateResult(_updateCheck.LastResult);
-        SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
+        if (SupportReportStatusText == _supportReportRenderedText)
+            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
+        if (IsCheckingForUpdates)
+            UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
+        else
+            ApplyUpdateResult(_updateCheck.LastResult);
         RefreshErrors();
     }
 
@@ -214,12 +238,12 @@ public partial class AboutSectionViewModel : ObservableObject
             _supportReportStatusKey = report.CollectionErrors.Count == 0
                 ? "About.SupportReportExported"
                 : "About.SupportReportPartial";
-            SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
+            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _supportReportStatusKey = "About.SupportReportFailed";
-            SupportReportStatusText = Loc.Instance[_supportReportStatusKey];
+            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
         }
         finally
         {
@@ -341,6 +365,37 @@ public partial class AboutSectionViewModel : ObservableObject
 
     [RelayCommand]
     private void CancelDataExport() => _dataExportCancellation?.Cancel();
+
+    /// <summary>
+    ///     Records the reset and restarts the app, which deletes the data at startup. Nothing is
+    ///     deleted when recording it fails.
+    /// </summary>
+    public async Task ResetAllDataAsync()
+    {
+        if (IsBackupBusy)
+        {
+            throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
+
+        IsBackupBusy = true;
+        BackupStatusText = Loc.Instance["About.ResettingData"];
+        try
+        {
+            await Task.Run(() => _dataReset.RequestReset(new LocalDataResetOptions(DeleteModelsOnReset)));
+        }
+        catch
+        {
+            BackupStatusText = Loc.Instance["About.ResetFailed"];
+            IsBackupBusy = false;
+            throw;
+        }
+
+        // The app stays busy until it exits. When it is already quitting, the reset runs at the next launch.
+        if (!_requestRestart())
+        {
+            BackupStatusText = Loc.Instance["About.ResetAtNextLaunch"];
+        }
+    }
 
     [RelayCommand]
     private async Task CheckForUpdatesAsync()
@@ -503,7 +558,7 @@ public partial class AboutSectionViewModel : ObservableObject
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
         // Option set unchanged → keep the current selection object as-is.
-        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        if (CategoryFilters.Select(o => (o.Key, o.Display)).SequenceEqual(desired.Select(o => (o.Key, o.Display))))
         {
             return;
         }

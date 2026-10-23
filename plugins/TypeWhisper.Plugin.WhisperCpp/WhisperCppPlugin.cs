@@ -213,6 +213,9 @@ public sealed class WhisperCppPlugin
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    // Downloads touch only their own files, so another model can load or transcribe meanwhile.
+    private readonly SemaphoreSlim _downloadGate = new(1, 1);
+    private CancellationTokenSource _downloadLifetime = new();
 
     // Drives the on-demand CUDA runtime downloads (cudart/cuBLAS wheels + the ~167 MB
     // whisper CUDA nupkg). HttpClient.Timeout bounds the WHOLE request including the
@@ -314,6 +317,13 @@ public sealed class WhisperCppPlugin
 
     public Task ActivateAsync(IPluginHostServices host)
     {
+        // Disabling and re-enabling a plugin activates the same instance again.
+        if (_downloadLifetime.IsCancellationRequested)
+        {
+            _downloadLifetime.Dispose();
+            _downloadLifetime = new CancellationTokenSource();
+        }
+
         _host = host;
         SelectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
@@ -375,6 +385,12 @@ public sealed class WhisperCppPlugin
 
     public async Task DeactivateAsync()
     {
+        // Stop and drain a running download, which holds no other gate the unload would wait for.
+        // The token stays canceled until the next activation, so no download starts meanwhile.
+        await _downloadLifetime.CancelAsync();
+        await _downloadGate.WaitAsync();
+        _downloadGate.Release();
+
         await UnloadModelAsync();
         _host = null;
     }
@@ -411,23 +427,19 @@ public sealed class WhisperCppPlugin
             //                        new UseGpu (no RuntimeLibraryOrder change needed).
             //   - pinned to "cpu"  → CPU stays fine; CUDA genuinely needs the [Cuda] .so
             //                        set, which can't load twice — refuse (restart only).
-            if (_pinnedRuntimeBackend == "cpu" && normalized is ("cuda" or "vulkan"))
+            switch (_pinnedRuntimeBackend)
             {
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    $"Cannot switch compute backend to '{normalized}': the native runtime is pinned "
-                        + "to CPU. Restart the app to load the GPU runtime."
-                );
-                return false;
-            }
-
-            if (_pinnedRuntimeBackend is ("cuda" or "vulkan")
-                && normalized is ("cuda" or "vulkan")
-                && _pinnedRuntimeBackend != normalized)
-            {
-                _host?.Log(PluginLogLevel.Warning,
-                    $"Cannot switch compute backend to '{normalized}': the native runtime is pinned to '{_pinnedRuntimeBackend}'. Restart the app to change GPU runtime.");
-                return false;
+                case "cpu" when normalized is "cuda" or "vulkan":
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned "
+                            + "to CPU. Restart the app to load the GPU runtime."
+                    );
+                    return false;
+                case "cuda" or "vulkan" when normalized is "cuda" or "vulkan" && _pinnedRuntimeBackend != normalized:
+                    _host?.Log(PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned to '{_pinnedRuntimeBackend}'. Restart the app to change GPU runtime.");
+                    return false;
             }
 
             _computeBackend = normalized;
@@ -474,7 +486,9 @@ public sealed class WhisperCppPlugin
         CancellationToken ct
     )
     {
-        await _gate.WaitAsync(ct);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadLifetime.Token);
+        ct = lifetime.Token;
+        await _downloadGate.WaitAsync(ct);
         try
         {
             var model = GetModel(modelId);
@@ -567,7 +581,7 @@ public sealed class WhisperCppPlugin
         }
         finally
         {
-            _gate.Release();
+            _downloadGate.Release();
         }
     }
 
@@ -598,21 +612,19 @@ public sealed class WhisperCppPlugin
             _gate.Release();
         }
 
+        var requestedBackend = desiredBackend;
+
         // Set if a GPU attempt fails and we fall back to CPU, so the final status
         // can explain why rather than hard-failing an explicit acceleration request.
         string? cudaUnavailableDetail = null;
         var downgradedToCpu = false;
 
         if (desiredBackend == "vulkan" && !alreadyPinned
-            && (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64))
+            && CheckVulkanAvailability(
+                Path.GetDirectoryName(typeof(WhisperCppPlugin).Assembly.Location) ?? AppContext.BaseDirectory,
+                VulkanAvailability.GetUnavailableReason) is { } vulkanUnavailableDetail)
         {
-            cudaUnavailableDetail = "Vulkan acceleration is supported by this plugin on Linux x64.";
-            desiredBackend = "cpu";
-            downgradedToCpu = true;
-        }
-        else if (desiredBackend == "vulkan" && !alreadyPinned && !HasVulkanLoader())
-        {
-            cudaUnavailableDetail = "The system Vulkan loader (libvulkan.so.1) is not installed.";
+            cudaUnavailableDetail = vulkanUnavailableDetail;
             desiredBackend = "cpu";
             downgradedToCpu = true;
         }
@@ -725,7 +737,7 @@ public sealed class WhisperCppPlugin
                 _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             }
             catch (Exception ex)
-                when (_computeBackend is ("cuda" or "vulkan")
+                when (_computeBackend is "cuda" or "vulkan"
                     && RuntimeOptions.LoadedLibrary is null)
             {
                 // The CUDA native library SET failed to load (a driver/runtime symbol
@@ -764,7 +776,7 @@ public sealed class WhisperCppPlugin
             }
 
             if (!TryValidateFactory(_factory)
-                && _computeBackend is ("cuda" or "vulkan"))
+                && _computeBackend is "cuda" or "vulkan")
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
@@ -805,7 +817,7 @@ public sealed class WhisperCppPlugin
             // Status / TryConfigureComputeBackend).
             AccelerationStatus = cudaUnavailableDetail is null
                 ? CreateLoadedAccelerationStatus(_computeBackend, AccelerationPreference)
-                : CreateGpuUnavailableStatus(_pinnedRuntimeBackend ?? "cuda",
+                : CreateGpuUnavailableStatus(requestedBackend,
                     cudaUnavailableDetail,
                     requiresRestart: _pinnedRuntimeBackend == "cpu"
                 );
@@ -981,6 +993,8 @@ public sealed class WhisperCppPlugin
     {
         DisposeFactoryUnsafe();
         _gate.Dispose();
+        _downloadGate.Dispose();
+        _downloadLifetime.Dispose();
         _httpClient.Dispose();
     }
 
@@ -1275,13 +1289,24 @@ public sealed class WhisperCppPlugin
         };
     }
 
-    private static bool HasVulkanLoader()
-    {
-        if (!NativeLibrary.TryLoad("libvulkan.so.1", out var handle))
-            return false;
+    private static readonly string[] s_vulkanRuntimeFiles =
+    [
+        "libwhisper.so",
+        "libggml-whisper.so",
+        "libggml-vulkan-whisper.so",
+        "libggml-cpu-whisper.so",
+        "libggml-base-whisper.so",
+    ];
 
-        NativeLibrary.Free(handle);
-        return true;
+    internal static string? CheckVulkanAvailability(string pluginDirectory, Func<string?> probe)
+    {
+        if (probe() is { } reason) return reason;
+        var missing = s_vulkanRuntimeFiles
+            .Select(name => Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name))
+            .FirstOrDefault(path => !File.Exists(path));
+        return missing is null
+            ? null
+            : $"The Vulkan runtime file is missing: {missing}. Reinstall the whisper.cpp plugin.";
     }
 
     // Test seam: simulate the native runtime having loaded and pinned itself to a
@@ -1395,7 +1420,7 @@ public sealed class WhisperCppPlugin
     // without a restart. A [Cuda]-pinned runtime currently running CPU compute therefore
     // reports ActiveBackend=Cpu with no restart flag — a CUDA preference just triggers a
     // reload, which the caller can do.
-    private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+    internal TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
         string effectiveBackend,
         TranscriptionAccelerationPreference preference
     )
@@ -1430,7 +1455,7 @@ public sealed class WhisperCppPlugin
             return new TranscriptionAccelerationStatus(
                 active,
                 displayText,
-                $"Process is pinned to {_pinnedRuntimeBackend}. Restart to switch to {requestedRuntime.ToUpperInvariant()}.",
+                $"Process is pinned to {BackendDisplayName(_pinnedRuntimeBackend)}. Restart to switch to {BackendDisplayName(requestedRuntime)}.",
                 true
             );
 
@@ -1452,9 +1477,16 @@ public sealed class WhisperCppPlugin
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"{backend.ToUpperInvariant()} unavailable: {detail}",
+            $"{BackendDisplayName(backend)} unavailable: {detail}",
             RequiresRestart: requiresRestart
         );
+
+    private static string BackendDisplayName(string? backend) => backend switch
+    {
+        "cuda" => "NVIDIA CUDA",
+        "vulkan" => "Vulkan",
+        _ => "CPU",
+    };
 
     private static void TryDeleteFile(string path)
     {

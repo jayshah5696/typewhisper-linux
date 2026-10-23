@@ -10,6 +10,62 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed partial class DictationOrchestrator
 {
+    internal static async Task<string> CompleteCleanupAsync(
+        LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
+        string text, CleanupLevel level, LlmCallCapture? capture,
+        Func<string, Task>? status, CancellationToken token,
+        TimeSpan? timeout = null, string? sourceLanguage = null,
+        ProfileStylePreset? stylePreset = null, Action<CleanupOutcome>? outcome = null)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var hasFinalLimit = timeout is { } limit && limit > TimeSpan.Zero;
+        // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
+        if (draft is not null)
+        {
+            try
+            {
+                string? provider = null;
+                try { provider = prompts.GetCleanupProviderSelection(); }
+                catch (PluginRequestException) { /* Final cleanup reports configuration errors. */ }
+                if (draft.MatchesFinal(level, provider, stylePreset))
+                {
+                    // Bound waiting for speculative work separately. A miss gets final
+                    // cleanup with its own user-selected limit and no shared provider gate.
+                    using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    budget.CancelAfter(hasFinalLimit && timeout!.Value < TimeSpan.FromSeconds(5)
+                        ? timeout.Value : TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        var reused = await draft.ReuseAsync(text.Trim(), capture, budget.Token, sourceLanguage, stylePreset);
+                        if (reused is not null)
+                        {
+                            Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
+                            outcome?.Invoke(new CleanupOutcome(level, level));
+                            return reused;
+                        }
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                }
+            }
+            finally { draft.Dispose(); }
+        }
+        if (hasFinalLimit)
+        {
+            timeout -= Stopwatch.GetElapsedTime(started);
+            if (timeout <= TimeSpan.Zero)
+            {
+                var timedOut = await cleanup.CreateTimeoutResultAsync(
+                    cleanup.PrepareLiveInput(text, sourceLanguage, stylePreset), level, status, token);
+                outcome?.Invoke(timedOut.Outcome);
+                return timedOut.Text;
+            }
+        }
+        var result = await cleanup.CleanWithResultAsync(text, level, status, capture,
+            timeout: timeout, ct: token, sourceLanguage: sourceLanguage, stylePreset: stylePreset);
+        outcome?.Invoke(result.Outcome);
+        return result.Text;
+    }
+
     private readonly Lock _recoveryLock = new();
     private CancellationTokenSource? _recoveryCts;
     private TaskCompletionSource? _recoveryCompletion;
@@ -26,7 +82,8 @@ public sealed partial class DictationOrchestrator
         bool skipVocabularyBooster,
         string engineProviderId,
         string? engineModelId,
-        List<(string Name, TimeSpan Elapsed)>? stepTimings = null
+        List<(string Name, TimeSpan Elapsed)>? stepTimings = null,
+        bool recordUsage = true
     )
     {
         var pipelineContext = new PostProcessingContext
@@ -60,24 +117,12 @@ public sealed partial class DictationOrchestrator
             ))
             .ToList();
 
-        var spokenStrategy = ResolveSpokenFormattingStrategy(
-            _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
-            translate && engineSupportsTranslation, _settings.Current.SpokenFormattingStrategy);
-
-        return new PipelineOptions
+        return BuildPreCleanupOptions(context, postProcessingLanguage, configuredLanguage,
+            languageHints, translate, engineSupportsTranslation, engineProviderId, engineModelId) with
         {
-            NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-            NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-            SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
-            AppFormatter = (text, processName) =>
-            {
-                var formatted = AppFormatterService.Format(text, processName);
-                return ApplyProfileStyleFormatting(context, formatted);
-            },
-            TargetProcessName = context.AppProcess,
             DictionaryCorrector = SelectFinalDictionaryCorrector(
                 usedPreviewFallback,
-                _dictionary.ApplyCorrections
+                recordUsage ? _dictionary.ApplyCorrections : _dictionary.PreviewCorrections
             ),
             VocabularyBooster = !skipVocabularyBooster && _settings.Current.VocabularyBoostingEnabled
                 ? _vocabularyBoosting.Apply
@@ -85,44 +130,20 @@ public sealed partial class DictationOrchestrator
             CleanupHandler =
                 cleanupLevel == CleanupLevel.None
                     ? null
-                    : async (text, token) =>
-                    {
-                        if (context.LiveCleanup is { } draft)
-                        {
-                            string? provider = null;
-                            try { provider = _promptProcessing.GetCleanupProviderSelection(); }
-                            catch (PluginRequestException) { /* Final cleanup reports the configuration error. */ }
-                            if (draft.MatchesFinal(cleanupLevel, provider, context.Profile?.StylePreset))
-                            {
-                                var reused = await draft.ReuseAsync(text.Trim(), postProcessingLanguage, context.Capture, token, context.Profile?.StylePreset);
-                                if (reused is not null)
-                                {
-                                    context.CleanupOutcome = new CleanupOutcome(cleanupLevel, cleanupLevel);
-                                    Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
-                                    return reused;
-                                }
-                            }
-                            draft.Dispose();
-                        }
-                        var cleaned = await _cleanup.CleanWithResultAsync(
-                            text,
-                            cleanupLevel,
+                    : (text, token) => CompleteCleanupAsync(_cleanup, _promptProcessing,
+                            context.LiveCleanup, text, cleanupLevel, context.Capture,
                             message =>
                             {
                                 ReportStatus(context, message);
                                 return Task.CompletedTask;
                             },
-                            context.Capture,
+                            token,
                             timeout: TimeSpan.FromSeconds(context.CleanupTimeoutSeconds),
-                            ct: token,
                             sourceLanguage: postProcessingLanguage,
-                            stylePreset: context.Profile?.StylePreset
-                        );
-                        context.CleanupOutcome = cleaned.Outcome;
-                        return cleaned.Text;
-                    },
+                            stylePreset: context.Profile?.StylePreset,
+                            outcome: result => context.CleanupOutcome = result),
             SnippetExpander = text =>
-                _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
+                _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
                 ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
                 : null,
@@ -135,6 +156,37 @@ public sealed partial class DictationOrchestrator
                 ? null
                 : translationTarget,
             RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
+            EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
+            GermanOutputVariant = _settings.Current.GermanOutputVariant,
+            PluginPostProcessors = pluginProcessors,
+            StepCompleted = (name, elapsed, _) => { stepTimings?.Add((name, elapsed)); },
+            StatusCallback = status =>
+            {
+                ReportStatus(
+                    context,
+                    status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
+                );
+                return Task.CompletedTask;
+            },
+        };
+    }
+
+    private PipelineOptions BuildPreCleanupOptions(RecordingContext context,
+        string? postProcessingLanguage, string? configuredLanguage, IReadOnlyList<string> languageHints,
+        bool translate, bool engineSupportsTranslation, string engineProviderId, string? engineModelId)
+    {
+        var spokenStrategy = ResolveSpokenFormattingStrategy(
+            _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+            translate && engineSupportsTranslation, _settings.Current.SpokenFormattingStrategy);
+
+        return new PipelineOptions
+        {
+            NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
+            AppFormatter = (text, processName) =>
+                ApplyProfileStyleFormatting(context, AppFormatterService.Format(text, processName)),
+            TargetProcessName = context.AppProcess,
             EffectiveSourceLanguage = postProcessingLanguage,
             DetectedLanguage = postProcessingLanguage,
             // Same rule as postProcessingLanguage above: an engine that ignores the
@@ -148,19 +200,7 @@ public sealed partial class DictationOrchestrator
             ConfiguredLanguageCandidates = languageHints,
             TranscriptionNumberNormalizationEnabled =
                 _settings.Current.TranscriptionNumberNormalizationEnabled,
-            EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
-            GermanOutputVariant = _settings.Current.GermanOutputVariant,
             ShortUtterancePunctuationEnabled = _settings.Current.ShortUtterancePunctuationEnabled,
-            PluginPostProcessors = pluginProcessors,
-            StepCompleted = (name, elapsed, _) => { stepTimings?.Add((name, elapsed)); },
-            StatusCallback = status =>
-            {
-                ReportStatus(
-                    context,
-                    status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
-                );
-                return Task.CompletedTask;
-            },
         };
     }
 

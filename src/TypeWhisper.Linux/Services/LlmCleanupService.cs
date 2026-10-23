@@ -20,7 +20,6 @@ public sealed class LlmCleanupService
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IErrorLogService? _errorLog;
-    private readonly SemaphoreSlim _requestGate = new(1, 1);
 
     // Last cleanup failure written to the error log. A broken provider fails on every dictation,
     // so only a change of message is worth a new entry.
@@ -47,11 +46,13 @@ public sealed class LlmCleanupService
         string? sourceLanguage = null,
         string? providerOverride = null,
         bool preparedLightText = false,
-        ProfileStylePreset? stylePreset = null
+        ProfileStylePreset? stylePreset = null,
+        bool isDraft = false,
+        TimeSpan? draftTimeout = null
     )
     {
         return (await CleanWithResultAsync(text, level, statusCallback, capture, timeout, ct,
-            sourceLanguage, providerOverride, preparedLightText, stylePreset)).Text;
+            sourceLanguage, providerOverride, preparedLightText, stylePreset, isDraft, draftTimeout)).Text;
     }
 
     public async Task<CleanupResult> CleanWithResultAsync(
@@ -64,7 +65,9 @@ public sealed class LlmCleanupService
         string? sourceLanguage = null,
         string? providerOverride = null,
         bool preparedLightText = false,
-        ProfileStylePreset? stylePreset = null
+        ProfileStylePreset? stylePreset = null,
+        bool isDraft = false,
+        TimeSpan? draftTimeout = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -100,13 +103,14 @@ public sealed class LlmCleanupService
                 prompt,
                 lightText,
                 capture,
-                timeout ?? TimeSpan.FromSeconds(5),
-                ct,
-                providerOverride
+                isDraft ? draftTimeout ?? TimeSpan.FromSeconds(5) : timeout ?? Timeout.InfiniteTimeSpan,
+                providerOverride,
+                isDraft,
+                ct
             );
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
-            _lastLoggedFailure = null;
+            if (!isDraft) _lastLoggedFailure = null;
             if (string.IsNullOrWhiteSpace(cleaned))
             {
                 await NotifyStatusAsync(statusCallback, CleanupOutcomeText.ForFallback(CleanupFallbackReason.EmptyResponse));
@@ -124,20 +128,14 @@ public sealed class LlmCleanupService
         }
         catch (CleanupDeadlineExceededException)
         {
-            const string failure = "AI cleanup exceeded its wait limit and fell back to Light cleanup.";
-            if (!string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
-            {
-                _lastLoggedFailure = failure;
-                _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
-            }
-            await NotifyStatusAsync(statusCallback, Loc.Instance["Dictation.CleanupTimedOut"]);
-            ct.ThrowIfCancellationRequested();
-            return Fallback(CleanupFallbackReason.TimedOut);
+            if (isDraft) return Fallback(CleanupFallbackReason.TimedOut);
+            return await CreateTimeoutResultAsync(lightText, level, statusCallback, ct);
         }
         catch (Exception ex)
         {
+            if (isDraft) return Fallback(CleanupFallbackReason.ProviderFailed);
             var safeMessage =
-                FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
+                FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level, stylePreset))
                 ?? Loc.Instance["Common.UnknownError"];
             Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {safeMessage}");
             // User-actionable: the requested Medium/High cleanup silently degraded to
@@ -162,32 +160,42 @@ public sealed class LlmCleanupService
             new(lightText, new CleanupOutcome(level, CleanupLevel.Light, reason));
     }
 
-    internal string PrepareLiveInput(string text, string? language, ProfileStylePreset? stylePreset = null) =>
+    internal string PrepareLiveInput(string text, string? language = null, ProfileStylePreset? stylePreset = null) =>
         _cleanup.Clean(text, CleanupLevel.Light, language, stylePreset);
 
-    // Bound the caller's wait even if a plugin ignores cancellation. The gate stays held
-    // until the provider settles, so later dictations cannot accumulate abandoned requests.
+    // The caller supplies the prepared Light text, including when its wait for a draft
+    // consumed the final budget before a new provider request could start.
+    internal async Task<CleanupResult> CreateTimeoutResultAsync(string lightText, CleanupLevel level,
+        Func<string, Task>? statusCallback, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        const string failure = "AI cleanup exceeded its wait limit and fell back to Light cleanup.";
+        if (!string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
+        {
+            _lastLoggedFailure = failure;
+            _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
+        }
+        await NotifyStatusAsync(statusCallback, Loc.Instance["Dictation.CleanupTimedOut"]);
+        ct.ThrowIfCancellationRequested();
+        return new CleanupResult(lightText, new CleanupOutcome(level, CleanupLevel.Light, CleanupFallbackReason.TimedOut));
+    }
+
+    // Drafts have their own budget. Final cleanup has a deadline only when its caller
+    // supplies the user's wait limit; speculative work never holds a shared request gate.
     private async Task<string> ProcessWithinBudgetAsync(
-        string prompt, string text, LlmCallCapture? capture, TimeSpan timeout, CancellationToken ct,
-        string? providerOverride)
+        string prompt, string text, LlmCallCapture? capture, TimeSpan timeout,
+        string? providerOverride, bool isDraft, CancellationToken ct)
     {
         var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var timerCts = new CancellationTokenSource();
         var completed = false;
         var request = Task.Run(async () =>
         {
-            await _requestGate.WaitAsync(requestCts.Token).ConfigureAwait(false);
-            try
-            {
-                requestCts.Token.ThrowIfCancellationRequested();
-                return await _promptProcessing.ProcessSystemPromptAsync(
-                    prompt, text, capture, requestCts.Token, providerOverride).ConfigureAwait(false);
-            }
-            finally
-            {
-                _requestGate.Release();
-            }
-        });
+            requestCts.Token.ThrowIfCancellationRequested();
+            return await _promptProcessing.ProcessSystemPromptAsync(
+                prompt, text, capture, providerOverride,
+                reportProviderProblems: !isDraft, ct: requestCts.Token).ConfigureAwait(false);
+        }, requestCts.Token);
         try
         {
             var deadline = Task.Delay(timeout > TimeSpan.Zero ? timeout : Timeout.InfiniteTimeSpan, timerCts.Token);

@@ -1,46 +1,42 @@
 diff --git a/sherpa-onnx/csrc/provider-config.cc b/sherpa-onnx/csrc/provider-config.cc
-index dc93723..827f730 100644
 --- a/sherpa-onnx/csrc/provider-config.cc
 +++ b/sherpa-onnx/csrc/provider-config.cc
-@@ -109,7 +109,7 @@ void ProviderConfig::Register(ParseOptions *po) {
-
+@@ -110,7 +110,7 @@
    po->Register("device", &device, "GPU device index for CUDA and Trt EP");
    po->Register("provider", &provider,
--               "Specify a provider to use: cpu, cuda, coreml");
-+               "Specify a provider to use: cpu, cuda, migraphx, coreml");
+                "Specify a provider to use: cpu, cuda, coreml, openvino, trt, "
+-               "rknn, qnn");
++               "rknn, qnn, migraphx");
  }
 
  bool ProviderConfig::Validate() const {
 diff --git a/sherpa-onnx/csrc/provider.cc b/sherpa-onnx/csrc/provider.cc
-index 8f7fe31..c087023 100644
 --- a/sherpa-onnx/csrc/provider.cc
 +++ b/sherpa-onnx/csrc/provider.cc
-@@ -31,6 +31,8 @@ Provider StringToProvider(std::string s) {
+@@ -31,6 +31,8 @@
      return Provider::kDirectML;
    } else if (s == "spacemit") {
      return Provider::kSpacemiT;
 +  } else if (s == "migraphx") {
 +    return Provider::kMIGraphX;
+   } else if (s == "openvino") {
+     return Provider::kOpenVINO;
    } else {
-     SHERPA_ONNX_LOGE("Unsupported string: %s. Fallback to cpu", s.c_str());
-     return Provider::kCPU;
 diff --git a/sherpa-onnx/csrc/provider.h b/sherpa-onnx/csrc/provider.h
-index 8842c79..80a5c13 100644
 --- a/sherpa-onnx/csrc/provider.h
 +++ b/sherpa-onnx/csrc/provider.h
-@@ -22,6 +22,7 @@ enum class Provider {
-   kTRT = 5,       // TensorRTExecutionProvider
+@@ -23,6 +23,7 @@
    kDirectML = 6,  // DmlExecutionProvider
    kSpacemiT = 7,  // SpacemiTExecutionProvider
-+  kMIGraphX = 8,  // MIGraphXExecutionProvider
+   kOpenVINO = 8,  // OpenVINOExecutionProvider
++  kMIGraphX = 9,  // MIGraphXExecutionProvider
  };
 
  /**
 diff --git a/sherpa-onnx/csrc/session.cc b/sherpa-onnx/csrc/session.cc
-index 5e31165..f07e819 100755
 --- a/sherpa-onnx/csrc/session.cc
 +++ b/sherpa-onnx/csrc/session.cc
-@@ -186,4 +186,20 @@ Ort::SessionOptions GetSessionOptionsImpl(
+@@ -356,6 +356,22 @@
        }
        break;
      }
@@ -61,4 +57,5 @@ index 5e31165..f07e819 100755
 +      break;
 +    }
      case Provider::kDirectML: {
-*** End Patch
+ #if defined(_WIN32) && SHERPA_ONNX_ENABLE_DIRECTML == 1
+       sess_opts.DisableMemPattern();

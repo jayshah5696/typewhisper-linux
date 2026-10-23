@@ -13,6 +13,7 @@ using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Processes;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.UiTests;
 
@@ -52,6 +53,8 @@ internal static class UiServices
             sp.GetRequiredService<ISettingsService>(),
             sp.GetRequiredService<PluginManager>(),
             new UnconfiguredTtsProvider())));
-        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        PluginManagerTestAccess.SetTranscriptionEngines(provider.GetRequiredService<PluginManager>(), [new UiLocalModelEngine()]);
+        return provider;
     }
 }

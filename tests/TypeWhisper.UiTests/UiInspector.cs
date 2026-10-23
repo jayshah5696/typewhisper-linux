@@ -21,6 +21,8 @@ internal static partial class UiInspector
     [GeneratedRegex(@"^[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+$")]
     private static partial Regex KeyShape();
 
+    /// <param name="root">The rendered visual tree to inspect.</param>
+    /// <param name="knownKeys">Localization keys; one shown verbatim is an untranslated leak.</param>
     /// <param name="foreignText">Catalog text from other UI languages that is absent from the rendered
     ///     language and the English fallback; seeing it on screen means stale or leaked text.</param>
     internal static List<UiFinding> Inspect(Visual root, IReadOnlySet<string> knownKeys, IReadOnlySet<string>? foreignText = null)
@@ -28,10 +30,10 @@ internal static partial class UiInspector
         var findings = new List<UiFinding>();
         foreach (var visual in root.GetVisualDescendants())
         {
-            if (visual is not Control control || !control.IsEffectivelyVisible || control.Bounds.Width <= 0)
+            if (visual is not Control { IsEffectivelyVisible: true, Bounds.Width: > 0 } control)
                 continue;
 
-            if (control is TextBlock text && text.Text is { Length: > 0 } value)
+            if (control is TextBlock { Text: { Length: > 0 } value } text)
             {
                 var trimmed = value.Trim();
                 if (knownKeys.Contains(trimmed) || KeyShape().IsMatch(trimmed))
@@ -45,10 +47,11 @@ internal static partial class UiInspector
                 var needed = text.TextWrapping == TextWrapping.NoWrap
                     ? text.TextLayout.WidthIncludingTrailingWhitespace
                     : text.TextLayout.Width;
-                if (text.TextTrimming == TextTrimming.None && needed > text.Bounds.Width + 1.5)
+                var visibleWidth = Math.Min(text.Bounds.Width, ComputeVisibleWidth(text, root));
+                if (text.TextTrimming == TextTrimming.None && needed > visibleWidth + 1.5)
                 {
                     findings.Add(new UiFinding(ClippedText, nameof(TextBlock),
-                        $"\"{Shorten(trimmed)}\" needs {needed:0} px, has {text.Bounds.Width:0} px", Locate(control)));
+                        $"\"{Shorten(trimmed)}\" needs {needed:0} px, has {visibleWidth:0} px", Locate(control)));
                 }
             }
 
@@ -62,7 +65,7 @@ internal static partial class UiInspector
     private static bool IsInteractive(Control control) =>
         control is Button or ToggleButton or ComboBox or TextBox or Slider or NumericUpDown or AutoCompleteBox;
 
-    internal static string AccessibleName(Control control)
+    private static string AccessibleName(Control control)
     {
         var explicitName = Avalonia.Automation.AutomationProperties.GetName(control);
         if (!string.IsNullOrWhiteSpace(explicitName))
@@ -82,7 +85,6 @@ internal static partial class UiInspector
         var hint = control switch
         {
             TextBox box => box.PlaceholderText is { Length: > 0 } placeholder ? $"placeholder \"{placeholder}\"" : null,
-            ToolTip => null,
             _ => null,
         } ?? (ToolTip.GetTip(control) is { } tip ? $"tooltip \"{tip}\"" : null);
         var name = string.IsNullOrEmpty(control.Name) ? "" : $"x:Name={control.Name} ";
@@ -93,7 +95,7 @@ internal static partial class UiInspector
     private static string Locate(Control control)
     {
         var parts = new List<string>();
-        Visual? current = control.GetVisualParent();
+        var current = control.GetVisualParent();
         while (current is not null && parts.Count < 3)
         {
             if (current is Control parent)
@@ -115,5 +117,39 @@ internal static partial class UiInspector
         return string.Join(" < ", parts);
     }
 
+
+    private static double ComputeVisibleWidth(Control control, Visual root)
+    {
+        var transform = control.TransformToVisual(root);
+        if (transform is null)
+            return control.Bounds.Width;
+
+        var rootRect = new Rect(0, 0, control.Bounds.Width, control.Bounds.Height).TransformToAABB(transform.Value);
+        var clipLeft = 0.0;
+        var clipRight = root.Bounds.Width;
+
+        var current = control.GetVisualParent();
+        while (current is not null && current != root)
+        {
+            if (current is Control ancestor && (ancestor.ClipToBounds || ancestor is ScrollViewer { HorizontalScrollBarVisibility: ScrollBarVisibility.Disabled }))
+            {
+                var ancestorTransform = ancestor.TransformToVisual(root);
+                if (ancestorTransform is not null)
+                {
+                    var ancestorBounds = new Rect(0, 0, ancestor.Bounds.Width, ancestor.Bounds.Height)
+                        .TransformToAABB(ancestorTransform.Value);
+                    clipLeft = Math.Max(clipLeft, ancestorBounds.Left);
+                    clipRight = Math.Min(clipRight, ancestorBounds.Right);
+                }
+            }
+            current = current.GetVisualParent();
+        }
+
+        var visibleLeft = Math.Max(rootRect.Left, clipLeft);
+        var visibleRight = Math.Min(rootRect.Right, clipRight);
+        return Math.Max(0.0, visibleRight - visibleLeft);
+    }
+
     private static string Shorten(string value) => value.Length <= 48 ? value : value[..45] + "...";
+
 }

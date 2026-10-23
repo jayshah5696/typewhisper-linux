@@ -12,13 +12,14 @@ internal sealed class LiveCleanupDraft : IDisposable
     private int _requests, _reused;
     public int RequestCount => Volatile.Read(ref _requests);
     public bool Reused => Volatile.Read(ref _reused) != 0;
-    public CleanupLevel Level { get; }
-    public string? Language { get; }
-    public string Provider { get; }
-    public ProfileStylePreset? StylePreset { get; }
+    private CleanupLevel Level { get; }
+    private string? Language { get; }
+    private string Provider { get; }
+    private ProfileStylePreset? StylePreset { get; }
 
     public LiveCleanupDraft(LlmCleanupService cleanup, CleanupLevel level, string? language,
-        string provider, int timeoutSeconds, Action<string, string> publish, ProfileStylePreset? stylePreset = null)
+        string provider, Func<string, CancellationToken, Task<string>> prepare,
+        Action<string, string> publish, TimeSpan? debounce = null, ProfileStylePreset? stylePreset = null)
     {
         Level = level;
         _cleanup = cleanup;
@@ -30,26 +31,32 @@ internal sealed class LiveCleanupDraft : IDisposable
             Interlocked.Increment(ref _requests);
             var capture = new LlmCallCapture();
             var result = await cleanup.CleanWithResultAsync(input, level, capture: capture,
-                timeout: TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 5), ct: token,
-                sourceLanguage: language, providerOverride: provider, preparedLightText: true,
-                stylePreset: stylePreset).ConfigureAwait(false);
-            if (result.Outcome.FallbackReason is not null) return null;
+                ct: token, providerOverride: provider, preparedLightText: true,
+                isDraft: true, sourceLanguage: language, stylePreset: stylePreset).ConfigureAwait(false);
+            if (result.Outcome.FallbackReason is not null)
+            {
+                // A timed-out provider may still be running. Do not start another draft
+                // in this recording after failure, even if it ignores cancellation.
+                StopScheduling();
+                return null;
+            }
             lock (_gate) { _capturedInput = input; _capture = capture; }
             return result.Text;
-        }, publish);
+        }, publish, debounce, prepare: async (input, token) =>
+            _cleanup.PrepareLiveInput(await prepare(input, token).ConfigureAwait(false), language, stylePreset));
     }
 
-    public void Submit(string input) => _session.Submit(_cleanup.PrepareLiveInput(input, Language, StylePreset));
+    public void Submit(string input) => _session.Submit(input);
     public void StopScheduling() => _session.StopScheduling();
     public bool Matches(CleanupLevel level, string? language, string? provider, ProfileStylePreset? stylePreset = null) =>
         Level == level && string.Equals(Language, language, StringComparison.OrdinalIgnoreCase) && Provider == provider && StylePreset == stylePreset;
     public bool MatchesFinal(CleanupLevel level, string? provider, ProfileStylePreset? stylePreset = null) =>
         Level == level && Provider == provider && StylePreset == stylePreset;
 
-    public async Task<string?> ReuseAsync(string input, string? finalLanguage, LlmCallCapture? capture, CancellationToken token, ProfileStylePreset? stylePreset = null)
+    public async Task<string?> ReuseAsync(string input, LlmCallCapture? capture, CancellationToken token,
+        string? finalLanguage = null, ProfileStylePreset? stylePreset = null)
     {
-        // Language affects only the local pass. Reuse requires the exact text that
-        // would reach the LLM after that pass, including any newly detected language.
+        // Reuse requires the exact text that reaches the LLM after all local passes.
         input = _cleanup.PrepareLiveInput(input, finalLanguage, stylePreset ?? StylePreset);
         var output = await _session.ReuseAsync(input, token).ConfigureAwait(false);
         if (output is null) return null;

@@ -22,6 +22,8 @@ public partial class DictationSectionViewModel
     [ObservableProperty]
     private string _microphoneTestStatus = Loc.Instance["Dictation.MicTestIdle"];
 
+    private string _microphoneTestIdleStatus = Loc.Instance["Dictation.MicTestIdle"];
+
     [ObservableProperty]
     private string _microphoneTestDetail = "";
 
@@ -115,9 +117,17 @@ public partial class DictationSectionViewModel
             return;
         }
 
+        var idle = Loc.Instance["Dictation.MicTestIdle"];
+        if (_microphoneTestStartFailure is null)
+        {
+            if (MicrophoneTestStatus == _microphoneTestIdleStatus)
+                MicrophoneTestStatus = idle;
+            _microphoneTestIdleStatus = idle;
+            return;
+        }
+
         MicrophoneTestStatus = Loc.Instance[_microphoneTestStartFailure switch
         {
-            null => "Dictation.MicTestIdle",
             MicrophoneTestStartFailure.Busy => "Dictation.MicTestBusy",
             MicrophoneTestStartFailure.NoDevice => "Dictation.MicTestNoDevice",
             _ => "Dictation.MicTestOpenFailed",

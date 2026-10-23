@@ -2,9 +2,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work_dir="${1:-${TMPDIR:-/tmp}/typewhisper-sherpa-webgpu}"
+work_dir="${1:-${TMPDIR:-/tmp}/typewhisper-sherpa-webgpu-1.13.8}"
 output_dir="${2:-$repo_root/plugins/TypeWhisper.Plugin.SherpaOnnx/Runtimes/linux-x64/sherpa-webgpu}"
-sherpa_tag="v1.12.23"
+sherpa_tag="v1.13.8"
 ort_version="1.24.4"
 ort_archive="onnxruntime-linux-x64-${ort_version}.tgz"
 ort_archive_sha="3a211fbea252c1e66290658f1b735b772056149f28321e71c308942cdb54b747"
@@ -15,6 +15,10 @@ mkdir -p "$work_dir"
 if [[ ! -d "$work_dir/sherpa-onnx/.git" ]]; then
   git clone --depth 1 --branch "$sherpa_tag" --recurse-submodules \
     https://github.com/k2-fsa/sherpa-onnx.git "$work_dir/sherpa-onnx"
+fi
+if [[ "$(git -C "$work_dir/sherpa-onnx" describe --tags --exact-match)" != "$sherpa_tag" ]]; then
+  echo "Sherpa source must be $sherpa_tag; use a fresh work directory." >&2
+  exit 1
 fi
 if ! git -C "$work_dir/sherpa-onnx" apply --reverse --check \
   "$repo_root/scripts/patches/sherpa-onnx-webgpu.patch" >/dev/null 2>&1; then

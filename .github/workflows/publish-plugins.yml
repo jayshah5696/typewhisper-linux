@@ -61,9 +61,11 @@ jobs:
         timeout-minutes: 15
         run: dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release -p:DeployBundledLinuxPlugins=false --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
 
-      - name: Build Sherpa MIGraphX native runtime
+      - name: Build Sherpa native runtimes
         if: env.PLUGIN_NAME == 'sherpa-onnx'
-        run: ./scripts/build-sherpa-migraphx.sh
+        run: |
+          ./scripts/build-sherpa-migraphx.sh
+          ./scripts/build-sherpa-webgpu.sh
 
       - name: Patch manifest version
         shell: pwsh
@@ -138,13 +140,48 @@ jobs:
             Write-Host "  Included native runtime: $env:PLUGIN_RID"
           }
 
-          # The MIGraphX-enabled Sherpa C API is built from the pinned Sherpa source and
-          # shipped in the plugin archive. ROCm and AMD's matching ORT runtime stay on-demand.
-          $migraphxRuntimeDir = Join-Path $env:PROJECT_DIRECTORY 'Runtimes/linux-x64/sherpa-migraphx'
-          if (Test-Path $migraphxRuntimeDir) {
-            New-Item -ItemType Directory -Path "$stagingDir/Runtimes/linux-x64/sherpa-migraphx" -Force | Out-Null
-            Copy-Item -Path "$migraphxRuntimeDir/*" -Destination "$stagingDir/Runtimes/linux-x64/sherpa-migraphx" -Recurse
-            Write-Host 'Included Sherpa MIGraphX native runtime'
+          # Custom Sherpa builds match the managed binding. MIGraphX's ROCm and ORT
+          # dependencies stay on-demand; WebGPU ships its matching ORT and provider.
+          foreach ($backend in @('migraphx', 'webgpu')) {
+            $nativeDir = Join-Path $env:PROJECT_DIRECTORY "Runtimes/linux-x64/sherpa-$backend"
+            if (Test-Path $nativeDir) {
+              $nativeStaging = "$stagingDir/Runtimes/linux-x64/sherpa-$backend"
+              New-Item -ItemType Directory -Path $nativeStaging -Force | Out-Null
+              Copy-Item -Path "$nativeDir/*" -Destination $nativeStaging -Recurse
+              Write-Host "Included Sherpa $backend native runtime"
+            }
+          }
+          $sherpaRequired = @()
+          if ($pluginId -eq 'com.typewhisper.sherpa-onnx' -and $env:PLUGIN_RID -eq 'linux-x64') {
+            foreach ($backend in @('migraphx', 'webgpu')) {
+              foreach ($name in @('libsherpa-onnx-c-api.so', 'libsherpa-onnx-cxx-api.so')) {
+                $sherpaRequired += "Runtimes/linux-x64/sherpa-$backend/$name"
+              }
+            }
+            foreach ($name in @('libonnxruntime.so.1', 'libonnxruntime_providers_shared.so', 'libonnxruntime_providers_webgpu.so')) {
+              $sherpaRequired += "Runtimes/linux-x64/sherpa-webgpu/$name"
+            }
+            foreach ($relativePath in $sherpaRequired) {
+              if (-not (Test-Path "$stagingDir/$relativePath")) {
+                throw "sherpa-onnx registry ZIP requires $relativePath"
+              }
+            }
+          }
+          # Whisper.net keeps GPU runtimes one level below runtimes/.
+          $vulkanDir = Join-Path $outputDir "runtimes/vulkan/$env:PLUGIN_RID"
+          if (Test-Path $vulkanDir) {
+            $vulkanStagingDir = "$stagingDir/runtimes/vulkan/$env:PLUGIN_RID"
+            New-Item -ItemType Directory -Path (Split-Path $vulkanStagingDir -Parent) -Force | Out-Null
+            Copy-Item -Path $vulkanDir -Destination $vulkanStagingDir -Recurse
+          }
+          # Must match WhisperCppPlugin.CheckVulkanAvailability, which refuses Vulkan when any is missing.
+          $vulkanRequired = @('libwhisper.so', 'libggml-whisper.so', 'libggml-vulkan-whisper.so', 'libggml-cpu-whisper.so', 'libggml-base-whisper.so')
+          if ($pluginId -eq 'com.typewhisper.whisper-cpp' -and $env:PLUGIN_RID -eq 'linux-x64') {
+            foreach ($name in $vulkanRequired) {
+              if (-not (Test-Path "$stagingDir/runtimes/vulkan/linux-x64/$name")) {
+                throw "whisper.cpp registry ZIP requires runtimes/vulkan/linux-x64/$name"
+              }
+            }
           }
 
           # Fail closed: if the plugin ships a Scripts/ dir but it didn't reach
@@ -156,6 +193,26 @@ jobs:
           # Create ZIP
           $zipName = "$pluginId-$env:PLUGIN_VERSION.zip"
           Compress-Archive -Path "$stagingDir/*" -DestinationPath $zipName -Force
+          if ($sherpaRequired.Count -gt 0) {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $PWD $zipName))
+            try {
+              foreach ($relativePath in $sherpaRequired) {
+                if ($null -eq $archive.GetEntry($relativePath)) {
+                  throw "sherpa-onnx registry ZIP is missing $relativePath"
+                }
+              }
+            } finally { $archive.Dispose() }
+          }
+          if ($pluginId -eq 'com.typewhisper.whisper-cpp' -and $env:PLUGIN_RID -eq 'linux-x64') {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $PWD $zipName))
+            try {
+              foreach ($name in $vulkanRequired) {
+                if ($null -eq $archive.GetEntry("runtimes/vulkan/linux-x64/$name")) {
+                  throw "whisper.cpp registry ZIP is missing runtimes/vulkan/linux-x64/$name"
+                }
+              }
+            } finally { $archive.Dispose() }
+          }
           $zipSize = (Get-Item $zipName).Length
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
           echo "ZIP_SIZE=$zipSize" >> $env:GITHUB_ENV

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work_dir="${1:-${TMPDIR:-/tmp}/typewhisper-sherpa-migraphx}"
+work_dir="${1:-${TMPDIR:-/tmp}/typewhisper-sherpa-migraphx-1.13.8}"
 output_dir="${2:-$repo_root/plugins/TypeWhisper.Plugin.SherpaOnnx/Runtimes/linux-x64/sherpa-migraphx}"
-sherpa_tag="v1.12.23"
+sherpa_tag="v1.13.8"
 ort_version="1.23.2"
 ort_wheel="onnxruntime_migraphx-${ort_version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
 ort_wheel_sha="663bff4dc3f72582d69f12ad073eb5695dfb526d574376cc8e5b161c7d2f0f08"
@@ -14,6 +14,10 @@ if [[ ! -d "$work_dir/sherpa-onnx/.git" ]]; then
   rm -rf "$work_dir/sherpa-onnx"
   git clone --depth 1 --branch "$sherpa_tag" --recurse-submodules \
     https://github.com/k2-fsa/sherpa-onnx.git "$work_dir/sherpa-onnx"
+fi
+if [[ "$(git -C "$work_dir/sherpa-onnx" describe --tags --exact-match)" != "$sherpa_tag" ]]; then
+  echo "Sherpa source must be $sherpa_tag; use a fresh work directory." >&2
+  exit 1
 fi
 if ! git -C "$work_dir/sherpa-onnx" apply --reverse --check "$repo_root/scripts/patches/sherpa-onnx-migraphx.patch"; then
   git -C "$work_dir/sherpa-onnx" apply --check "$repo_root/scripts/patches/sherpa-onnx-migraphx.patch"

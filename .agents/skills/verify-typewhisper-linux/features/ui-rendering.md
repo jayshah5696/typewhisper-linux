@@ -30,9 +30,9 @@ Each failure lists the section, control, detail, nearby labels, and affected siz
 ## Gotchas
 
 - The PNG shows only the visible viewport; checks cover the whole section, including content scrolled out of view.
-- The app pins the Dark theme on every window, so only Dark is rendered.
-- Plugins are not loaded in the test graph, so plugin-provided settings pages and lists render empty.
-- Clipping is measured against the TextBlock's own box. A parent with `ClipToBounds` that hides part of a wider box is not detected.
+- Settings windows support System, Light, and Dark appearance. The tests render both Light and Dark. The recording overlay and floating live-text window stay Dark.
+- The test graph supplies a local transcription engine for model-card coverage. It does not load account-backed plugins, so their settings pages still need separate live checks.
+- Clipping checks include the root viewport and clipping ancestors, including scroll viewers that disable horizontal scrolling.
 - Wrapped lines are measured without their trailing space, which is never drawn.
 - Name a control with `AutomationProperties.Name="{loc:Str <label key>}"`, using the key of its visible row label, so the name follows the UI language. Items generated from a template, such as the sidebar buttons, use `AutomationProperties.Name="{Binding Label}"`; without a name, Avalonia does not expose them over AT-SPI at all.
 - Prefer layouts that survive long translations: let labels wrap, give label columns a minimum width, cap control widths instead of fixing them, and put wide control groups under their title.
@@ -51,6 +51,8 @@ just ui-shortcuts artifacts/verification/$(date +%F)-shortcuts
 - `HiddenDesktop.screenshot(path)` captures a real composited frame through mutter's ScreenCast API and GStreamer `pipewiresrc`.
 
 Proven on 2026-10-14: Open Wizard opened the welcome wizard, the Shortcuts nav item opened its section, and the shortcut recorder saved `Ctrl+Shift+F8`, each with screenshots.
+
+Proven on 2026-10-23 after integrating upstream `d458733e`: the full rendered suite passed 18 tests across four languages and both theme variants. The private desktop check changed Theme to Light and back to Dark through the controls, verified the saved values, selected Floating window, displayed and stopped its sample preview, and inspected local model cards and the fork's wait-limit and GPU choices. The shortcut recorder again saved `Ctrl+Shift+F8`. Repeatable checks and evidence are under `artifacts/verification/2026-10-23-upstream-sync/`.
 
 - The private bus cannot start the a11y bus or registry through systemd; the helper starts `at-spi-bus-launcher` and `at-spi2-registryd` itself.
 - Settings sections nest deeply; the AT-SPI walk goes 40 levels deep.
