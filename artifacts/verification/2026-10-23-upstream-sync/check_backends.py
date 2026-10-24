@@ -11,7 +11,10 @@ from hidden_desktop import HiddenDesktop
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--out", type=Path, required=True)
-out = parser.parse_args().out.resolve()
+parser.add_argument("--cases", nargs="+", choices=["cpu", "vulkan", "webgpu", "migraphx"],
+                    default=["cpu", "vulkan", "webgpu"])
+args = parser.parse_args()
+out = args.out.resolve()
 if out.exists():
     raise RuntimeError("Choose a fresh backend evidence directory")
 clip = Path("tests/fixtures/librispeech-1462-170145-0012.wav").resolve()
@@ -21,7 +24,10 @@ with HiddenDesktop(out / "backend-desktop") as desktop:
         ("com.typewhisper.whisper-cpp", "whisper-cpp", "base", "cpu"),
         ("com.typewhisper.whisper-cpp", "whisper-cpp", "base", "vulkan"),
         ("com.typewhisper.sherpa-onnx", "sherpa-onnx", "parakeet-tdt-0.6b", "webgpu"),
+        ("com.typewhisper.sherpa-onnx", "sherpa-onnx", "parakeet-tdt-0.6b", "migraphx"),
     ]:
+        if backend not in args.cases:
+            continue
         with IsolatedApp(out / f"backend-{engine}-{backend}", configuration="Release",
                          plugin_data=[plugin], virtual_mic=False, display="none",
                          extra_env=desktop.app_env(), settings={
@@ -45,5 +51,9 @@ with HiddenDesktop(out / "backend-desktop") as desktop:
             write_json(out / "backends.json", results)
             assert result.get("text", "").strip(), row
             assert "--transcription-worker" in children, row
-            assert status["acceleration"]["active_backend"] == backend, row
+            if backend == "migraphx":
+                assert status["acceleration"]["active_backend"] == "cpu", row
+                assert "ROCm" in (status["acceleration"].get("detail") or ""), row
+            else:
+                assert status["acceleration"]["active_backend"] == backend, row
 print(json.dumps(results, indent=2))

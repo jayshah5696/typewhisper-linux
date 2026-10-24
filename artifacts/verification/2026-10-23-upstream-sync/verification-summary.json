@@ -1,0 +1,152 @@
+{
+  "merge_commit": "132fae252354cf9ce3e9a84f1e0dda975192ab24",
+  "verification_helper_commit": "a57c7605",
+  "local_changes_commit": "36deba8775ba3213dcc0ecb7d628d401923a96ef",
+  "upstream": "d458733e7cffccab64be6f44a475888586622c71",
+  "fork_base": "bf9f3deec0a5299648db75298a5402122f979150",
+  "ci": {
+    "passed": 9136,
+    "skipped": 14,
+    "failures": 0,
+    "warnings": 0,
+    "includes_local_changes": true
+  },
+  "verification_tool_tests": 74,
+  "published_plugins_loaded": 39,
+  "plugin_archive_checks": 2,
+  "recovery": {
+    "text_ready": true,
+    "delivered_to_clipboard": true,
+    "clipboard_read_back_matches": true,
+    "llm_route_correct": true,
+    "active_cpu_backend": true,
+    "actual_history_saved": true,
+    "no_picker_button": true,
+    "original_clipboard_matches": true,
+    "one_cleanup_request": true,
+    "preview_did_not_copy": true,
+    "new_clipboard_matches": true,
+    "cancel_kept_clipboard": true,
+    "dismiss_discarded_preview": true,
+    "collapse_kept_clipboard": true,
+    "collapse_discarded_preview": true,
+    "timeout_visible": true,
+    "timeout_did_not_copy": true,
+    "history_unchanged": true,
+    "api_actual_level": true,
+    "no_rejected_llm_routes": true
+  },
+  "needle": {
+    "text_ready": true,
+    "delivered_to_clipboard": true,
+    "clipboard_read_back_matches": true,
+    "llm_route_correct": true,
+    "file_engine_is_needle": true,
+    "dictation_engine_is_needle": true,
+    "file_transcription_has_expected_speech": true,
+    "dictation_has_expected_speech": true,
+    "active_cpu_backend": true
+  },
+  "upgrade_preservation": {
+    "settings.json": true,
+    "Data/history.json": true,
+    "PluginData/com.test/settings.json": true,
+    "Models/keep.model": true,
+    "Audio/keep.wav": true,
+    "desktop_launches_upgraded_payload": true,
+    "launcher_targets_upgraded_payload": true
+  },
+  "upgraded_executable_needle": {
+    "text_ready": true,
+    "delivered_to_clipboard": true,
+    "clipboard_read_back_matches": true,
+    "llm_route_correct": true,
+    "file_engine_is_needle": true,
+    "dictation_engine_is_needle": true,
+    "file_transcription_has_expected_speech": true,
+    "dictation_has_expected_speech": true,
+    "active_cpu_backend": true
+  },
+  "ui": {
+    "theme_light_saved_from_ui": true,
+    "floating_live_text_saved_from_ui": true,
+    "floating_preview_displays_sample_text": true,
+    "preview_stopped_from_ui": true,
+    "local_model_cards_visible": true,
+    "fork_wait_limit_control_visible": true,
+    "fork_gpu_options_retained": true,
+    "theme_dark_saved_from_ui": true
+  },
+  "shortcut_recorded": "Ctrl+Shift+F8",
+  "correction": {
+    "warning_reports_copy_success": true,
+    "clipboard_read_back_matches": true,
+    "result_visible_and_selectable": true,
+    "both_target_windows_unchanged": true,
+    "upstream_reset_acknowledgement_retained": true,
+    "cancel_keeps_isolated_data": true
+  },
+  "live_cleanup": {
+    "reused": {
+      "text_ready": true,
+      "delivered_to_clipboard": true,
+      "clipboard_read_back_matches": true,
+      "llm_route_correct": true,
+      "live_cleanup_ran_before_stop": true,
+      "floating_window_displayed_live_transcript": true,
+      "matching_draft_reused": true,
+      "one_provider_request": true
+    },
+    "disabled": {
+      "text_ready": true,
+      "delivered_to_clipboard": true,
+      "clipboard_read_back_matches": true,
+      "llm_route_correct": true,
+      "no_speculative_request": true,
+      "one_final_request": true
+    },
+    "deadline": {
+      "text_ready": true,
+      "delivered_to_clipboard": true,
+      "clipboard_read_back_matches": true,
+      "llm_route_correct": true,
+      "live_cleanup_ran_before_stop": true,
+      "floating_window_displayed_live_transcript": true,
+      "timeout_reported_in_history": true,
+      "one_second_final_budget_bounded": true
+    },
+    "unlimited": {
+      "text_ready": true,
+      "delivered_to_clipboard": true,
+      "clipboard_read_back_matches": true,
+      "llm_route_correct": true,
+      "zero_limit_waited_for_provider": true,
+      "ai_cleanup_succeeded": true
+    }
+  },
+  "active_backends_after_inference": [
+    "cpu",
+    "vulkan",
+    "webgpu"
+  ],
+  "migraphx_fallback": {
+    "preference": "amd-migraphx",
+    "active_backend": "cpu",
+    "display_text": "Using CPU",
+    "detail": "GPU acceleration unavailable: ROCm HIP runtime libamdhip64.so.7 is missing; install a supported ROCm stack.",
+    "requires_restart": false
+  },
+  "recovery_stage_observations_ms": {
+    "transcription": 322.5237,
+    "cleanup": 138.7819,
+    "delivery": 272.1997
+  },
+  "original_local_paths_preserved": 10,
+  "limits": [
+    "No active MIGraphX, CUDA, downloaded Qwen, or account-backed provider verification.",
+    "Fake-provider cases establish pipeline behavior, not real LLM writing quality.",
+    "No full package-manager installation matrix or native Wayland clipboard verification.",
+    "Final private checks exclude the host system bus; they do not establish host logind lock behavior.",
+    "No installation, user-app restart, remote push, or pull request."
+  ]
+}

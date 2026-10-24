@@ -29,15 +29,28 @@ with HiddenDesktop(out / "desktop") as desktop:
             settings, provider = llm.plugin_overrides()
             settings.update(selectedModelId="plugin:com.typewhisper.sherpa-onnx:parakeet-tdt-0.6b",
                             cleanupLevel=2, cleanupTimeoutSeconds=0 if name == "unlimited" else 1,
-                            liveTranscriptionEnabled=True, liveCleanupEnabled=live, saveToHistoryEnabled=True)
+                            liveTranscriptionEnabled=True, liveCleanupEnabled=live, liveTextFloating=live,
+                            saveToHistoryEnabled=True)
             settings["pluginEnabledState"]["com.typewhisper.filler-words"] = False
             with IsolatedApp(out / name, configuration="Release", settings=settings,
                              plugin_data=["com.typewhisper.sherpa-onnx"],
                              plugin_settings={"com.typewhisper.openai-compatible": provider},
                              virtual_mic=True, display="none", extra_env=private_x11_env(desktop.app_env())) as app:
                 app.load_model("sherpa-onnx", "parakeet-tdt-0.6b")
-                session = dictate_once(app, llm, X11Clipboard(app.env), audio, tail=tail)
+                watcher = desktop.watch_texts("TypeWhisper Live Text", 30) if live else None
+                try:
+                    session = dictate_once(app, llm, X11Clipboard(app.env), audio, tail=tail)
+                finally:
+                    if watcher is not None:
+                        if watcher.poll() is None:
+                            watcher.terminate()
+                        observed, _ = watcher.communicate(timeout=5)
                 checks = session_checks(session, live_cleanup=live)
+                if watcher is not None:
+                    frames = [json.loads(line) for line in observed.splitlines() if line.strip()]
+                    write_json(out / (name + "-floating-text.json"), frames)
+                    checks["floating_window_displayed_live_transcript"] = any(
+                        "bent his face over her hair" in " ".join(frame["texts"]).lower() for frame in frames)
                 result = session["result"]
                 performance = result["performance"]
                 records = json.loads((app.instance / "data/TypeWhisper/Data/history.json").read_text())

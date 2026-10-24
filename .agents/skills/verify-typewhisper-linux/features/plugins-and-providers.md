@@ -2,7 +2,7 @@
 
 ## Sub-features
 
-- The app bundles 38 plugins beside its binary and copies them into its data folder on first start.
+- The merged app bundles 39 plugins beside its binary and copies them into its data folder on first start.
 - Each plugin is enabled or disabled in `pluginEnabledState`; enabled plugins activate at startup.
 - Transcription engines (Sherpa, Whisper.cpp, Whistle, cloud ASR) and LLM providers (OpenAI-compatible, OpenRouter, Gemini, and others) register with the plugin manager.
 - Settings, then Prompts, selects the cleanup LLM (`defaultLlmProvider`, written as `plugin:<plugin id>:<model>`). Each plugin keeps its own settings in `PluginData/<plugin id>/settings.json`.
@@ -22,7 +22,7 @@ just eval-capture artifacts/evals/$(date +%F)-provider/results.jsonl
 
 Check, in order:
 
-1. `<out>-instance/app.log` lists `Discovered 38 plugin(s)`, `[Plugin:com.typewhisper.openai-compatible] [Info] Activated (configured=True, ...)`, and `Activated plugin: com.typewhisper.openai-compatible`.
+1. `<out>-instance/app.log` lists `Discovered 39 plugin(s)`, `[Plugin:com.typewhisper.openai-compatible] [Info] Activated (configured=True, ...)`, and `Activated plugin: com.typewhisper.openai-compatible`.
 2. `<out>-run.json` shows one cleanup request per case (`llm_requests` equals `case_count`), a short `provider_wait_seconds`, and no `llm_rejected_paths`.
 3. Each result row names `cleanup_provider` `com.typewhisper.openai-compatible` and `cleanup_model` `fixture-cleanup`.
 
@@ -37,4 +37,4 @@ Proven on 2026-10-14: provider activation and 30 of 30 routed cleanup calls (`ar
 - Real provider credentials are encrypted with the user's `secret-protection.key`. Copying plugin settings without that key leaves the provider unconfigured; copying the key puts a credential in the instance folder. The eval thread's `dictation_evals.py capture-real` keeps such copies in a private temporary instance that is removed on exit.
 - Installing or updating plugins from the online catalog is not covered here; it needs network access and changes the plugin folder.
 - The rendered UI tests do not load plugins, so the Plugins section renders empty there.
-- `PluginSystem` tests have 17 known OpenAI plugin failures on this branch; compare against that baseline before calling a plugin change a regression.
+- On 2026-10-23 the merged `PluginSystem` suite passed 3,865 tests with 12 optional live tests skipped. The actual merged host loader accepted all 39 bundled plugins. Evidence is under `artifacts/verification/2026-10-23-upstream-sync/`.
