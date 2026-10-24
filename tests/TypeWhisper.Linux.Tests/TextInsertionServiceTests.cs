@@ -10,6 +10,38 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class TextInsertionServiceTests
 {
+    [Fact]
+    public async Task CopyOnly_ReportsFailureWhenSuccessfulWriteNeverServesText()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardReadResults = new Queue<string?>(Enumerable.Repeat<string?>("previous", 9)),
+        };
+        var result = await new TextInsertionService(platform).InsertTextAsync("correction", autoPaste: false);
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(2, platform.SetClipboardCount);
+    }
+
+    [Fact]
+    public async Task CopyOnly_RetriesServingAndLeavesCorrectionAvailable()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardReadResults = new Queue<string?>(["previous", "previous", "correction"]),
+        };
+        var result = await new TextInsertionService(platform).InsertTextAsync("correction", autoPaste: false);
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal("correction", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.Contains(TimeSpan.FromMilliseconds(40), platform.Delays);
+    }
+
     [Theory]
     [InlineData(true, true, true, TextInsertionStrategy.ClipboardPaste)]
     [InlineData(true, true, true, TextInsertionStrategy.DirectTyping)]
@@ -547,11 +579,10 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_verify_never_serves_skips_paste_and_falls_back_to_clipboard()
+    public async Task InsertTextAsync_verify_never_serves_skips_paste_and_reports_failure()
     {
         // A silently broken wl-copy means Ctrl+V would paste the user's stale previous
-        // clipboard. The verify gate must swallow the paste entirely and report the
-        // clipboard fallback instead.
+        // clipboard. Do not claim a clipboard fallback when read-back failed.
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
@@ -568,7 +599,7 @@ public sealed class TextInsertionServiceTests
 
         var result = await sut.InsertTextAsync("new text");
 
-        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionResult.Failed, result);
         Assert.False(platform.PasteSent);
         // initial set + the single re-set retry — no restore write after the fallback
         Assert.Equal(2, platform.SetClipboardCount);

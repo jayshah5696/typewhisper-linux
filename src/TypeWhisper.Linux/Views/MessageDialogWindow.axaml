@@ -24,6 +24,13 @@
             <CheckBox x:Name="AcknowledgementCheckBox"
                       IsVisible="False"
                       IsCheckedChanged="AcknowledgementCheckBox_OnIsCheckedChanged" />
+            <TextBox x:Name="ResultTextBox"
+                     IsVisible="False"
+                     IsReadOnly="True"
+                     TextWrapping="Wrap"
+                     MaxHeight="260"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="{loc:Str PromptPalette.CorrectionResult}" />
         </StackPanel>
 
         <StackPanel Grid.Row="1"

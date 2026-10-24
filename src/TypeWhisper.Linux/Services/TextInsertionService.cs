@@ -413,7 +413,11 @@ public sealed class TextInsertionService
 
         if (!autoPaste)
         {
-            return InsertionResult.CopiedToClipboard;
+            // A successful writer exit does not prove its serving child survived.
+            // Copy-only results need the same read-back guarantee as automatic paste.
+            return await VerifyClipboardServesAsync(text)
+                ? InsertionResult.CopiedToClipboard
+                : InsertionResult.Failed;
         }
 
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -434,7 +438,7 @@ public sealed class TextInsertionService
         if (!await VerifyClipboardServesAsync(text))
         {
             LogInsertionFallback(
-                "Auto paste fell back to clipboard: the clipboard never served the dictated text, "
+                "Clipboard delivery failed: the clipboard never served the dictated text, "
                 + $"so {pasteShortcut} was not sent (it would have pasted nothing or stale content)."
             );
             return requiresSafeTerminalPaste
@@ -443,7 +447,7 @@ public sealed class TextInsertionService
                     previousClipboard,
                     previousClipboardHasNonTextFormats
                 )
-                : InsertionResult.CopiedToClipboard;
+                : InsertionResult.Failed;
         }
 
         if (

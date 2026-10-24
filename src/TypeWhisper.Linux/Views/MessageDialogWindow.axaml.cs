@@ -15,12 +15,14 @@ public partial class MessageDialogWindow : Window
         InitializeComponent();
     }
 
-    public async Task ShowMessageAsync(string title, string message)
+    public async Task ShowMessageAsync(string title, string message, string? resultText = null)
     {
         ConfigureButtons(false);
         Title = title;
         TitleTextBlock.Text = title;
         MessageTextBlock.Text = message;
+        ResultTextBox.Text = resultText;
+        ResultTextBox.IsVisible = resultText is not null;
 
         if (
             Application.Current?.ApplicationLifetime

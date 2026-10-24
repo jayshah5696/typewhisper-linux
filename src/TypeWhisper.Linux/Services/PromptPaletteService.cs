@@ -280,10 +280,11 @@ public sealed class PromptPaletteService
         var currentSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
         if (TransformSelectionService.HasSelectionTargetChanged(targetSnapshot, currentSnapshot))
         {
-            await _textInsertion.InsertTextAsync(result, autoPaste: false);
+            var copyResult = await _textInsertion.InsertTextAsync(result, autoPaste: false);
             await ShowWarningAsync(
                 "TypeWhisper",
-                "The active window changed while TypeWhisper was correcting the text. The correction was copied to the clipboard, but the selection was left unchanged."
+                GetBlockedReplacementMessage(targetSnapshot, currentSnapshot, copyResult),
+                result
             );
             return;
         }
@@ -298,8 +299,26 @@ public sealed class PromptPaletteService
         );
         if (GetInsertionFeedbackMessage(insertion) is { } message)
         {
-            await ShowWarningAsync("TypeWhisper", message);
+            await ShowWarningAsync("TypeWhisper", message, result);
         }
+    }
+
+    internal static string GetBlockedReplacementMessage(
+        ActiveWindowSnapshot? captured,
+        ActiveWindowSnapshot? current,
+        InsertionResult copyResult
+    )
+    {
+        var identityKnown = !string.IsNullOrWhiteSpace(captured?.WindowId)
+                            && !string.IsNullOrWhiteSpace(captured.Source)
+                            && !string.IsNullOrWhiteSpace(current?.WindowId)
+                            && !string.IsNullOrWhiteSpace(current.Source);
+        var reason = Loc.Instance[identityKnown
+            ? "PromptPalette.WindowChanged"
+            : "PromptPalette.WindowUnverified"];
+        return reason + " " + Loc.Instance[copyResult == InsertionResult.CopiedToClipboard
+            ? "PromptPalette.CorrectionCopied"
+            : "PromptPalette.CorrectionCopyFailed"];
     }
 
     internal static string? GetReplacementTargetWindowId(
@@ -520,12 +539,12 @@ public sealed class PromptPaletteService
         );
     }
 
-    private static async Task ShowWarningAsync(string title, string message)
+    private static async Task ShowWarningAsync(string title, string message, string? correction = null)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var dialog = new MessageDialogWindow();
-            await dialog.ShowMessageAsync(title, message);
+            await dialog.ShowMessageAsync(title, message, correction);
         });
     }
 

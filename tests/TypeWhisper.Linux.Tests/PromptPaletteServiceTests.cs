@@ -14,6 +14,32 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class PromptPaletteServiceTests
 {
     [Theory]
+    [InlineData(InsertionResult.CopiedToClipboard, true)]
+    [InlineData(InsertionResult.Failed, false)]
+    [InlineData(InsertionResult.MissingClipboardTool, false)]
+    public void Blocked_correction_reports_actual_copy_outcome(InsertionResult result, bool copied)
+    {
+        var message = PromptPaletteService.GetBlockedReplacementMessage(null, null, result);
+        Assert.Contains("could not verify", message);
+        Assert.DoesNotContain("window changed", message);
+        Assert.Equal(copied, message.Contains("copied to the clipboard", StringComparison.Ordinal));
+        if (!copied)
+        {
+            Assert.Contains("could not copy", message);
+        }
+    }
+
+    [Fact]
+    public void Changed_window_warning_requires_two_known_window_identities()
+    {
+        var captured = new ActiveWindowSnapshot("editor", "Document", "1", "editor", "kwin");
+        var current = captured with { WindowId = "2" };
+        var message = PromptPaletteService.GetBlockedReplacementMessage(captured, current, InsertionResult.CopiedToClipboard);
+        Assert.Contains("window changed", message);
+        Assert.Contains("copied to the clipboard", message);
+    }
+
+    [Theory]
     [InlineData(InsertionResult.Pasted, null)]
     [InlineData(InsertionResult.Typed, null)]
     [InlineData(InsertionResult.ActionHandled, null)]
