@@ -12,6 +12,7 @@ Act through AT-SPI actions instead, and capture frames through mutter's ScreenCa
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -216,10 +217,23 @@ def parse_x_display(log: str) -> str | None:
 
 
 def compositor_env(base: dict[str, str], runtime: Path, bus_address: str) -> dict[str, str]:
-    env = {key: value for key, value in base.items() if key not in ("WAYLAND_DISPLAY", "DISPLAY")}
+    env = {key: value for key, value in base.items() if key not in (
+        "WAYLAND_DISPLAY", "DISPLAY", "AT_SPI_BUS_ADDRESS", "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE")}
     env.update(XDG_RUNTIME_DIR=str(runtime), DBUS_SESSION_BUS_ADDRESS=bus_address,
                PIPEWIRE_RUNTIME_DIR=base.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
     return env
+
+
+def private_accessibility_address(output: str, runtime: Path) -> str:
+    """Reject a fallback to the user's accessibility socket before driving controls."""
+    try:
+        address, = ast.literal_eval(output.strip())
+        path = address.split("unix:path=", 1)[1].split(",", 1)[0]
+        if not Path(path).is_relative_to(runtime):
+            raise ValueError("accessibility socket is outside the private runtime")
+        return address
+    except (ValueError, SyntaxError, TypeError, IndexError) as error:
+        raise RuntimeError(f"No private accessibility bus was established: {output.strip()}") from error
 
 
 def all_names(tree: list[dict]) -> set[str]:
@@ -274,20 +288,24 @@ class HiddenDesktop:
         self.stop()
 
     def start(self) -> None:
-        for tool in ("mutter", "dbus-daemon", "gst-launch-1.0", A11Y_LAUNCHER, A11Y_REGISTRY):
+        for tool in ("mutter", "dbus-daemon", "gdbus", "gst-launch-1.0", A11Y_LAUNCHER, A11Y_REGISTRY):
             if shutil.which(tool) is None and not Path(tool).is_file():
                 raise FileNotFoundError(f"{tool} is required for hidden desktop checks")
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.runtime = isolated_app.make_runtime_dir()
+        self.env = compositor_env(dict(os.environ), self.runtime, "")
         bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
-                               stdout=subprocess.PIPE, text=True)
+                               env=self.env, stdout=subprocess.PIPE, text=True)
         self._processes.append(bus)
         self.bus_address = bus.stdout.readline().strip()
-        self.env = compositor_env(dict(os.environ), self.runtime, self.bus_address)
+        self.env["DBUS_SESSION_BUS_ADDRESS"] = self.bus_address
         log = (self.workdir / "desktop.log").open("w", encoding="utf-8")
         # A private bus cannot activate these through systemd, so start them directly.
-        self._spawn([A11Y_LAUNCHER, "--launch-immediately", "--a11y=1"], log)
-        time.sleep(1)
+        self._spawn([A11Y_LAUNCHER, "--launch-immediately"], log)
+        address = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
+                                  "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
+                                 env=self.env, capture_output=True, text=True, timeout=10, check=True)
+        self.env["AT_SPI_BUS_ADDRESS"] = private_accessibility_address(address.stdout, self.runtime)
         self._spawn([A11Y_REGISTRY], log)
         self._spawn(["mutter", "--headless", "--wayland", "--virtual-monitor", self.size,
                      "--wayland-display", self.wayland_display], log)
@@ -320,6 +338,7 @@ class HiddenDesktop:
         assert self.runtime is not None and self.x_display is not None
         auth = next(self.runtime.glob(".mutter-Xwaylandauth*"))
         return {"DISPLAY": self.x_display, "XAUTHORITY": str(auth), "DBUS_SESSION_BUS_ADDRESS": self.bus_address,
+                "AT_SPI_BUS_ADDRESS": self.env["AT_SPI_BUS_ADDRESS"],
                 "WAYLAND_DISPLAY": str(self.runtime / self.wayland_display)}
 
     @staticmethod
@@ -336,7 +355,7 @@ class HiddenDesktop:
     def accessibility(self, click: str | None = None) -> dict:
         """The AT-SPI tree, after optionally invoking the first action of the control named `click`."""
         done = subprocess.run([self._gi_python(), "-c", _ATSPI_SCRIPT] + ([click] if click else []),
-                              env={**os.environ, "DBUS_SESSION_BUS_ADDRESS": self.bus_address},
+                              env=self.env,
                               capture_output=True, text=True, timeout=90)
         if not done.stdout.strip():
             raise RuntimeError(f"AT-SPI query failed: {done.stderr[-500:]}")
@@ -352,7 +371,7 @@ class HiddenDesktop:
     def watch_texts(self, frame: str, seconds: float) -> subprocess.Popen:
         """Start recording every change of the texts shown in `frame`; read JSON lines from stdout."""
         return subprocess.Popen([self._gi_python(), "-c", _WATCH_SCRIPT, frame, str(seconds)],
-                                env={**os.environ, "DBUS_SESSION_BUS_ADDRESS": self.bus_address},
+                                env=self.env,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 
     def screenshot(self, path: Path) -> Path:

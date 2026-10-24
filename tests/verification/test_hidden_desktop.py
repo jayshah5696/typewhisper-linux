@@ -22,12 +22,14 @@ class MutterLogTests(unittest.TestCase):
 class EnvironmentTests(unittest.TestCase):
     def test_compositor_never_sees_the_users_display_or_bus(self):
         base = {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+                "AT_SPI_BUS_ADDRESS": "unix:path=/run/user/1000/at-spi/bus_0",
                 "XDG_RUNTIME_DIR": "/run/user/1000", "HOME": "/home/u"}
         env = hidden.compositor_env(base, Path("/tmp/tw-verify-x"), "unix:path=/tmp/private")
         self.assertNotIn("WAYLAND_DISPLAY", env)
         self.assertNotIn("DISPLAY", env)
         self.assertEqual("unix:path=/tmp/private", env["DBUS_SESSION_BUS_ADDRESS"])
         self.assertEqual("/tmp/tw-verify-x", env["XDG_RUNTIME_DIR"])
+        self.assertNotIn("AT_SPI_BUS_ADDRESS", env)
         # mutter's screencast streams go through the user's PipeWire daemon.
         self.assertEqual("/run/user/1000", env["PIPEWIRE_RUNTIME_DIR"])
 
@@ -47,6 +49,16 @@ class TreeTests(unittest.TestCase):
     def test_frames_and_names_are_collected(self):
         self.assertEqual(["TypeWhisper", "Welcome to TypeWhisper"], hidden.frame_names(self.TREE))
         self.assertIn("Open Wizard", hidden.all_names(self.TREE))
+
+
+class AccessibilityAddressTests(unittest.TestCase):
+    def test_only_a_socket_in_the_private_runtime_is_accepted(self):
+        runtime = Path("/tmp/tw-verify-private")
+        address = "unix:path=/tmp/tw-verify-private/at-spi/bus_0"
+        self.assertEqual(address, hidden.private_accessibility_address(repr((address,)), runtime))
+        for value in ["('unix:path=/run/user/1000/at-spi/bus_0',)", "not a bus address"]:
+            with self.assertRaises(RuntimeError):
+                hidden.private_accessibility_address(value, runtime)
 
 
 class KeysymTests(unittest.TestCase):
