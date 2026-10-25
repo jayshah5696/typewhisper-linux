@@ -66,10 +66,16 @@ public static class DesktopDetector
     ///     True on tiling WMs (Hyprland, Sway, River, Niri), where the floating
     ///     overlay reserves a tile, steals focus, and blurs into a box — so those
     ///     use a desktop notification instead. Conservative: only known tiling WMs
-    ///     opt in; unrecognised environments keep the overlay.
+    ///     opt in; unrecognised environments keep the overlay. Setting
+    ///     TYPEWHISPER_DISABLE_OVERLAYS=1 opts into notifications on any desktop.
     /// </summary>
     public static bool UsesNotificationRecordingIndicator()
     {
+        if (Environment.GetEnvironmentVariable("TYPEWHISPER_DISABLE_OVERLAYS") == "1")
+        {
+            return true;
+        }
+
         if (DetectId() is "hyprland" or "sway")
         {
             return true;

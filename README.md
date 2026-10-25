@@ -121,6 +121,10 @@ typewhisper-linux/
 └── tests/                       # Automated tests
 ```
 
+## Disable floating overlays
+
+Launch with `TYPEWHISPER_DISABLE_OVERLAYS=1` to use desktop notifications instead of the recording overlay and floating Live Text window. Dictation and hotkeys remain available. This avoids invisible overlay windows blocking clicks on GNOME. Restart the app after setting or removing this environment variable.
+
 ## Optional crash and performance reporting
 
 **Sending reports to Sentry is off by default.** We would appreciate you turning it on, especially if you are having crashes, errors, or slow dictation: these reports help us find and fix problems across Linux setups.
