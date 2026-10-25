@@ -347,7 +347,22 @@ public sealed partial class HttpApiService : IDisposable
         _serviceLifetimeToken = _serviceLifetime.Token;
     }
 
-    public string StatusText { get; private set; } = "Local API is disabled.";
+    private const string DisabledStatusKey = "General.ApiStatusDisabled";
+    private const string RunningStatusKey = "General.ApiStatusRunning";
+    private const string RunningWithoutDiscoveryStatusKey = "General.ApiStatusRunningNoDiscovery";
+
+    // Kept as a catalog key and arguments, so StatusText follows a live language switch.
+    private ApiStatus _status = new(DisabledStatusKey, []);
+
+    public string StatusText
+    {
+        get
+        {
+            // One read, so a concurrent update cannot pair one status's key with another's arguments.
+            var status = _status;
+            return Loc.Instance.GetString(status.Key, status.Args);
+        }
+    }
 
     // ReSharper disable once InconsistentlySynchronizedField -- racy-read-tolerant status probe;
     // _host is published under _lifecycleLock and a stale read only skews advisory status text.
@@ -490,7 +505,7 @@ public sealed partial class HttpApiService : IDisposable
             var discoveryPublished = PublishDiscovery(port, currentSocketPath);
             if (IsCurrentHost(generation, currentHost))
             {
-                SetStatus(BuildRunningStatus(port, currentSocketPath, discoveryPublished));
+                SetRunningStatus(port, currentSocketPath, discoveryPublished);
             }
             else
             {
@@ -507,7 +522,7 @@ public sealed partial class HttpApiService : IDisposable
         {
             if (IsCurrentGeneration(generation))
             {
-                SetStatus($"Local API failed to start: port must be 1–65535 (got {port}).");
+                SetStatus("General.ApiStatusInvalidPort", port);
             }
 
             return;
@@ -563,7 +578,7 @@ public sealed partial class HttpApiService : IDisposable
             var discoveryPublished = PublishDiscovery(port, socketPath);
             if (IsCurrentHost(generation, publishedHost!))
             {
-                SetStatus(BuildRunningStatus(port, socketPath, discoveryPublished));
+                SetRunningStatus(port, socketPath, discoveryPublished);
             }
             else
             {
@@ -618,7 +633,7 @@ public sealed partial class HttpApiService : IDisposable
             {
                 // The status text is visible only in Settings; headless and remote checks read the log.
                 Trace.WriteLine($"[HttpApiService] Local API failed to start: {ex.Message}");
-                SetStatus($"Local API failed to start: {ex.Message}");
+                SetStatus("General.ApiStatusFailed", ex.Message);
             }
         }
     }
@@ -655,7 +670,7 @@ public sealed partial class HttpApiService : IDisposable
                     $"[HttpApiService] Bearer token protection unavailable: {ex}"
                 );
                 Stop();
-                SetStatus(Loc.Instance["Security.SecretProtectionUnavailable"]);
+                SetStatus("Security.SecretProtectionUnavailable");
                 return;
             }
 
@@ -730,7 +745,7 @@ public sealed partial class HttpApiService : IDisposable
 
         TryDeleteDiscoveryFile();
         StopHostResources(host, socketPath, ownership);
-        SetStatus("Local API is disabled.");
+        SetStatus(DisabledStatusKey);
     }
 
     private async Task<bool> QuiesceCoreAsync(
@@ -853,16 +868,19 @@ public sealed partial class HttpApiService : IDisposable
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
-    private void SetStatus(string status)
+    private void SetStatus(string key, params object?[] args)
     {
-        if (StatusText == status)
+        var status = new ApiStatus(key, args);
+        if (_status.Key == key && _status.Args.SequenceEqual(args))
         {
             return;
         }
 
-        StatusText = status;
+        _status = status;
         StateChanged?.Invoke();
     }
+
+    private sealed record ApiStatus(string Key, object?[] Args);
 
     private bool PublishDiscovery(int port, string? socketPath)
     {
@@ -910,13 +928,8 @@ public sealed partial class HttpApiService : IDisposable
 
     // The CLI reaches the API only through the discovery file's socket path, so a
     // failed publish is a client-visible outage even though the listeners are up.
-    private static string BuildRunningStatus(int port, string? socketPath, bool discoveryPublished)
-    {
-        var running = $"Local API is running at http://localhost:{port}/ and {socketPath}.";
-        return discoveryPublished
-            ? running
-            : $"{running} Discovery file could not be written — the CLI cannot connect.";
-    }
+    private void SetRunningStatus(int port, string? socketPath, bool discoveryPublished) =>
+        SetStatus(discoveryPublished ? RunningStatusKey : RunningWithoutDiscoveryStatusKey, port, socketPath);
 
     private static void SetOwnerOnlySocketMode(string socketPath)
     {
