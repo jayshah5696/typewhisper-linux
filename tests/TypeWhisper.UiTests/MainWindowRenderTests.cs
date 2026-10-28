@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,7 +50,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
 
     public static TheoryData<string> Languages => new(s_languages);
 
-    private static readonly (string Name, double Width, double Height)[] s_sizes =
+    internal static readonly (string Name, double Width, double Height)[] s_sizes =
         [("wide", 1200, 780), ("compact", 960, 640)];
 
     // Every window pins RequestedThemeVariant="Dark"; add Light here when the app supports it.
@@ -72,7 +73,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
         var outFile = Path.Join(UiEnvironment.SnapshotDir, $"findings-{language}.json");
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(findings, s_indented));
         // Report every kind together so one category cannot hide another.
-        var report = string.Join("\n\n", new[] { UiInspector.RawKey, UiInspector.ClippedText, UiInspector.UnnamedControl, UiInspector.WrongLanguage }
+        var report = string.Join("\n\n", new[] { UiInspector.RawKey, UiInspector.ClippedText, UiInspector.UnnamedControl, UiInspector.CodeLikeName, UiInspector.WrongLanguage }
             .Select(kind => Describe(findings, kind, language, outFile))
             .Where(message => message is not null));
         Assert.True(report.Length == 0, report);
@@ -102,7 +103,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
                             Settle();
                             var section = item.Content!.GetType().Name.Replace("SectionViewModel", "", StringComparison.Ordinal);
                             var variant = $"{section}-{language}-{themeName}-{sizeName}";
-                            window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"));
+                            window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"), PngBitmapEncoderOptions.Default);
                             findings.AddRange(UiInspector.Inspect(window, knownKeys, foreignText)
                                 .Distinct()
                                 .Select(finding => new RenderedFinding(section, language, themeName, sizeName, finding)));
@@ -126,7 +127,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
         FontManager.Current.TryMatchCharacter('日', FontStyle.Normal, FontWeight.Normal, FontStretch.Normal,
             null, CultureInfo.GetCultureInfo("ja"), out _);
 
-    private static void Settle()
+    internal static void Settle()
     {
         for (var i = 0; i < 3; i++)
         {

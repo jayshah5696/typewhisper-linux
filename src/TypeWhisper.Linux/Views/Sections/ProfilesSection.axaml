@@ -28,6 +28,11 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{DynamicResource TwTextPrimaryBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <!-- A long selected value wraps rather than clipping in the narrow editor. -->
+        <Style Selector="ComboBox TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="Border.section-panel">
             <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
@@ -77,8 +82,12 @@
         </Style>
     </UserControl.Styles>
 
-    <Grid Margin="24"
-          ColumnDefinitions="280,18,*">
+    <Grid Margin="24">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*" MinWidth="200" MaxWidth="280" />
+            <ColumnDefinition Width="18" />
+            <ColumnDefinition Width="5*" />
+        </Grid.ColumnDefinitions>
         <Grid Grid.Column="0"
               RowDefinitions="Auto,*,Auto">
             <StackPanel Margin="0,0,0,8">
@@ -93,6 +102,11 @@
                      ItemsSource="{Binding Profiles}"
                      SelectedItem="{Binding SelectedProfile}"
                      Margin="0,6,0,0">
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem" x:DataType="models:Profile">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                    </Style>
+                </ListBox.Styles>
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="models:Profile">
                         <Border Classes="profile-tile">
@@ -228,6 +242,7 @@
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="×"
                                                             Classes="chip-remove"
+                                                            AutomationProperties.Name="{Binding Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.RemoveChipName}"
                                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveProcessNameChipCommand}"
                                                             CommandParameter="{Binding}" />
                                                 </StackPanel>
@@ -235,15 +250,15 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Grid ColumnDefinitions="*,Auto"
-                                      ColumnSpacing="8"
+                                <Grid RowDefinitions="Auto,Auto"
+                                      RowSpacing="8"
                                       Margin="0,0,0,8">
-                                    <TextBox Grid.Column="0"
+                                    <TextBox Grid.Row="0"
                                              AutomationProperties.Name="{loc:Str Profiles.Apps}"
                                              Text="{Binding ProcessNameInput}"
                                              PlaceholderText="{loc:Str Profiles.ProcessNameWatermark}"
                                              KeyDown="OnProcessNameKeyDown" />
-                                    <Button Grid.Column="1"
+                                    <Button Grid.Row="1"
                                             Content="{loc:Str Profiles.CaptureCurrent}"
                                             Command="{Binding CaptureCurrentProcessNameCommand}" />
                                 </Grid>
@@ -272,6 +287,7 @@
                                                         <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                         <Button Content="×"
                                                                 Classes="chip-remove"
+                                                                AutomationProperties.Name="{Binding Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.RemoveChipName}"
                                                                 Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
                                                                 CommandParameter="{Binding}" />
                                                     </StackPanel>
@@ -279,15 +295,15 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <Grid ColumnDefinitions="*,Auto"
-                                          ColumnSpacing="8"
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="8"
                                           Margin="0,0,0,8">
-                                        <TextBox Grid.Column="0"
+                                        <TextBox Grid.Row="0"
                                                  AutomationProperties.Name="{loc:Str Profiles.UrlPatterns}"
                                                  Text="{Binding UrlPatternInput}"
                                                  PlaceholderText="{loc:Str Profiles.UrlPatternWatermark}"
                                                  KeyDown="OnUrlPatternKeyDown" />
-                                        <Button Grid.Column="1"
+                                        <Button Grid.Row="1"
                                                 Content="{loc:Str Profiles.CaptureCurrent}"
                                                 Command="{Binding CaptureCurrentUrlPatternCommand}" />
                                     </Grid>
@@ -324,22 +340,29 @@
                                 Margin="0,0,0,18">
                             <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <TextBlock Text="{loc:Str Profiles.Language}"
                                                    Classes="row-label"
                                                    VerticalAlignment="Center" />
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Language}"
-                                                  ItemsSource="{Binding LanguageChoices}"
-                                                  SelectedItem="{Binding EditLanguage}" />
+                                                  ItemsSource="{Binding LanguageOptions}"
+                                                  SelectedItem="{Binding SelectedLanguageOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileLanguageOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="1" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="2" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Task}"
                                                        Classes="row-label" />
@@ -348,18 +371,25 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Task}"
-                                                  ItemsSource="{Binding TaskChoices}"
-                                                  SelectedItem="{Binding EditTask}"
-                                                  VerticalAlignment="Center" />
+                                                  ItemsSource="{Binding TaskOptions}"
+                                                  SelectedItem="{Binding SelectedTaskOption}"
+                                                  VerticalAlignment="Center">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileTaskOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="3" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="4" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Translation}"
                                                        Classes="row-label" />
@@ -368,7 +398,8 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Translation}"
                                                   ItemsSource="{Binding TranslationTargetOptions}"
                                                   SelectedItem="{Binding SelectedTranslationTargetOption}"
@@ -384,8 +415,8 @@
                                 <Border Grid.Row="5" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="6" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Model}"
                                                        Classes="row-label" />
@@ -393,7 +424,8 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Model}"
                                                   ItemsSource="{Binding ModelOptions}"
                                                   SelectedItem="{Binding SelectedModelOption}"
@@ -409,8 +441,8 @@
                                 <Border Grid.Row="7" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="8" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.PromptAction}"
                                                        Classes="row-label" />
@@ -418,7 +450,8 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.PromptAction}"
                                                   ItemsSource="{Binding PromptActionOptions}"
                                                   SelectedItem="{Binding SelectedPromptActionOption}">
@@ -433,8 +466,8 @@
                                 <Border Grid.Row="9" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="10" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.MemorySource}"
                                                        Classes="row-label" />
@@ -442,9 +475,11 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   ItemsSource="{Binding MemorySourceOptions}"
-                                                  SelectedItem="{Binding SelectedMemorySourceOption}">
+                                                  SelectedItem="{Binding SelectedMemorySourceOption}"
+                                                  AutomationProperties.Name="{loc:Str Profiles.MemorySource}">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:MemorySourceOption">
                                                     <TextBlock Text="{Binding Label}" />
@@ -456,8 +491,8 @@
                                 <Border Grid.Row="11" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="12" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Common.WhisperMode}"
                                                        Classes="row-label" />
@@ -466,7 +501,8 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Common.WhisperMode}"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedWhisperModeOption}">
@@ -481,8 +517,8 @@
                                 <Border Grid.Row="13" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="14" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.StylePreset}"
                                                        Classes="row-label" />
@@ -491,7 +527,8 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.StylePreset}"
                                                   ItemsSource="{Binding StylePresetOptions}"
                                                   SelectedItem="{Binding SelectedStylePresetOption}"
@@ -507,8 +544,8 @@
                                 <Border Grid.Row="15" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="16" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.CleanupOverride}"
                                                        Classes="row-label" />
@@ -517,7 +554,8 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.CleanupOverride}"
                                                   ItemsSource="{Binding CleanupOverrideOptions}"
                                                   SelectedItem="{Binding SelectedCleanupOverrideOption}">
@@ -532,8 +570,8 @@
                                 <Border Grid.Row="17" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="18" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.DeveloperFormattingOverride}"
                                                        Classes="row-label" />
@@ -545,7 +583,8 @@
                                         <!-- Reuses WhisperModeOptions (NullableBooleanOption list)
                                              because the three choices — inherit / on / off — are
                                              identical in structure to the Whisper Mode override. -->
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.DeveloperFormattingOverride}"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedDeveloperFormattingOverrideOption}">
@@ -560,8 +599,8 @@
                                 <Border Grid.Row="19" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="20" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,150"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Priority}"
                                                        Classes="row-label" />
@@ -569,7 +608,9 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <NumericUpDown Grid.Column="1"
+                                        <NumericUpDown Grid.Row="1"
+                                                       Width="150"
+                                                       HorizontalAlignment="Left"
                                                        AutomationProperties.Name="{loc:Str Profiles.Priority}"
                                                        Minimum="0"
                                                        Maximum="999"
@@ -579,8 +620,8 @@
                                 <Border Grid.Row="21" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="22" Padding="18,14">
-                                    <Grid ColumnDefinitions="*,320"
-                                          ColumnSpacing="16">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
                                         <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.ProfileHotkey}"
                                                        Classes="row-label" />
@@ -589,7 +630,7 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" Spacing="8">
+                                        <StackPanel Grid.Row="1" Spacing="8">
                                             <TextBox Text="{Binding EditHotkeyData}"
                                                      AutomationProperties.Name="{loc:Str Profiles.ProfileHotkey}"
                                                      PlaceholderText="{loc:Str Profiles.HotkeyWatermark}" />
@@ -622,7 +663,7 @@
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
                             <Border Padding="18,14">
-                                <Grid ColumnDefinitions="*,Auto,Auto"
+                                <Grid ColumnDefinitions="*,Auto"
                                       ColumnSpacing="14">
                                     <TextBlock Text="{loc:Str Profiles.Enabled}"
                                                Classes="row-label"
@@ -631,11 +672,6 @@
                                                   AutomationProperties.Name="{loc:Str Profiles.Enabled}"
                                                   IsChecked="{Binding EditIsEnabled}"
                                                   VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding EditIsEnabledStatusText}"
-                                               VerticalAlignment="Center"
-                                               FontSize="12"
-                                               FontWeight="SemiBold" />
                                 </Grid>
                             </Border>
                         </Border>
@@ -647,27 +683,27 @@
                         BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                         BorderThickness="1,0,0,0"
                         Padding="18,16">
-                    <Grid ColumnDefinitions="*,Auto,Auto,Auto"
-                          ColumnSpacing="10">
+                    <StackPanel Spacing="10">
                         <TextBlock Text="{loc:Str Profiles.SaveHint}"
-                                   Classes="page-subtitle"
-                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="1"
-                                Content="{loc:Str Common.Delete}"
+                                   Classes="page-subtitle" />
+                        <WrapPanel HorizontalAlignment="Right"
+                                   ItemsAlignment="End"
+                                   ItemSpacing="10"
+                                   LineSpacing="10">
+                        <Button Content="{loc:Str Common.Delete}"
                                 Click="OnDeleteProfile"
                                 Padding="12,8" />
-                        <Button Grid.Column="2"
-                                Content="{loc:Str Profiles.OpenLiveContext}"
+                        <Button Content="{loc:Str Profiles.OpenLiveContext}"
                                 Command="{Binding OpenLiveContextWindowCommand}"
                                 Padding="12,8" />
-                        <Button Grid.Column="3"
-                                Content="{loc:Str Common.Save}"
+                        <Button Content="{loc:Str Common.Save}"
                                 Command="{Binding SaveProfileCommand}"
                                 Padding="16,8"
                                 Background="{DynamicResource TwAccentBrush}"
                                 BorderBrush="{DynamicResource TwAccentBrush}"
                                 Foreground="{DynamicResource TwOnAccentBrush}" />
-                    </Grid>
+                        </WrapPanel>
+                    </StackPanel>
                 </Border>
             </Grid>
         </Border>
