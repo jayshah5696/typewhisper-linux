@@ -228,7 +228,6 @@
                                                                       AutomationProperties.Name="{Binding Record.Preview, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=History.SelectEntryName}"
                                                                       VerticalAlignment="Center" Margin="0,0,8,0" />
                                                             <Button Grid.Column="1" Classes="card-toggle"
-                                                                    AutomationProperties.Name="{Binding Record.Preview}"
                                                                     Command="{Binding ToggleExpandCommand}">
                                                                 <AutomationProperties.Name>
                                                                     <MultiBinding StringFormat="{}{0} {1}">

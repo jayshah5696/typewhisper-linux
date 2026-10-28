@@ -126,7 +126,20 @@ def run(args: argparse.Namespace) -> dict:
             records = json.loads(history_before)
             checks["actual_history_saved"] = any(r["RawText"] == raw and r["FinalText"] == final for r in records)
             click(desktop, "History")
-            row_name = final if len(final) <= 100 else final[:100] + "..."
+            preview = final if len(final) <= 100 else final[:100] + "..."
+            tree = wait_for(desktop, lambda names: any(name.endswith(preview) for name in names),
+                            "dictated History entry")
+            isolated_app.write_json(args.out / "history-before-expand.json", tree)
+            nodes = list(tree)
+            row_names = []
+            while nodes:
+                node = nodes.pop()
+                if node.get("role") in {"button", "push button", "toggle button"} and node.get("name", "").endswith(preview):
+                    row_names.append(node["name"])
+                nodes.extend(node.get("children", []))
+            if len(row_names) != 1:
+                raise AssertionError(f"Expected one History entry button, found {row_names}")
+            row_name = row_names[0]
             click(desktop, row_name)
             tree = wait_for(desktop, lambda names: "Copy original" in names, "expanded History entry")
             checks["no_picker_button"] = "Recent transcriptions" not in hidden_desktop.all_names(tree)
