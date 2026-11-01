@@ -77,14 +77,14 @@ def run(out, kind, payload):
             def expand():
                 b=collapse();pointer((b['X']+b['WIDTH']//2,b['Y']+b['HEIGHT']//2))
                 try:
-                    box=wait_value(geometry,lambda b:b['WIDTH']==140,"expanded control")
+                    box=wait_value(geometry,lambda b:b['WIDTH']==112,"expanded control")
                 except AssertionError:
                     report['hover_failure_pointer']=xdo('getmouselocation','--shell')
                     report['hover_failure_properties']=subprocess.check_output(['xprop','-id',str(geometry()['WINDOW']),'WM_STATE','_NET_WM_STATE','WM_HINTS'],env=app.env,text=True)
                     desktop.screenshot(out/'hover-failure.png')
                     raise
                 time.sleep(.8)
-                assert geometry()['WIDTH']==140
+                assert geometry()['WIDTH']==112
                 return geometry()
 
             log=out/'clicks.json'

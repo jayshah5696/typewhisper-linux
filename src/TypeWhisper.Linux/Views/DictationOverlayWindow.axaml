@@ -28,6 +28,8 @@
             <Setter Property="MinHeight" Value="28" />
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style Selector="Button.overlay-action:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="#484848" />
@@ -49,16 +51,18 @@
         <Border Background="#F0181818" CornerRadius="20" Padding="4"
                 IsVisible="{Binding ShowLauncher}">
             <Grid>
-            <Grid ColumnDefinitions="Auto,Auto,Auto" ColumnSpacing="{Binding LauncherSpacing}"
-                  IsVisible="{Binding !IsDockPreviewVisible}">
-                <Button Grid.Column="{Binding RecorderColumn}" Classes="overlay-action" Command="{Binding OpenRecorderCommand}"
+            <StackPanel Orientation="{Binding ControlOrientation}" Spacing="{Binding LauncherSpacing}"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        IsVisible="{Binding !IsDockPreviewVisible}">
+                <Button Classes="overlay-action" Width="32" MinWidth="0" Padding="4,2"
+                        HorizontalAlignment="Center" Command="{Binding OpenRecorderCommand}"
                         IsVisible="{Binding ShowLauncherActions}"
                         AutomationProperties.Name="{loc:Str Recorder.Title}">
                     <icons:SymbolIcon Symbol="Record" FontSize="18" />
                 </Button>
                 <!-- Keep the hovered button alive while its neighbors appear. Replacing it
                      loses pointer-over state and can collapse the toolbar during a click. -->
-                <Button x:Name="ExpandLauncherButton" Grid.Column="{Binding PrimaryColumn}" Classes="overlay-action"
+                <Button x:Name="ExpandLauncherButton" Classes="overlay-action" HorizontalAlignment="Center"
                         Width="{Binding LauncherButtonWidth}" Height="{Binding LauncherButtonHeight}"
                         MinWidth="0" MinHeight="0" Padding="0"
                         Command="{Binding ActivateLauncherCommand}"
@@ -69,52 +73,63 @@
                         <icons:SymbolIcon Symbol="Mic" FontSize="16" IsVisible="{Binding ShowLauncherActions}" />
                     </Grid>
                 </Button>
-                <Button Grid.Column="{Binding SettingsColumn}" Classes="overlay-action" Command="{Binding OpenSettingsCommand}"
+                <Button Classes="overlay-action" Width="32" MinWidth="0" Padding="4,2"
+                        HorizontalAlignment="Center" Command="{Binding OpenSettingsCommand}"
                         IsVisible="{Binding ShowLauncherActions}"
                         AutomationProperties.Name="{loc:Str Tray.Settings}">
                     <icons:SymbolIcon Symbol="Settings" FontSize="18" />
                 </Button>
-            </Grid>
+            </StackPanel>
             <TextBlock Text="{Binding DockTargetText}" FontSize="12" Foreground="White" Margin="8,4"
                        TextWrapping="Wrap" MaxWidth="200" IsVisible="{Binding IsDockPreviewVisible}" />
             </Grid>
         </Border>
-        <Border Background="#F0181818" CornerRadius="18" Padding="7,4"
+        <Border Background="#F0181818" CornerRadius="18" Padding="7,5"
                 IsVisible="{Binding ShowCompactWorkflow}">
             <StackPanel Spacing="4">
-            <Grid ColumnDefinitions="64,28,64" ColumnSpacing="4" Height="28" HorizontalAlignment="Center">
-                <StackPanel Grid.Column="{Binding WaveformColumn}" Orientation="Horizontal" Spacing="5"
-                            VerticalAlignment="Center" IsVisible="{Binding ShowRecordingControls}">
-                    <StackPanel Orientation="Horizontal" Spacing="2" Height="18" VerticalAlignment="Center">
+            <StackPanel Orientation="{Binding ControlOrientation}" Spacing="6"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Orientation="{Binding ControlOrientation}" Spacing="5"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsVisible="{Binding ShowRecordingControls}">
+                    <StackPanel Orientation="Horizontal" Spacing="2" Height="18"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Border Width="3" Height="{Binding WaveformBar0Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
                         <Border Width="3" Height="{Binding WaveformBar1Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
                         <Border Width="3" Height="{Binding WaveformBar2Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
                         <Border Width="3" Height="{Binding WaveformBar3Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
                         <Border Width="3" Height="{Binding WaveformBar4Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
                     </StackPanel>
-                    <TextBlock Text="{Binding RecordingTimerText}" FontSize="10" Foreground="White" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding RecordingTimerText}" FontSize="10" Foreground="White"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </StackPanel>
-                <Button Grid.Column="{Binding PrimaryColumn}" Classes="overlay-action" Width="26" Height="26"
-                        MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Center"
-                        IsVisible="{Binding ShowRecordingControls}" Command="{Binding StopDictationCommand}"
-                        AutomationProperties.Name="{loc:Str Overlay.StopDictation}">
-                    <Border Width="9" Height="9" CornerRadius="2" Background="White" />
-                </Button>
-                <StackPanel Grid.Column="{Binding BusyStatusColumn}" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6"
-                            VerticalAlignment="Center" IsVisible="{Binding ShowProcessingControls}">
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
+                            VerticalAlignment="Center" IsVisible="{Binding ShowProcessingControls}"
+                            AutomationProperties.Name="{loc:Str Overlay.Finishing}">
                     <Path Width="14" Height="14" Stretch="Uniform" Stroke="#1593F5" StrokeThickness="3"
                           Data="M 12,2 A 10,10 0 1 1 2,12" RenderTransformOrigin="50%,50%"
                           Classes="finishing-spinner" Classes.active="{Binding ShowProcessingControls}">
                         <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
                     </Path>
-                    <TextBlock Text="{loc:Str Overlay.Finishing}" FontSize="12" Foreground="White" />
+                    <TextBlock Text="{loc:Str Overlay.Finishing}" FontSize="12" Foreground="White"
+                               IsVisible="{Binding !IsSideDock}" />
                 </StackPanel>
-                <Button Grid.Column="{Binding CancelColumn}" Classes="overlay-action" Width="26" Height="26"
-                        MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Right"
-                        Command="{Binding CancelDictationCommand}" AutomationProperties.Name="{loc:Str Common.Cancel}">
-                    <TextBlock Text="×" FontSize="18" LineHeight="20" />
-                </Button>
-            </Grid>
+                <StackPanel Orientation="{Binding ControlOrientation}" Spacing="6"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Button Classes="overlay-action" Width="26" Height="26"
+                            MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Center"
+                            IsVisible="{Binding ShowRecordingControls}" Command="{Binding StopDictationCommand}"
+                            AutomationProperties.Name="{loc:Str Overlay.StopDictation}">
+                        <Border Width="9" Height="9" CornerRadius="2" Background="White" />
+                    </Button>
+                    <Button Classes="overlay-action" Width="26" Height="26"
+                            MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Center"
+                            Command="{Binding CancelDictationCommand}" AutomationProperties.Name="{loc:Str Common.Cancel}">
+                        <Path Width="12" Height="12" Stretch="Uniform" Stroke="White" StrokeThickness="1.6"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" Data="M 2,2 L 10,10 M 10,2 L 2,10" />
+                    </Button>
+                </StackPanel>
+            </StackPanel>
             <ScrollViewer x:Name="CompactPartialPreviewScrollViewer" MaxHeight="120"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           IsVisible="{Binding ShowInlinePartialText}">

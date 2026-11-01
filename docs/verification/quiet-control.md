@@ -30,6 +30,17 @@ automatic paste into the original field. GNOME proved the copy/manual-paste
 fallback. Existing History recovery passed 20 checks, including actual public
 audio, expanded History controls, and clipboard read-back.
 
+## Edge layout correction
+
+All four dock positions are rendered in every language. Left and right hover,
+recording, and finishing controls stack vertically; top and bottom controls remain
+horizontal. The controls use content-sized stacks rather than reserved columns.
+Stop and Cancel share a six-DIP gap, and the Cancel cross is centered vector art.
+
+The correction passed all 49 UI tests, 3,753 Linux tests with two opt-in skips,
+and 74 helper tests. Both private desktop suites passed 14 live checks, including
+real hover/recording alignment at each edge, and all 36 neighboring-click probes.
+
 ## Repeat
 
 Build Release first. See `scripts/verification/README.md` for SDK, desktop,

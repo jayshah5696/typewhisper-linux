@@ -86,12 +86,14 @@ def run(out: Path, kind: str):
             def expand():
                 b = idle()
                 pointer((b["X"] + b["WIDTH"] // 2, b["Y"] + b["HEIGHT"] // 2))
-                return wait_value(geometry, lambda b: b["WIDTH"] == 140, "hover controls")
+                edge = read_settings()["overlayPosition"]
+                expected = (40, 100) if edge in (2, 3) else (112, 36)
+                return wait_value(geometry, lambda b: (b["WIDTH"], b["HEIGHT"]) == expected, "edge-oriented hover controls")
 
             saved = app.instance / "data/TypeWhisper/settings.json"
             read_settings = lambda: json.loads(saved.read_text())
             def current_session():
-                for number in range(1, 12):
+                for number in range(1, 32):
                     if app.api(f"/v1/dictation/transcription?sessionId={number}").get("state") == "in_progress":
                         return number
                 raise AssertionError("No in-progress private dictation session was reported")
@@ -99,6 +101,7 @@ def run(out: Path, kind: str):
             try:
                 drops = [(0, (720, 18)), (2, (18, 450)), (3, (1422, 450)), (1, (720, 882))]
                 report["drops"] = []
+                app.load_model("needle-whistle", "whistle")
                 for edge, target in drops:
                     expand()
                     primary = node("Start dictation")
@@ -120,12 +123,34 @@ def run(out: Path, kind: str):
                     assert not app.capture_sources()
                     s = read_settings()
                     assert s.get("overlayScreenX") == 0 and s.get("overlayScreenY") == 0
-                    report["drops"].append({"edge": edge, "geometry": b,
-                                            "screen": s.get("overlayScreenName")})
+                    drop = {"edge": edge, "geometry": b, "screen": s.get("overlayScreenName")}
+                    report["drops"].append(drop)
                     checkpoint(desktop, out, "dock-" + str(edge))
+                    drop["hover_geometry"] = expand()
+                    checkpoint(desktop, out, "hover-" + str(edge))
+                    click_control("Start dictation")
+                    wait_value(lambda: app.api("/v1/dictation/status"), lambda r: r["is_recording"], "edge recording")
+                    assert app.capture_sources() == [app.mic.source]
+                    stop = wait_value(lambda: node("Stop dictation"), bool, "Stop button")["extents"]
+                    cancel = wait_value(lambda: node("Cancel"), bool, "Cancel button")["extents"]
+                    if edge in (2, 3):
+                        assert abs(stop[0] + stop[2] / 2 - cancel[0] - cancel[2] / 2) <= 1
+                        gap = cancel[1] - stop[1] - stop[3]
+                        assert geometry()["WIDTH"] <= 48
+                    else:
+                        assert abs(stop[1] + stop[3] / 2 - cancel[1] - cancel[3] / 2) <= 1
+                        gap = cancel[0] - stop[0] - stop[2]
+                        assert geometry()["WIDTH"] <= 150
+                    assert 4 <= gap <= 8, (edge, stop, cancel)
+                    drop["recording_geometry"] = geometry()
+                    drop["stop_cancel_gap"] = gap
+                    checkpoint(desktop, out, "recording-" + str(edge))
+                    click_control("Cancel")
+                    wait_value(lambda: app.api("/v1/dictation/status"), lambda r: not r["is_recording"], "edge canceled")
                 checks["four_real_drags_snap_and_persist"] = True
                 checks["drag_release_never_records"] = True
                 checks["selected_display_persisted"] = True
+                checks["all_edges_have_aligned_compact_controls"] = True
 
                 # Reopen the same private settings without rewriting them through a fixture.
                 before = {key: read_settings().get(key) for key in ("overlayPosition", "overlayScreenName", "overlayScreenX", "overlayScreenY")}

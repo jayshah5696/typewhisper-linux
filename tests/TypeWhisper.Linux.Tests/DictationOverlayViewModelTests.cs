@@ -625,7 +625,7 @@ public sealed class DictationOverlayViewModelTests
         Assert.Equal(vertical ? 10 : 28, sut.LauncherButtonWidth);
         Assert.Equal(vertical ? 28 : 10, sut.LauncherButtonHeight);
         sut.SetLauncherExpanded(true);
-        Assert.Equal(44, sut.LauncherButtonWidth);
+        Assert.Equal(32, sut.LauncherButtonWidth);
         Assert.Equal(28, sut.LauncherButtonHeight);
     }
 

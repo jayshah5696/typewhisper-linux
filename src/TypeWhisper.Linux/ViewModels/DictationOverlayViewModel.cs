@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using Avalonia.Layout;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -245,14 +246,9 @@ public partial class DictationOverlayViewModel : ObservableObject
     public bool IsSideDock => _settings.Current.OverlayPosition is OverlayPosition.Left or OverlayPosition.Right;
     public double QuietMarkWidth => IsSideDock ? 3 : 18;
     public double QuietMarkHeight => IsSideDock ? 18 : 3;
-    public double LauncherButtonWidth => IsLauncherExpanded ? 44 : IsSideDock ? 10 : 28;
+    public double LauncherButtonWidth => IsLauncherExpanded ? 32 : IsSideDock ? 10 : 28;
     public double LauncherSpacing => IsLauncherExpanded ? 4 : 0;
-    public int PrimaryColumn => _settings.Current.OverlayPosition switch { OverlayPosition.Left => 0, OverlayPosition.Right => 2, _ => 1 };
-    public int RecorderColumn => _settings.Current.OverlayPosition == OverlayPosition.Left ? 1 : 0;
-    public int SettingsColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 1 : 2;
-    public int WaveformColumn => IsSideDock ? 1 : 0;
-    public int CancelColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 0 : 2;
-    public int BusyStatusColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 1 : 0;
+    public Orientation ControlOrientation => IsSideDock ? Orientation.Vertical : Orientation.Horizontal;
     public bool HasRecoveryText => ShowDetailedFeedback && !string.IsNullOrWhiteSpace(_recoveryText);
     private bool CanCopyRecovery() => HasRecoveryText && !_copyRunning && _copyRecoveryText is not null;
 
@@ -388,12 +384,8 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(QuietMarkHeight));
         OnPropertyChanged(nameof(LauncherButtonWidth));
         OnPropertyChanged(nameof(LauncherButtonHeight));
-        OnPropertyChanged(nameof(PrimaryColumn));
-        OnPropertyChanged(nameof(RecorderColumn));
-        OnPropertyChanged(nameof(SettingsColumn));
-        OnPropertyChanged(nameof(WaveformColumn));
-        OnPropertyChanged(nameof(CancelColumn));
-        OnPropertyChanged(nameof(BusyStatusColumn));
+        OnPropertyChanged(nameof(IsSideDock));
+        OnPropertyChanged(nameof(ControlOrientation));
         OnPropertyChanged(nameof(HasRecoveryText));
         CopyRecoveryCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(QuietWidth));
