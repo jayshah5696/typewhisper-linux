@@ -5,4 +5,6 @@ public enum OverlayPosition
 {
     Top,
     Bottom,
+    Left,
+    Right,
 }

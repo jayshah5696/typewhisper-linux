@@ -6,6 +6,7 @@
 - Text fits its space in every UI language (English, German, Spanish, Russian, Japanese, Simplified Chinese) at the default and a compact window size.
 - No raw localization key, and no text from another UI language, reaches the screen.
 - Every interactive control has an accessible name, so screen readers and UI tests can find it. That includes the sidebar navigation.
+- Appearance can enable an optional quiet bar. Hover reveals dictation, recorder, and settings actions. Dragging snaps to any edge center and remembers the display. Recording and finishing use compact, owner-scoped Stop/Cancel controls. Clipboard fallback, successful delivery, and recoverable failure remain distinct.
 
 ## How to get to it (user POV)
 
@@ -26,6 +27,22 @@ just ui-check artifacts/verification/$(date +%F)-ui
 - `wrong-language-text`: text that only another UI language's catalog contains. This catches computed labels that were not refreshed after a language change.
 
 Each failure lists the section, control, detail, nearby labels, and affected sizes. Open the matching PNG to see the problem. Proven on 2026-10-14: all four languages pass after fixing 59 unnamed controls, clipped labels in Dashboard, Dictation, Shortcuts, and Advanced, and stale engine and model labels after a language switch.
+
+## Floating control checks
+
+`just verify-flow-control <fresh-directory> x11` drives the actual controls in
+an authenticated Xvfb/Openbox session and verifies automatic paste into the
+original GTK text field. `just verify-flow-control <fresh-directory> mutter`
+drives them in the private GNOME compositor and verifies the copy/manual-paste
+fallback in that field. Both check focus preservation, Cancel, recorder/settings
+navigation, placement, and click-through after disabling the control.
+`just verify-quiet-dock <fresh-directory> mutter` checks real drags, persisted
+position across restart, cancellation during finishing, and exact clipboard
+recovery after a genuine clipboard-tool failure. `just verify-overlay-clicks
+<fresh-directory> mutter` requires all 36 neighboring clicks to reach a GTK target.
+Repeat with `x11` to check the Xvfb/Openbox path. See
+`scripts/verification/README.md` for dependencies and limits. These checks do not
+use the user's ydotool service or physical input devices.
 
 ## Gotchas
 

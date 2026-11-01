@@ -100,11 +100,25 @@
                  indicator, with these layout controls. -->
             <StackPanel IsVisible="{Binding UsesOverlay}"
                         Spacing="18">
+            <Border Classes="panel" Padding="18,14">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                    <StackPanel Spacing="3">
+                        <TextBlock Text="{loc:Str Appearance.ShowFloatingControl}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Appearance.FloatingControlHint}"
+                                   TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                                  IsChecked="{Binding ShowFloatingControl}"
+                                  AutomationProperties.Name="{loc:Str Appearance.ShowFloatingControl}" />
+                </Grid>
+            </Border>
             <TextBlock Text="{loc:Str Appearance.OverlayLayout}"
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
@@ -125,9 +139,9 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="{DynamicResource TwFillStrongBrush}" />
+                    <Border Grid.Row="1" Height="1" IsVisible="{Binding !ShowFloatingControl}" Background="{DynamicResource TwFillStrongBrush}" />
 
-                    <Border Grid.Row="2" Padding="18,14">
+                    <Border Grid.Row="2" Padding="18,14" IsVisible="{Binding !ShowFloatingControl}">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Appearance.LeftContent}"
@@ -147,9 +161,9 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3" Background="{DynamicResource TwFillStrongBrush}" />
+                    <Border Grid.Row="3" Height="1" IsVisible="{Binding !ShowFloatingControl}" Background="{DynamicResource TwFillStrongBrush}" />
 
-                    <Border Grid.Row="4" Padding="18,14">
+                    <Border Grid.Row="4" Padding="18,14" IsVisible="{Binding !ShowFloatingControl}">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Appearance.RightContent}"
@@ -169,7 +183,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="{DynamicResource TwFillStrongBrush}" />
+                    <Border Grid.Row="5" Height="1" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="6" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -201,7 +215,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7" Background="{DynamicResource TwFillStrongBrush}" />
+                    <Border Grid.Row="7" Height="1" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="8" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -210,14 +224,14 @@
                                         Spacing="2">
                                 <TextBlock Text="{loc:Str Appearance.WindowPosition}"
                                            FontWeight="SemiBold" />
-                                <TextBlock Text="{loc:Str Appearance.WindowPositionHint}"
+                                <TextBlock Text="{Binding OverlayPositionHint}"
                                            Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1"
                                         Spacing="6">
-                                <TextBlock Text="{Binding OverlayPositionStatusText}"
+                                <TextBlock Text="{Binding OverlayPositionStatusText}" TextWrapping="Wrap" MaxWidth="320"
                                            Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="12"
                                            HorizontalAlignment="Right" />
@@ -345,12 +359,16 @@
             <TextBlock Text="{loc:Str Appearance.Preview}"
                        Classes="section-title" />
 
+            <Border Background="#F0181818" CornerRadius="12" Width="36" Height="18"
+                    HorizontalAlignment="Center" IsVisible="{Binding ShowFloatingControl}">
+                <Border Background="#1593F5" Width="18" Height="3" CornerRadius="2" />
+            </Border>
             <!-- Mirrors DictationOverlayWindow's bubble so users see the
                  selected widgets in their real shape and colors. -->
             <Border Classes="panel"
                     Padding="24"
                     Height="220">
-                <Border Background="#F0181818"
+                <Border Background="#F0181818" IsVisible="{Binding !ShowFloatingControl}"
                         BorderBrush="#25FFFFFF"
                         BorderThickness="1"
                         CornerRadius="22"

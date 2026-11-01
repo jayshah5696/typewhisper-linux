@@ -115,6 +115,66 @@ uv run --no-project scripts/verification/compare_benchmarks.py \
 
 The comparison rejects incomplete runs and mismatched corpus IDs, references, durations, or ordering. It reports first-request speed separately from warm median and nearest-rank p95. It reports word error rate separately from speed. A positive WER delta means more errors. A single run cannot establish a stable improvement; repeat the comparison under the same load and settings.
 
+## Floating control
+
+Build Release, then use a fresh directory for each check:
+
+```sh
+just verify-flow-control artifacts/verification/flow-control-x11 x11
+just verify-flow-control artifacts/verification/flow-control-mutter mutter
+just verify-quiet-dock artifacts/verification/quiet-dock-mutter mutter
+just verify-overlay-clicks artifacts/verification/overlay-clicks-mutter mutter
+```
+
+To check the installed executable instead of the build output, pass its directory:
+
+```sh
+uv run --no-project scripts/verification/flow_control_smoke.py --desktop mutter \
+  --app-dir "$HOME/.local/share/typewhisper-app" --out <fresh-installed-check-directory>
+```
+
+Both checks enable the control through Appearance, hover it, click Start and Stop,
+play public audio into an isolated virtual microphone, and read the result from
+the original GTK text field. They also verify Cancel, recorder and settings
+navigation, and an empty native input region after disabling the control. No
+recording starts merely from hovering or opening the recorder page.
+
+`just verify-quiet-dock` performs four real pointer drags, checks edge and display
+persistence, and restarts the private app without rewriting its settings. It then
+cancels a real dictation during delayed cleanup and proves no text reached the
+editor. A private clipboard-tool fault produces the actual Copy text recovery
+action. After restoring that tool, copied text must match the current transcript
+and must not paste into the editor. The fake LLM can log a broken pipe when its
+canceled client disconnects; the checks still require the actual canceled result.
+
+`just verify-overlay-clicks` sends 36 real clicks to a GTK receiver beside the
+idle and expanded control, in the former expanded area after collapse, above the
+control, and in the former area after disabling it. The receiver must observe
+each click at the requested coordinates. It deliberately uses a normal window,
+not a fullscreen window. Both recipes accept `x11` or `mutter` as the second
+argument and use fresh output directories. They do not operate the user's desktop.
+
+The X11 check requires Xvfb, Openbox, xdotool, xclip, the private accessibility
+bus dependencies, and system Python with GTK3 bindings. It verifies automatic
+paste. The Mutter check uses the existing hidden-desktop dependencies and a
+persistent private RemoteDesktop input session. It verifies copy followed by
+manual paste into the original field. It does not exercise the user's ydotool
+service. Neither check sends physical keyboard or pointer input.
+
+The checks need the existing Needle Whistle download. They use their own system
+bus without logind, so the virtual session uses the supported non-systemd path
+rather than the physical desktop's lock state. Production lock handling remains
+unchanged. The initial Mutter/XTEST attempt can open an input-consent dialog;
+use the private RemoteDesktop driver instead of granting host input access.
+
+Rendered tests cover the compact and expanded controls, recording buttons, and
+stable positioning in all six languages. Pure tests cover negative monitor
+origins, display removal, scaled placement, and click-versus-drag intent. A gated
+integration test checks that finishing cancellation and stale buttons cannot stop
+a newer recording. Native Wayland,
+KDE-specific behavior, mixed-monitor scaling, and fullscreen behavior need
+separate checks before expanding the support claims.
+
 ## Dictation stages
 
 `GET /v1/dictation/transcription?sessionId=...` now includes `performance`. Ordinary dictation publishes its completed session once, after the delivery attempt. The existing text-ready event still precedes delivery. Legacy or non-dictation result paths can have null performance. When available, it contains:

@@ -133,6 +133,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     private readonly IVocabularyRescoringService _vocabularyRescoring;
     private AudioRecordingService.AudioCaptureSession? _audioCaptureSession;
     private CancellationTokenSource? _activeDictationCts;
+    // Retained only until each stopped session completes; UI controls target its owner token.
+    private readonly Dictionary<OverlayPresentationToken, CancellationTokenSource> _finishingOverlaySources = [];
 
     // Cancels an in-flight spoken command (its LLM stream + typing). Distinct from
     // _activeDictationCts, which only covers the recording/transcription phase and is nulled once
@@ -676,6 +678,45 @@ public sealed partial class DictationOrchestrator : IDisposable
         }
     }
 
+    public Task StopOverlayAsync(OverlayPresentationToken owner) => StopPresentedRecordingAsync(owner, false);
+
+    private Task StopPresentedRecordingAsync(OverlayPresentationToken owner, bool discard)
+    {
+        lock (_overlayStateLock)
+        {
+            if (!ReferenceEquals(_overlayToken, owner) || !IsRecording)
+                return Task.CompletedTask;
+            var cancel = discard || _cancelRequested;
+            if (_toggleGate.TryAcquireForStop(cancel) != DictationStopGateResult.Acquired)
+                return Task.CompletedTask;
+            if (cancel) _cancelRequested = true;
+        }
+        return StopWhileHoldingGateAsync();
+    }
+
+    public async Task CancelOverlayAsync(OverlayPresentationToken owner)
+    {
+        CancellationTokenSource? processing;
+        bool recording;
+        lock (_overlayStateLock)
+        {
+            if (!ReferenceEquals(_overlayToken, owner)) return;
+            recording = IsRecording;
+            processing = _finishingOverlaySources.GetValueOrDefault(owner) ?? _activeDictationCts;
+        }
+        if (recording)
+        {
+            await StopPresentedRecordingAsync(owner, true).ConfigureAwait(false);
+        }
+        else if (processing is not null)
+        {
+            // Capture the source before awaiting. A later recording must not be
+            // canceled when this operation's provider finally unwinds.
+            try { await processing.CancelAsync().ConfigureAwait(false); }
+            catch (ObjectDisposedException) { /* The presented operation finished. */ }
+        }
+    }
+
     /// <summary>
     ///     Orders optional startup feedback ahead of capture. Feedback is best
     ///     effort; the permission check and capture result remain exact.
@@ -954,6 +995,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     PartialText = null,
                     LlmResponseText = null,
                     IsRecording = true,
+                    DeliverySucceeded = false,
+                    RecoveryText = null,
                     StatusText = Localization.Loc.Instance["Dictation.StatusRecording"],
                     ActiveProfileName = null,
                     ActiveAppName = null,
@@ -1552,6 +1595,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         var wasRecording = false;
         var gateReleased = false;
         CancellationTokenSource? snapshotCts = null;
+        OverlayPresentationToken? finishingOwner = null;
         LiveCleanupDraft? stoppedLiveCleanup = null;
         int? insertionOrderSessionId = null;
         int? telemetrySessionId = null;
@@ -1607,10 +1651,18 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             // Snapshot context into locals so transcription reads a stable view
             // even if a new StartAsync overwrites instance fields. Null the
-            // shared CTS so Escape targets only live recordings — once nulled,
-            // Cancel can no longer reach this dictation's background transcription.
-            snapshotCts = _activeDictationCts;
-            _activeDictationCts = null;
+            // shared CTS so Escape targets only live recordings. The presented
+            // overlay retains a separate owner-scoped handle for its finishing Cancel.
+            lock (_overlayStateLock)
+            {
+                snapshotCts = _activeDictationCts;
+                _activeDictationCts = null;
+                if (_overlayToken is { } owner && snapshotCts is not null)
+                {
+                    finishingOwner = owner;
+                    _finishingOverlaySources[owner] = snapshotCts;
+                }
+            }
             _hotkey.IsCancelShortcutEnabled = false;
             _cancelRequested = false;
 
@@ -1785,7 +1837,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                                 LinuxShortSpeechDecision.DiscardTooShort,
                                 recordingContext,
                                 ReportStatus,
-                                ShowFeedback
+                                (context, message, error, canceled) => ShowFeedback(context, message, error, canceled)
                             );
                             _ = await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
@@ -1800,7 +1852,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                                 LinuxShortSpeechDecision.DiscardNoSpeech,
                                 recordingContext,
                                 ReportStatus,
-                                ShowFeedback
+                                (context, message, error, canceled) => ShowFeedback(context, message, error, canceled)
                             );
                             _ = await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
@@ -1947,6 +1999,10 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             // Dispose after TranscribeAndInsertAsync so token registrations
             // remain valid for the full pipeline lifetime.
+            if (finishingOwner is not null)
+            {
+                lock (_overlayStateLock) _finishingOverlaySources.Remove(finishingOwner);
+            }
             if (snapshotCts is not null)
             {
                 try
@@ -2974,7 +3030,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                 }
                 else
                 {
-                    ShowFeedback(context, completionMessage, isError, isCanceled);
+                    ShowFeedback(context, completionMessage, isError, isCanceled,
+                        deliverySucceeded: (insertion is InsertionResult.Pasted or InsertionResult.Typed)
+                            && context.CleanupOutcome?.FallbackReason is null,
+                        recoveryText: isError && !string.IsNullOrWhiteSpace(finalText) ? finalText : null);
                 }
 
                 if (
@@ -4583,7 +4642,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         DictationOverlayState state,
         string text,
         bool isError,
-        ActionPluginExecutionResult? actionResult = null
+        ActionPluginExecutionResult? actionResult = null,
+        bool deliverySucceeded = false,
+        string? recoveryText = null
     )
     {
         return state with
@@ -4591,10 +4652,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             IsOverlayVisible = false,
             ShowFeedback = true,
             FeedbackIsError = isError,
+            DeliverySucceeded = deliverySucceeded && !isError && actionResult is null,
             FeedbackText = text,
+            RecoveryText = recoveryText,
             ActionResultUrl = actionResult?.Url,
             NotificationIconName = actionResult?.Icon,
-            FeedbackDurationMilliseconds = actionResult?.DisplayDurationMilliseconds,
+            FeedbackDurationMilliseconds = actionResult?.DisplayDurationMilliseconds ?? (recoveryText is not null ? 10000 : null),
             PartialText = null,
             LlmResponseText = null,
             IsRecording = false,
@@ -4705,7 +4768,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         RecordingContext context,
         string text,
         bool isError,
-        bool isCanceled = false
+        bool isCanceled = false,
+        bool deliverySucceeded = false,
+        string? recoveryText = null
     )
     {
         if (!IsContextStillOwningOverlay(context))
@@ -4715,7 +4780,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         SetOverlayState(
             context,
-            state => FeedbackState(state, text, isError)
+            state => FeedbackState(state, text, isError, deliverySucceeded: deliverySucceeded, recoveryText: recoveryText)
         );
         TryRunSessionTerminalFeedback(context, isError, isCanceled);
     }

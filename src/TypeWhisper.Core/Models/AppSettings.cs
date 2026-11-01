@@ -138,12 +138,16 @@ public record AppSettings
     public int SilenceAutoStopSeconds { get; init; } = 10;
 
     // Overlay
+    public bool ShowFloatingControl { get; init; }
     public OverlayPosition OverlayPosition { get; init; } = OverlayPosition.Bottom;
     public OverlayWidget OverlayLeftWidget { get; init; } = OverlayWidget.Waveform;
     public OverlayWidget OverlayRightWidget { get; init; } = OverlayWidget.Timer;
     public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
     public double? OverlayCustomLeft { get; init; }
     public double? OverlayCustomTop { get; init; }
+    public string? OverlayScreenName { get; init; }
+    public int? OverlayScreenX { get; init; }
+    public int? OverlayScreenY { get; init; }
 
     // Live text in its own movable, resizable window instead of inside the overlay.
     public bool LiveTextFloating { get; init; }

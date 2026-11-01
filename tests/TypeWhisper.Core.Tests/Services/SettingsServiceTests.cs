@@ -418,6 +418,10 @@ public sealed class SettingsServiceTests : IDisposable
             PreviewBubbleAutoHideMilliseconds = 3750,
             OverlayCustomLeft = 123.5,
             OverlayCustomTop = 87.25,
+            OverlayPosition = OverlayPosition.Right,
+            OverlayScreenName = "external",
+            OverlayScreenX = -2560,
+            OverlayScreenY = 0,
             SelectedIndustryPresetId = "real-estate",
             LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             LiveTranscriptionStreamingEnabled = true,
@@ -445,6 +449,10 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Equal(3750, sut2.Current.PreviewBubbleAutoHideMilliseconds);
         Assert.Equal(123.5, sut2.Current.OverlayCustomLeft);
         Assert.Equal(87.25, sut2.Current.OverlayCustomTop);
+        Assert.Equal(OverlayPosition.Right, sut2.Current.OverlayPosition);
+        Assert.Equal("external", sut2.Current.OverlayScreenName);
+        Assert.Equal(-2560, sut2.Current.OverlayScreenX);
+        Assert.Equal(0, sut2.Current.OverlayScreenY);
         Assert.Equal("real-estate", sut2.Current.SelectedIndustryPresetId);
         Assert.Equal(
             AppSettings.LocalModelAccelerationNvidiaCuda,

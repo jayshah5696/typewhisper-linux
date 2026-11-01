@@ -421,6 +421,214 @@ public sealed class DictationOverlayViewModelTests
         Assert.Equal(TimeSpan.FromMilliseconds(1500), sut.FeedbackTimerInterval);
     }
 
+    [Fact]
+    public void FloatingControl_IsOptIn_AndRefreshesWithoutReplacingRecording()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default);
+        var sut = CreateViewModel(settings);
+        Assert.False(sut.HasVisibleContent);
+
+        settings.Change(settings.Current with { ShowFloatingControl = true });
+        Assert.True(sut.ShowCompactLauncher);
+        Assert.True(sut.HasVisibleContent);
+        sut.SetLauncherExpanded(true);
+        Assert.True(sut.ShowLauncherActions);
+
+        sut.ApplyState(new DictationOverlayState
+        {
+            IsOverlayVisible = true,
+            IsRecording = true,
+            StatusText = "Current recording",
+        });
+        settings.Change(settings.Current with { ShowFloatingControl = false });
+        Assert.False(sut.ShowLauncher);
+        Assert.False(sut.IsLauncherExpanded);
+        Assert.True(sut.HasVisibleContent);
+        Assert.Equal("Current recording", sut.StatusText);
+    }
+
+    [Fact]
+    public async Task ExpandingLauncher_DoesNotStartRecording_AndStartIsSerialized()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true });
+        var started = 0;
+        var completion = new TaskCompletionSource();
+        var sut = new DictationOverlayViewModel(settings, action => action(),
+            startDictation: () => { started++; return completion.Task; });
+
+        sut.SetLauncherExpanded(true);
+        Assert.Equal(0, started);
+        var first = sut.StartDictationCommand.ExecuteAsync(null);
+        Assert.Equal(1, started);
+        Assert.False(sut.StartDictationCommand.CanExecute(null));
+        await sut.StartDictationCommand.ExecuteAsync(null);
+        Assert.Equal(1, started);
+        Assert.False(sut.IsRecording);
+        completion.SetResult();
+        await first;
+        Assert.True(sut.StartDictationCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task PrimaryLauncherClick_ExpandsBeforeStartingWithoutHover()
+    {
+        var started = 0;
+        var sut = new DictationOverlayViewModel(
+            new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true }),
+            action => action(), startDictation: () => { started++; return Task.CompletedTask; });
+        await sut.ActivateLauncherCommand.ExecuteAsync(null);
+        Assert.True(sut.IsLauncherExpanded);
+        Assert.Equal(0, started);
+        await sut.ActivateLauncherCommand.ExecuteAsync(null);
+        Assert.Equal(1, started);
+    }
+
+    [Fact]
+    public async Task FailedLauncherCommand_ReportsErrorWithoutClaimingRecording()
+    {
+        var sut = new DictationOverlayViewModel(
+            new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true }),
+            action => action(), startDictation: () => Task.FromException(new InvalidOperationException("Fixture fault")));
+
+        await sut.StartDictationCommand.ExecuteAsync(null);
+
+        Assert.True(sut.ShowFeedback);
+        Assert.True(sut.FeedbackIsError);
+        Assert.False(sut.IsRecording);
+        Assert.False(sut.ShowLauncher);
+    }
+
+    [Fact]
+    public async Task RecordingControls_OnlyOperateOnDictation_AndLateCollapseCannotHideIt()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true });
+        var coordinator = new OverlayCoordinator(settings, action => action());
+        var stopped = 0;
+        var canceled = 0;
+        var sut = new DictationOverlayViewModel(settings, action => action(), overlayCoordinator: coordinator,
+            stopDictation: () => { stopped++; return Task.CompletedTask; },
+            cancelDictation: () => { canceled++; return Task.CompletedTask; });
+        sut.SetLauncherExpanded(true);
+        var transform = coordinator.Acquire(OverlayRequester.Transform);
+        coordinator.Show(transform, new DictationOverlayState { IsOverlayVisible = true, IsRecording = true });
+        Assert.False(sut.ShowRecordingControls);
+        await sut.StopDictationCommand.ExecuteAsync(null);
+        await sut.CancelDictationCommand.ExecuteAsync(null);
+        Assert.Equal(0, stopped + canceled);
+
+        coordinator.Release(transform);
+        var dictation = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(dictation, new DictationOverlayState { IsOverlayVisible = true, IsRecording = true });
+        sut.SetLauncherExpanded(false);
+        Assert.True(sut.ShowRecordingControls);
+        Assert.True(sut.IsOverlayVisible);
+        await sut.StopDictationCommand.ExecuteAsync(null);
+        await sut.CancelDictationCommand.ExecuteAsync(null);
+        Assert.Equal(1, stopped);
+        Assert.Equal(1, canceled);
+        Assert.False(sut.ShowLauncherActions);
+    }
+
+    [Fact]
+    public async Task Finishing_RemainsCancelableDuringStop_AndNewRecordingCanStopIndependently()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true });
+        var coordinator = new OverlayCoordinator(settings, action => action());
+        var completion = new TaskCompletionSource();
+        var stops = 0;
+        var cancels = new List<OverlayPresentationToken>();
+        var sut = new DictationOverlayViewModel(settings, action => action(), overlayCoordinator: coordinator,
+            stopDictation: () =>
+            {
+                stops++;
+                coordinator.Show(coordinator.PresentedToken!, new DictationOverlayState { IsOverlayVisible = true });
+                return completion.Task;
+            },
+            cancelPresentedWork: token => { cancels.Add(token); return Task.CompletedTask; });
+        var first = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(first, new DictationOverlayState { IsOverlayVisible = true, IsRecording = true });
+        var pending = sut.StopDictationCommand.ExecuteAsync(null);
+        Assert.True(sut.ShowProcessingControls);
+        Assert.True(sut.CancelDictationCommand.CanExecute(null));
+        await sut.CancelDictationCommand.ExecuteAsync(null);
+        Assert.Same(first, Assert.Single(cancels));
+        var second = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(second, new DictationOverlayState { IsOverlayVisible = true, IsRecording = true });
+        Assert.True(sut.StopDictationCommand.CanExecute(null));
+        var next = sut.StopDictationCommand.ExecuteAsync(null);
+        Assert.Equal(2, stops);
+        completion.SetResult();
+        await Task.WhenAll(pending, next);
+    }
+
+    [Fact]
+    public void CompactSuccess_NeverHidesCopyWarningsOrActionResults()
+    {
+        var sut = CreateViewModel(new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true }));
+        sut.ApplyState(new DictationOverlayState { ShowFeedback = true, DeliverySucceeded = true, FeedbackText = "Typed text" });
+        Assert.True(sut.ShowSuccessConfirmation);
+        Assert.False(sut.ShowDetailedFeedback);
+        sut.ApplyState(new DictationOverlayState { ShowFeedback = true, FeedbackText = "Copied to clipboard" });
+        Assert.False(sut.ShowSuccessConfirmation);
+        Assert.True(sut.ShowDetailedFeedback);
+        sut.ApplyState(new DictationOverlayState { ShowFeedback = true, DeliverySucceeded = true,
+            ActionResultUrl = "https://example.com/result" });
+        Assert.False(sut.ShowSuccessConfirmation);
+        Assert.True(sut.ShowDetailedFeedback);
+    }
+
+    [Fact]
+    public async Task RecoveryCopy_UsesTheFailedText_AndCannotReplaceANewerRecording()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true });
+        var coordinator = new OverlayCoordinator(settings, action => action());
+        var completion = new TaskCompletionSource<bool>();
+        string? copied = null;
+        var sut = new DictationOverlayViewModel(settings, action => action(), overlayCoordinator: coordinator,
+            copyRecoveryText: text => { copied = text; return completion.Task; });
+        var first = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(first, new DictationOverlayState { ShowFeedback = true, FeedbackIsError = true, RecoveryText = "failed session text" });
+        var copy = sut.CopyRecoveryCommand.ExecuteAsync(null);
+        Assert.Equal("failed session text", copied);
+        var newer = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(newer, new DictationOverlayState { IsOverlayVisible = true, IsRecording = true });
+        completion.SetResult(true);
+        await copy;
+        Assert.True(sut.ShowRecordingControls);
+        Assert.False(sut.ShowFeedback);
+        Assert.False(sut.HasRecoveryText);
+    }
+
+    [Fact]
+    public async Task RecoveryCopyFailure_KeepsTextAndShowsAnImmediateRetryMessage()
+    {
+        var settings = new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true });
+        var coordinator = new OverlayCoordinator(settings, action => action());
+        var sut = new DictationOverlayViewModel(settings, action => action(), overlayCoordinator: coordinator,
+            copyRecoveryText: _ => Task.FromException<bool>(new IOException("Clipboard fixture fault")));
+        var owner = coordinator.Acquire(OverlayRequester.Dictation);
+        coordinator.Show(owner, new DictationOverlayState { ShowFeedback = true, FeedbackIsError = true,
+            FeedbackText = "Insertion failed", RecoveryText = "Keep these words" });
+        await sut.CopyRecoveryCommand.ExecuteAsync(null);
+        Assert.Equal(Loc.Instance["Overlay.RecoveryCopyFailed"], sut.FeedbackText);
+        Assert.True(sut.HasRecoveryText);
+        Assert.True(sut.CopyRecoveryCommand.CanExecute(null));
+    }
+
+    [Theory]
+    [InlineData(OverlayPosition.Top, false)]
+    [InlineData(OverlayPosition.Left, true)]
+    [InlineData(OverlayPosition.Right, true)]
+    public void QuietMarker_FollowsEdgeOrientation(OverlayPosition edge, bool vertical)
+    {
+        var sut = CreateViewModel(new FakeSettingsService(AppSettings.Default with { ShowFloatingControl = true, OverlayPosition = edge }));
+        Assert.Equal(vertical ? 10 : 28, sut.LauncherButtonWidth);
+        Assert.Equal(vertical ? 28 : 10, sut.LauncherButtonHeight);
+        sut.SetLauncherExpanded(true);
+        Assert.Equal(44, sut.LauncherButtonWidth);
+        Assert.Equal(28, sut.LauncherButtonHeight);
+    }
+
     private static DictationOverlayViewModel CreateViewModel(FakeSettingsService settings)
     {
         return new DictationOverlayViewModel(settings, static action => action());

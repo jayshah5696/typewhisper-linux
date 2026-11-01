@@ -190,6 +190,21 @@ public sealed class AppearanceSectionViewModelTests
         settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
+    [Fact]
+    public void FloatingControl_LoadsWithoutSaving_AndTogglePreservesOtherSettings()
+    {
+        var initial = AppSettings.Default with { ShowFloatingControl = true, OverlayCustomLeft = 120 };
+        var settings = CreateSettingsMock(initial);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
+        Assert.True(sut.ShowFloatingControl);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        sut.ShowFloatingControl = false;
+        Assert.False(settings.Object.Current.ShowFloatingControl);
+        Assert.Equal(120, settings.Object.Current.OverlayCustomLeft);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Once);
+    }
+
     private static Mock<ISettingsService> CreateSettingsMock(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();

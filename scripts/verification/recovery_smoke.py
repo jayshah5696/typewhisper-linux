@@ -96,7 +96,7 @@ def run(args: argparse.Namespace) -> dict:
     report: dict = {"checks": {}, "clipboard": "private X11", "audio": str(args.audio), "provider": "fake echo"}
     checks = report["checks"]
     with hidden_desktop.HiddenDesktop(args.out / "desktop") as desktop, isolated_app.FakeLlm(.1) as llm:
-        extra = private_x11_env(desktop.app_env())
+        extra = {**private_x11_env(desktop.app_env()), "DBUS_SYSTEM_BUS_ADDRESS": desktop.bus_address}
         settings, provider = llm.plugin_overrides()
         settings.update({"selectedModelId": f"plugin:{args.plugin}:{args.model}", "cleanupLevel": 2,
                          "cleanupTimeoutSeconds": 1, "saveToHistoryEnabled": True,

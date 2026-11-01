@@ -1,6 +1,7 @@
 using Avalonia;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Views;
+using TypeWhisper.Linux.Services;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -52,6 +53,8 @@ public sealed class DictationOverlayWindowTests
     [Theory]
     [InlineData(OverlayPosition.Top, 740, -188)]
     [InlineData(OverlayPosition.Bottom, 740, 632)]
+    [InlineData(OverlayPosition.Left, 112, 222)]
+    [InlineData(OverlayPosition.Right, 1368, 222)]
     public void Showing_RestoresConfiguredPosition(
         OverlayPosition overlayPosition,
         int expectedX,
@@ -67,7 +70,7 @@ public sealed class DictationOverlayWindowTests
         Assert.True(parked.X > workArea.Right);
 
         state.Show();
-        var configured = DictationOverlayPlacementState.ComputeConfiguredPosition(
+        var configured = OverlayDocking.ComputePosition(
             overlayPosition,
             workArea,
             s_overlaySize
@@ -80,6 +83,53 @@ public sealed class DictationOverlayWindowTests
 
         Assert.True(state.IsShown);
         Assert.Equal(new PixelPoint(expectedX, expectedY), restored);
+    }
+
+    [Theory]
+    [InlineData(10, 450, OverlayPosition.Left)]
+    [InlineData(1430, 450, OverlayPosition.Right)]
+    [InlineData(720, 10, OverlayPosition.Top)]
+    [InlineData(720, 890, OverlayPosition.Bottom)]
+    public void Drop_SnapsToClosestEdge(int x, int y, OverlayPosition expected)
+    {
+        Assert.Equal(expected, OverlayDocking.NearestEdge(new PixelPoint(x, y), new PixelRect(0, 0, 1440, 900)));
+    }
+
+    [Fact]
+    public void DockScreen_FollowsItsNameWhenTheLayoutChanges_AndFallsBackWhenRemoved()
+    {
+        (string? Name, PixelRect Bounds, bool IsPrimary)[] screens =
+        [
+            ("primary", new(0, 0, 1920, 1080), true),
+            ("external", new(-2560, 0, 2560, 1440), false),
+        ];
+        Assert.Equal(1, OverlayDocking.SelectScreen(screens, "external", 1920, 0));
+        Assert.Equal(0, OverlayDocking.SelectScreen(screens, "removed", 5000, 0));
+        Assert.Equal(1, OverlayDocking.NearestScreen(screens.Select(s => s.Bounds).ToArray(), new(-500, 400)));
+    }
+
+    [Fact]
+    public void DragRequiresMovement_AndDoesNotTurnAReleaseIntoAClick()
+    {
+        var gesture = new OverlayDockDrag();
+        gesture.Press(new(200, 200), new(180, 190), 1.5);
+        Assert.Null(gesture.Move(new(204, 204)));
+        Assert.False(gesture.IsDragging);
+        Assert.False(gesture.Release());
+        gesture.Press(new(200, 200), new(180, 190), 1.5);
+        Assert.Equal(new PixelPoint(160, 230), gesture.Move(new(180, 240)));
+        Assert.True(gesture.Release());
+        Assert.False(gesture.IsPressed);
+    }
+
+    [Fact]
+    public void Position_UsesScaledInsetsAndKeepsCenterAcrossSizes()
+    {
+        var area = new PixelRect(-1920, 100, 1920, 1080);
+        var idle = OverlayDocking.ComputePosition(OverlayPosition.Top, area, new(54, 27), 1.5);
+        var recording = OverlayDocking.ComputePosition(OverlayPosition.Top, area, new(267, 54), 1.5);
+        Assert.Equal(area.Y + 18, idle.Y);
+        Assert.InRange(Math.Abs(idle.X + 27 - recording.X - 267 / 2.0), 0, .5);
     }
 
     [Fact]

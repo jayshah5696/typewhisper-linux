@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import subprocess
 import sys
@@ -174,24 +175,33 @@ sc = call(SC, "/org/gnome/Mutter/ScreenCast", SC, "CreateSession",
 stream = call(SC, sc, SC + ".Session", "RecordMonitor", GLib.Variant("(sa{sv})", ("", {})), "(o)")[0]
 call(RD, rd, RD + ".Session", "Start", None)
 time.sleep(0.5)
-for step in json.loads(sys.argv[1]):
-    if "click" in step:
-        x, y = step["click"]
-        call(RD, rd, RD + ".Session", "NotifyPointerMotionAbsolute", GLib.Variant("(sdd)", (stream, float(x), float(y))))
-        time.sleep(0.05)
-        for pressed in (True, False):
-            call(RD, rd, RD + ".Session", "NotifyPointerButton", GLib.Variant("(ib)", (0x110, pressed)))
+def perform(steps):
+    for step in steps:
+        if any(key in step for key in ("click", "move", "down", "up")):
+            x, y = next(step[key] for key in ("click", "move", "down", "up") if key in step)
+            call(RD, rd, RD + ".Session", "NotifyPointerMotionAbsolute", GLib.Variant("(sdd)", (stream, float(x), float(y))))
             time.sleep(0.05)
-    if "keys" in step:
-        for keysym in step["keys"]:
-            call(RD, rd, RD + ".Session", "NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, True)))
-            time.sleep(0.03)
-        for keysym in reversed(step["keys"]):
-            call(RD, rd, RD + ".Session", "NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, False)))
-            time.sleep(0.03)
-    time.sleep(step.get("wait", 0.2))
+            buttons = (True, False) if "click" in step else (True,) if "down" in step else (False,) if "up" in step else ()
+            for pressed in buttons:
+                call(RD, rd, RD + ".Session", "NotifyPointerButton", GLib.Variant("(ib)", (0x110, pressed)))
+                time.sleep(0.05)
+        if "keys" in step:
+            for keysym in step["keys"]:
+                call(RD, rd, RD + ".Session", "NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, True)))
+                time.sleep(0.03)
+            for keysym in reversed(step["keys"]):
+                call(RD, rd, RD + ".Session", "NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, False)))
+                time.sleep(0.03)
+        time.sleep(step.get("wait", 0.2))
+if sys.argv[1] == "-":
+    print("ready", flush=True)
+    for line in sys.stdin:
+        perform(json.loads(line))
+        print("ok", flush=True)
+else:
+    perform(json.loads(sys.argv[1]))
+    print("ok", flush=True)
 call(RD, rd, RD + ".Session", "Stop", None)
-print("ok")
 '''
 
 
@@ -275,6 +285,7 @@ class HiddenDesktop:
         self.wayland_display = f"tw-verify-wl-{secrets.token_hex(3)}"
         self.env: dict[str, str] = {}
         self._processes: list[subprocess.Popen] = []
+        self._input_process: subprocess.Popen | None = None
 
     def __enter__(self) -> "HiddenDesktop":
         try:
@@ -329,6 +340,7 @@ class HiddenDesktop:
                     process.kill()
                     process.wait()
         self._processes.clear()
+        self._input_process = None
         runtime, self.runtime = self.runtime, None
         if runtime is not None and runtime.name.startswith("tw-verify-") and runtime.parent == Path("/tmp"):
             shutil.rmtree(runtime, ignore_errors=True)
@@ -361,8 +373,26 @@ class HiddenDesktop:
             raise RuntimeError(f"AT-SPI query failed: {done.stderr[-500:]}")
         return json.loads(done.stdout)
 
-    def input(self, steps: list[dict]) -> None:
-        """Click and type inside the hidden compositor only. Steps: {"click": [x, y]}, {"keys": [...]}, {"wait": s}."""
+    def input(self, steps: list[dict], *, persistent: bool = False) -> None:
+        """Private input steps: move, click, keys, wait. Keep a session for hover checks."""
+        if persistent:
+            # Removing a virtual pointer between calls produces a leave event. A
+            # persistent private session keeps hover equivalent to a real mouse.
+            def reply(expected):
+                if not select.select([self._input_process.stdout], [], [], 60)[0]:
+                    raise TimeoutError("Private input session did not reply")
+                if self._input_process.stdout.readline().strip() != expected:
+                    raise RuntimeError(f"Private input session failed; see {self.workdir / 'input.log'}")
+            if self._input_process is None:
+                with (self.workdir / "input.log").open("w") as log:
+                    self._input_process = subprocess.Popen([self._gi_python(), "-c", _INPUT_SCRIPT, "-"],
+                        env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
+                self._processes.append(self._input_process)
+                reply("ready")
+            self._input_process.stdin.write(json.dumps(steps) + "\n")
+            self._input_process.stdin.flush()
+            reply("ok")
+            return
         done = subprocess.run([self._gi_python(), "-c", _INPUT_SCRIPT, json.dumps(steps)], env=self.env,
                               capture_output=True, text=True, timeout=60)
         if done.returncode != 0 or "ok" not in done.stdout:

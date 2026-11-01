@@ -13,6 +13,7 @@ public sealed record DictationOverlayState
     public bool IsOverlayVisible { get; init; }
     public bool ShowFeedback { get; init; }
     public bool FeedbackIsError { get; init; }
+    public bool DeliverySucceeded { get; init; }
     public bool IsRecording { get; init; }
     public string StatusText { get; init; } = "Ready";
     public string? PartialText { get; init; }
@@ -24,6 +25,7 @@ public sealed record DictationOverlayState
     public string? LlmResponseText { get; init; }
 
     public string? FeedbackText { get; init; }
+    public string? RecoveryText { get; init; }
     public string? ActionResultUrl { get; init; }
     public string? NotificationIconName { get; init; }
     public int? FeedbackDurationMilliseconds { get; init; }

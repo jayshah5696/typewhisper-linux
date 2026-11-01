@@ -39,7 +39,8 @@ public sealed class OverlayPresentationToken
 public sealed class OverlayPresentationChangedEventArgs(
     long revision,
     DictationOverlayState state,
-    OverlayRequester? requester
+    OverlayRequester? requester,
+    OverlayPresentationToken? token = null
 ) : EventArgs
 {
     public long Revision { get; } = revision;
@@ -47,6 +48,7 @@ public sealed class OverlayPresentationChangedEventArgs(
 
     /// <summary>The workflow whose claim won arbitration; null when nothing is presented.</summary>
     public OverlayRequester? Requester { get; } = requester;
+    public OverlayPresentationToken? Token { get; } = token;
 }
 
 /// <summary>
@@ -428,7 +430,7 @@ public sealed class OverlayCoordinator
 
         _presentedToken = token;
         _presentedState = state;
-        return new Presentation(++_revision, state, token?.Requester);
+        return new Presentation(++_revision, state, token);
     }
 
     private Slot? SelectWinnerLocked()
@@ -501,7 +503,7 @@ public sealed class OverlayCoordinator
         _postToUiThread(() =>
             PresentationChanged?.Invoke(
                 this,
-                new OverlayPresentationChangedEventArgs(value.Revision, value.State, value.Requester)
+                new OverlayPresentationChangedEventArgs(value.Revision, value.State, value.Token?.Requester, value.Token)
             )
         );
     }
@@ -523,10 +525,15 @@ public sealed class OverlayCoordinator
         public int PendingExpiryMilliseconds { get; set; }
     }
 
+    internal OverlayPresentationToken? PresentedToken
+    {
+        get { lock (_sync) return _presentedToken; }
+    }
+
     private readonly record struct Presentation(
         long Revision,
         DictationOverlayState State,
-        OverlayRequester? Requester
+        OverlayPresentationToken? Token
     );
 
     private sealed class OneShotTimer : IDisposable

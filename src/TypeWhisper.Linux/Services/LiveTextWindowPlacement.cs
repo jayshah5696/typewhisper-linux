@@ -13,6 +13,7 @@ internal static class LiveTextWindowPlacement
 
     // Matches the overlay's minimum footprint so the default spot clears it.
     private const int OverlayHeightAllowance = 56;
+    private const int OverlayWidthAllowance = 200;
 
     /// <summary>
     ///     Shrinks the window to fit the work area, then clamps its position inside it, so a saved
@@ -58,14 +59,20 @@ internal static class LiveTextWindowPlacement
     }
 
     /// <summary>Centered, on the far side of the overlay's default spot from the screen edge.</summary>
-    public static PixelPoint DefaultPosition(PixelRect workArea, PixelSize size, OverlayPosition overlayPosition)
+    public static PixelPoint DefaultPosition(PixelRect workArea, PixelSize size, OverlayPosition overlayPosition, double scaling = 1)
     {
         var x = workArea.X + (workArea.Width - size.Width) / 2;
-        const int offset = ScreenEdgeInset + OverlayHeightAllowance + ScreenEdgeInset;
-        var y = overlayPosition == OverlayPosition.Top
-            ? workArea.Y + offset
-            : workArea.Bottom - offset - size.Height;
-        return new PixelPoint(x, y);
+        var offset = (int)Math.Round((ScreenEdgeInset + OverlayHeightAllowance + ScreenEdgeInset) * ValidScaling(scaling));
+        var sideOffset = (int)Math.Round((ScreenEdgeInset + OverlayWidthAllowance + ScreenEdgeInset) * ValidScaling(scaling));
+        var y = workArea.Y + (workArea.Height - size.Height) / 2;
+        switch (overlayPosition)
+        {
+            case OverlayPosition.Top: y = workArea.Y + offset; break;
+            case OverlayPosition.Left: x = workArea.X + sideOffset; break;
+            case OverlayPosition.Right: x = workArea.Right - sideOffset - size.Width; break;
+            default: y = workArea.Bottom - offset - size.Height; break;
+        }
+        return Fit(new PixelPoint(x, y), size, workArea).Position;
     }
 
     public static PixelSize ToPixels(int width, int height, double scaling)

@@ -408,6 +408,16 @@ public class App : Application
             }
 
             var overlay = services.GetRequiredService<DictationOverlayWindow>();
+            var overlayViewModel = services.GetRequiredService<DictationOverlayViewModel>();
+            overlayViewModel.OpenRecorderRequested += (_, _) => OpenFloatingControlPage("recorder");
+            overlayViewModel.OpenSettingsRequested += (_, _) => OpenFloatingControlPage("appearance");
+            void OpenFloatingControlPage(string name)
+            {
+                if (ShuttingDown)
+                    return;
+                ShowMainWindow(main);
+                FireAndForget(OpenSettingsPageAsync(main, SettingsPage.TryParse(name)!, pluginsReady, bootstrapFinished.Task));
+            }
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
 

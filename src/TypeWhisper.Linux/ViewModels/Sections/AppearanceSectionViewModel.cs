@@ -32,6 +32,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private OverlayWidgetOption? _selectedLeftWidget;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OverlayPositionHint))]
+    private bool _showFloatingControl;
+
+    [ObservableProperty]
     private OverlayPositionOption? _selectedOverlayPosition;
 
     [ObservableProperty]
@@ -106,6 +110,8 @@ public partial class AppearanceSectionViewModel : ObservableObject
     [
         new(OverlayPosition.Top, "Appearance.PositionTop"),
         new(OverlayPosition.Bottom, "Appearance.PositionBottom"),
+        new(OverlayPosition.Left, "Appearance.PositionLeft"),
+        new(OverlayPosition.Right, "Appearance.PositionRight"),
     ];
 
     public IReadOnlyList<LiveTextPlacementOption> LiveTextPlacements { get; } =
@@ -166,17 +172,19 @@ public partial class AppearanceSectionViewModel : ObservableObject
     public string PreviewBubbleAutoHideSecondsText =>
         Loc.Instance.GetString("Appearance.AutoHideSecondsValue", $"{PreviewBubbleAutoHideSeconds:0.##}");
 
+    public string OverlayPositionHint => Loc.Instance[ShowFloatingControl ? "Appearance.DockHint" : "Appearance.WindowPositionHint"];
+
     public bool IsOverlayPositionCustomized =>
-        _settings.Current.OverlayCustomLeft is not null
-        && _settings.Current.OverlayCustomTop is not null;
+        (_settings.Current.OverlayCustomLeft is not null && _settings.Current.OverlayCustomTop is not null)
+        || _settings.Current.OverlayPosition != OverlayPosition.Bottom
+        || _settings.Current.OverlayScreenName is not null
+        || (_settings.Current.OverlayScreenX is not null && _settings.Current.OverlayScreenY is not null);
 
     public string OverlayPositionStatusText =>
-        IsOverlayPositionCustomized
-            ? Loc.Instance.GetString(
-                "Appearance.CustomPositionStatus",
-                (int)Math.Round(_settings.Current.OverlayCustomLeft ?? 0),
-                (int)Math.Round(_settings.Current.OverlayCustomTop ?? 0))
-            : Loc.Instance["Appearance.UsingDefaultPosition"];
+        !_settings.Current.ShowFloatingControl && _settings.Current is { OverlayCustomLeft: { } left, OverlayCustomTop: { } top }
+            ? Loc.Instance.GetString("Appearance.CustomPositionStatus", (int)Math.Round(left), (int)Math.Round(top))
+            : Loc.Instance.GetString("Appearance.DockedPosition", SelectedOverlayPosition?.DisplayName ?? "",
+                _settings.Current.OverlayScreenName ?? Loc.Instance["Appearance.PrimaryDisplay"]);
 
     public bool PreviewLeftIsIndicator => SelectedLeftWidget?.Value == OverlayWidget.Indicator;
     public bool PreviewLeftIsWaveform => SelectedLeftWidget?.Value == OverlayWidget.Waveform;
@@ -196,7 +204,11 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Update(current => current with { OverlayCustomLeft = null, OverlayCustomTop = null });
+        _settings.Update(current => current with
+        {
+            OverlayCustomLeft = null, OverlayCustomTop = null, OverlayPosition = OverlayPosition.Bottom,
+            OverlayScreenName = null, OverlayScreenX = null, OverlayScreenY = null,
+        });
     }
 
     [RelayCommand(CanExecute = nameof(IsLiveTextWindowCustomized))]
@@ -261,6 +273,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(NotificationBodyPreview));
         OnPropertyChanged(nameof(PreviewBubbleAutoHideSecondsText));
         OnPropertyChanged(nameof(OverlayPositionStatusText));
+        OnPropertyChanged(nameof(OverlayPositionHint));
         OnPropertyChanged(nameof(LiveTextWindowPositionStatusText));
         OnPropertyChanged(nameof(LiveTextPreviewButtonText));
         OnPropertyChanged(nameof(PreviewLeftText));
@@ -308,6 +321,7 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     private void ApplySettings(AppSettings settings)
     {
+        ShowFloatingControl = settings.ShowFloatingControl;
         // An unknown stored value shows as Dark, the theme InterfaceThemeService applies for it.
         SelectedTheme =
             Themes.FirstOrDefault(option => option.Value == settings.InterfaceTheme)
@@ -384,6 +398,14 @@ public partial class AppearanceSectionViewModel : ObservableObject
         _settings.Update(current => current with { InterfaceTheme = value.Value });
     }
 
+    partial void OnShowFloatingControlChanged(bool value)
+    {
+        if (!_hydratingFromSettings && _settings.Current.ShowFloatingControl != value)
+        {
+            _settings.Update(current => current with { ShowFloatingControl = value });
+        }
+    }
+
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
     {
         if (_hydratingFromSettings || value is null || _settings.Current.OverlayPosition == value.Value)
@@ -391,7 +413,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Update(current => current with { OverlayPosition = value.Value });
+        _settings.Update(current => current with
+        {
+            OverlayPosition = value.Value, OverlayCustomLeft = null, OverlayCustomTop = null,
+        });
     }
 
     partial void OnSelectedLiveTextPlacementChanged(LiveTextPlacementOption? value)

@@ -2,6 +2,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Avalonia.Interactivity;
+using Avalonia.Platform;
 using System.ComponentModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -20,6 +23,10 @@ public partial class DictationOverlayWindow : Window
     private bool _programmaticPositionChange;
     private DispatcherTimer? _dragSaveTimer;
     private PixelPoint? _pendingDragPosition;
+    private readonly OverlayDockDrag _dockDrag = new();
+    private IPointer? _dockPointer;
+    private bool _changingDockCapture;
+    private readonly DispatcherTimer _launcherCollapseTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
 
     public DictationOverlayWindow()
     {
@@ -40,20 +47,45 @@ public partial class DictationOverlayWindow : Window
         Title = "TypeWhisper Overlay";
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
+        _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(() =>
+        {
+            if (!_settings.Current.ShowFloatingControl) CancelDockDrag();
+            ConfigureNativeWindow();
+            PositionOverlay();
+        });
 
         Opened += OnOverlayOpened;
         Closed += OnOverlayClosed;
         SizeChanged += (_, _) => PositionOverlay();
 
+        AddHandler(PointerPressedEvent, OnDockPressed, RoutingStrategies.Tunnel);
+        AddHandler(PointerMovedEvent, OnDockMoved, RoutingStrategies.Tunnel);
+        AddHandler(PointerReleasedEvent, OnDockReleased, RoutingStrategies.Tunnel);
         PointerPressed += OnUserPointerPressed;
         PointerReleased += OnUserPointerReleased;
         PointerCaptureLost += OnUserPointerCaptureLost;
         PositionChanged += OnUserPositionChanged;
+        PointerEntered += (_, _) =>
+        {
+            _launcherCollapseTimer.Stop();
+            _viewModel.SetLauncherExpanded(true);
+        };
+        PointerExited += (_, _) =>
+        {
+            if (_viewModel.ShowLauncher && !_dockDrag.IsPressed)
+                _launcherCollapseTimer.Start();
+        };
+        _launcherCollapseTimer.Tick += (_, _) =>
+        {
+            _launcherCollapseTimer.Stop();
+            if (!IsPointerOver && !_dockDrag.IsPressed)
+                _viewModel.SetLauncherExpanded(false);
+        };
     }
 
     private void OnOverlayOpened(object? sender, EventArgs e)
     {
+        ConfigureNativeWindow();
         PositionOverlay();
 
         // Recover from display changes (monitor hotplug, resolution change, resume from
@@ -67,8 +99,16 @@ public partial class DictationOverlayWindow : Window
         }
     }
 
+    private void ConfigureNativeWindow()
+    {
+        if (TryGetPlatformHandle() is { HandleDescriptor: "XID", Handle: var xid } && xid != IntPtr.Zero)
+            X11NonActivatingWindow.Apply((nuint)xid, _settings?.Current.ShowFloatingControl == true);
+    }
+
     private void OnOverlayClosed(object? sender, EventArgs e)
     {
+        _launcherCollapseTimer.Stop();
+        CancelDockDrag();
         if (Screens is { } screens)
         {
             screens.Changed -= OnScreensChanged;
@@ -77,6 +117,7 @@ public partial class DictationOverlayWindow : Window
 
     private void OnScreensChanged(object? sender, EventArgs e)
     {
+        CancelDockDrag();
         // Post so Avalonia has settled the new screen geometry before we re-measure work areas.
         Dispatcher.UIThread.Post(PositionOverlay);
     }
@@ -96,6 +137,7 @@ public partial class DictationOverlayWindow : Window
         switch (e.PropertyName)
         {
             case nameof(DictationOverlayViewModel.HasVisibleContent):
+                if (!_viewModel!.ShowLauncher) CancelDockDrag();
                 Dispatcher.UIThread.Post(UpdateWindowVisibility);
                 break;
             case nameof(DictationOverlayViewModel.PartialText):
@@ -108,10 +150,12 @@ public partial class DictationOverlayWindow : Window
                         if (string.IsNullOrWhiteSpace(partialText))
                         {
                             PartialPreviewScrollViewer?.ScrollToHome();
+                            CompactPartialPreviewScrollViewer?.ScrollToHome();
                         }
                         else
                         {
                             PartialPreviewScrollViewer?.ScrollToEnd();
+                            CompactPartialPreviewScrollViewer?.ScrollToEnd();
                         }
                     },
                     DispatcherPriority.Background);
@@ -279,16 +323,26 @@ public partial class DictationOverlayWindow : Window
         }
 
         // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Avalonia annotates Screens non-null, but it can be null before the platform window is realized (headless/early lifecycle); keep the defensive ?. consistent with the Screens?. access below.
-        var primaryScreen = Screens?.Primary;
+        var primaryScreen = Screens?.Primary ?? (Screens?.All is { Count: > 0 } available ? available[0] : null);
         if (primaryScreen is null)
         {
             return;
         }
 
-        var width = Math.Max(320, Bounds.Width);
-        var height = Math.Max(56, Bounds.Height);
+        var savedPoint = _settings.Current is { OverlayCustomLeft: { } left, OverlayCustomTop: { } top }
+            ? new PixelPoint((int)Math.Round(left), (int)Math.Round(top))
+            : (PixelPoint?)null;
+        var docking = _settings.Current.ShowFloatingControl;
+        var dockScreen = SelectDockScreen() ?? primaryScreen;
+        var sizingScreen = docking ? dockScreen
+            : savedPoint is { } point ? Screens?.ScreenFromPoint(point) ?? primaryScreen : primaryScreen;
+        MaxWidth = Math.Max(36, sizingScreen.WorkingArea.Width / sizingScreen.Scaling);
+        MaxHeight = Math.Max(36, sizingScreen.WorkingArea.Height / sizingScreen.Scaling);
+        var pixelSize = PixelSize.FromSize(Bounds.Size, sizingScreen.Scaling);
+        var width = Math.Max(1, pixelSize.Width);
+        var height = Math.Max(1, pixelSize.Height);
 
-        if (_settings.Current is { OverlayCustomLeft: { } customLeft, OverlayCustomTop: { } customTop })
+        if (!docking && _settings.Current is { OverlayCustomLeft: { } customLeft, OverlayCustomTop: { } customTop })
         {
             // Clamp to the screen the saved point is on, not always primary — otherwise
             // dragging to a secondary monitor would snap back on the debounced save.
@@ -299,7 +353,6 @@ public partial class DictationOverlayWindow : Window
                 (int)Math.Round(customTop));
             var targetScreen = Screens?.ScreenFromPoint(customPoint) ?? primaryScreen;
             var targetWorkArea = targetScreen.WorkingArea;
-
             var (clampedLeft, clampedTop) = AppSettings.ClampOverlayPositionToWorkArea(
                 customLeft,
                 customTop,
@@ -322,14 +375,12 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        var workArea = primaryScreen.WorkingArea;
-        var configuredPosition = DictationOverlayPlacementState.ComputeConfiguredPosition(
+        var workArea = sizingScreen.WorkingArea;
+        var configuredPosition = OverlayDocking.ComputePosition(
             _settings.Current.OverlayPosition,
             workArea,
-            new PixelSize(
-                (int)Math.Ceiling(width),
-                (int)Math.Ceiling(height)
-            )
+            new PixelSize(width, height),
+            sizingScreen.Scaling
         );
 
         SetPositionProgrammatically(
@@ -339,6 +390,89 @@ public partial class DictationOverlayWindow : Window
                 Position
             )
         );
+    }
+
+    private Screen? SelectDockScreen()
+    {
+        var screens = Screens?.All;
+        if (screens is not { Count: > 0 } || _settings is null) return null;
+        var settings = _settings.Current;
+        if (settings.OverlayScreenName is null && settings.OverlayScreenX is null
+            && settings is { OverlayCustomLeft: { } left, OverlayCustomTop: { } top })
+            return Screens?.ScreenFromPoint(new PixelPoint((int)Math.Round(left), (int)Math.Round(top)));
+        var index = OverlayDocking.SelectScreen(screens.Select(s => ((string?)s.DisplayName, s.Bounds, s.IsPrimary)).ToArray(),
+            settings.OverlayScreenName, settings.OverlayScreenX, settings.OverlayScreenY);
+        return index >= 0 ? screens[index] : null;
+    }
+
+    private void OnDockPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_viewModel?.ShowLauncher != true || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+            || e.Source is not Visual source
+            || !(source == ExpandLauncherButton || source.GetVisualAncestors().Contains(ExpandLauncherButton))) return;
+        _dockDrag.Press(this.PointToScreen(e.GetPosition(this)), Position, RenderScaling);
+        _dockPointer = e.Pointer;
+        _launcherCollapseTimer.Stop();
+    }
+
+    private Screen? ScreenForDrop(PixelPoint point)
+    {
+        var screens = Screens?.All;
+        if (screens is not { Count: > 0 }) return null;
+        var index = OverlayDocking.NearestScreen(screens.Select(s => s.Bounds).ToArray(), point);
+        return index >= 0 ? screens[index] : null;
+    }
+
+    private void OnDockMoved(object? sender, PointerEventArgs e)
+    {
+        if (_dockPointer != e.Pointer || !_dockDrag.IsPressed) return;
+        var point = this.PointToScreen(e.GetPosition(this));
+        if (_dockDrag.Move(point) is not { } position) return;
+        _userDragging = true;
+        _changingDockCapture = true;
+        try { e.Pointer.Capture(this); }
+        finally { _changingDockCapture = false; }
+        SetPositionProgrammatically(position);
+        if (ScreenForDrop(point) is { } screen)
+            _viewModel!.DockTargetEdge = OverlayDocking.NearestEdge(point, screen.WorkingArea, _settings!.Current.OverlayPosition);
+        e.Handled = true;
+    }
+
+    private void OnDockReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (_dockPointer != e.Pointer || !_dockDrag.IsPressed) return;
+        var point = this.PointToScreen(e.GetPosition(this));
+        var dragged = _dockDrag.Release();
+        _dockPointer = null;
+        _userDragging = false;
+        _viewModel!.DockTargetEdge = null;
+        if (!dragged) return;
+        e.Handled = true;
+        e.Pointer.Capture(null);
+        if (ScreenForDrop(point) is { } screen)
+        {
+            var edge = OverlayDocking.NearestEdge(point, screen.WorkingArea, _settings!.Current.OverlayPosition);
+            _settings.Update(current => current with
+            {
+                OverlayPosition = edge, OverlayCustomLeft = null, OverlayCustomTop = null,
+                OverlayScreenName = screen.DisplayName, OverlayScreenX = screen.Bounds.X, OverlayScreenY = screen.Bounds.Y,
+            });
+        }
+        PositionOverlay();
+        if (!IsPointerOver) _launcherCollapseTimer.Start();
+    }
+
+    private void CancelDockDrag()
+    {
+        if (!_dockDrag.IsPressed) return;
+        var origin = _dockDrag.Origin;
+        _dockDrag.Release();
+        var pointer = _dockPointer;
+        _dockPointer = null;
+        _userDragging = false;
+        _viewModel!.DockTargetEdge = null;
+        pointer?.Capture(null);
+        if (IsVisible) SetPositionProgrammatically(origin);
     }
 
     private List<PixelRect> CollectScreenBounds()
@@ -383,7 +517,8 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_settings is null || ActionResultButton?.IsPointerOver == true)
+        if (_settings is null || _settings.Current.ShowFloatingControl || e.Source is Visual visual
+            && (visual is Button || visual.GetVisualAncestors().OfType<Button>().Any()))
         {
             return;
         }
@@ -404,6 +539,8 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
+        if (_changingDockCapture) return;
+        if (_dockDrag.IsPressed) CancelDockDrag();
         EndUserDrag();
     }
 
@@ -423,7 +560,7 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPositionChanged(object? sender, PixelPointEventArgs e)
     {
-        if (_programmaticPositionChange || _settings is null)
+        if (_programmaticPositionChange || _settings is null || _settings.Current.ShowFloatingControl)
         {
             return;
         }
@@ -457,7 +594,7 @@ public partial class DictationOverlayWindow : Window
     {
         _dragSaveTimer?.Stop();
 
-        if (_settings is null || _pendingDragPosition is null)
+        if (_settings is null || _settings.Current.ShowFloatingControl || _pendingDragPosition is null)
         {
             return;
         }
@@ -479,8 +616,6 @@ public partial class DictationOverlayWindow : Window
 /// </summary>
 internal sealed class DictationOverlayPlacementState
 {
-    private const int ScreenEdgeInset = 12;
-
     public bool IsShown { get; private set; }
 
     public void Show()
@@ -506,20 +641,6 @@ internal sealed class DictationOverlayPlacementState
         return IsShown
             ? configuredPosition
             : ComputeParkedPosition(screenBounds, currentPosition);
-    }
-
-    public static PixelPoint ComputeConfiguredPosition(
-        OverlayPosition overlayPosition,
-        PixelRect workArea,
-        PixelSize overlaySize
-    )
-    {
-        var x = workArea.X + (workArea.Width - overlaySize.Width) / 2;
-        var y = overlayPosition == OverlayPosition.Top
-            ? workArea.Y + ScreenEdgeInset
-            : workArea.Bottom - overlaySize.Height - ScreenEdgeInset;
-
-        return new PixelPoint(x, y);
     }
 
     private static PixelPoint ComputeParkedPosition(

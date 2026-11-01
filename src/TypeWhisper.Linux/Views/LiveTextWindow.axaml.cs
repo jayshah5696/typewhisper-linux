@@ -253,7 +253,8 @@ public partial class LiveTextWindow : Window
         }
 
         // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- Screens can be null before the platform window is realized (see DictationOverlayWindow).
-        if (Screens?.Primary is not { } primary)
+        var primary = Screens?.Primary ?? (Screens?.All is { Count: > 0 } available ? available[0] : null);
+        if (primary is null)
         {
             return;
         }
@@ -266,9 +267,15 @@ public partial class LiveTextWindow : Window
         // Fit to the screen holding most of the saved window, so an edge hanging past a monitor
         // doesn't move it; primary when it's on no screen (unplugged).
         var screen = primary;
+        if (saved is null && settings.ShowFloatingControl && Screens?.All is { Count: > 0 } candidates)
+        {
+            var dockIndex = OverlayDocking.SelectScreen(candidates.Select(s => ((string?)s.DisplayName, s.Bounds, s.IsPrimary)).ToArray(),
+                settings.OverlayScreenName, settings.OverlayScreenX, settings.OverlayScreenY);
+            if (dockIndex >= 0) screen = candidates[dockIndex];
+        }
         if (saved is { } point)
         {
-            var all = Screens.All.ToList();
+            var all = Screens?.All.ToList() ?? [];
             var index = LiveTextWindowPlacement.IndexOfMostOverlapped(
                 all.Select(candidate => (candidate.Bounds, candidate.Scaling)).ToList(),
                 point,
@@ -285,7 +292,7 @@ public partial class LiveTextWindow : Window
             settings.LiveTextWindowHeight,
             screen.Scaling);
         var position = saved
-                       ?? LiveTextWindowPlacement.DefaultPosition(screen.WorkingArea, size, settings.OverlayPosition);
+                       ?? LiveTextWindowPlacement.DefaultPosition(screen.WorkingArea, size, settings.OverlayPosition, screen.Scaling);
         SetBounds(LiveTextWindowPlacement.Fit(position, size, screen.WorkingArea), screen.Scaling);
     }
 

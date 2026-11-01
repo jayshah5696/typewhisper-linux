@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        xmlns:icons="using:FluentIcons.Avalonia"
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.DictationOverlayWindow"
         x:DataType="vm:DictationOverlayViewModel"
@@ -15,12 +16,118 @@
         ShowActivated="False"
         Topmost="True"
         CanResize="False"
+        Focusable="False"
         SizeToContent="WidthAndHeight">
+    <Window.Styles>
+        <Style Selector="Button.overlay-action">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="#303030" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="MinWidth" Value="40" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.overlay-action:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#484848" />
+        </Style>
+        <Style Selector="Path.finishing-spinner.active">
+            <Style.Animations>
+                <Animation Duration="0:0:1" IterationCount="Infinite">
+                    <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+                    <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360" /></KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </Window.Styles>
     <!-- No Margin: a transparent band around the pill renders as a milky white
          haze on NVIDIA + XWayland (the compositor mis-composites the window's
          clear pixels), so the window hugs the pill exactly. The overlay is
          already inset from the screen edge by PositionOverlay. -->
     <Grid Cursor="SizeAll" IsVisible="{Binding HasVisibleContent}">
+        <Border Background="#F0181818" CornerRadius="20" Padding="4"
+                IsVisible="{Binding ShowLauncher}">
+            <Grid>
+            <Grid ColumnDefinitions="Auto,Auto,Auto" ColumnSpacing="{Binding LauncherSpacing}"
+                  IsVisible="{Binding !IsDockPreviewVisible}">
+                <Button Grid.Column="{Binding RecorderColumn}" Classes="overlay-action" Command="{Binding OpenRecorderCommand}"
+                        IsVisible="{Binding ShowLauncherActions}"
+                        AutomationProperties.Name="{loc:Str Recorder.Title}">
+                    <icons:SymbolIcon Symbol="Record" FontSize="18" />
+                </Button>
+                <!-- Keep the hovered button alive while its neighbors appear. Replacing it
+                     loses pointer-over state and can collapse the toolbar during a click. -->
+                <Button x:Name="ExpandLauncherButton" Grid.Column="{Binding PrimaryColumn}" Classes="overlay-action"
+                        Width="{Binding LauncherButtonWidth}" Height="{Binding LauncherButtonHeight}"
+                        MinWidth="0" MinHeight="0" Padding="0"
+                        Command="{Binding ActivateLauncherCommand}"
+                        AutomationProperties.Name="{Binding LauncherActionLabel}">
+                    <Grid>
+                        <Border x:Name="QuietMarker" Width="{Binding QuietMarkWidth}" Height="{Binding QuietMarkHeight}"
+                                Background="#1593F5" CornerRadius="2" IsVisible="{Binding ShowCompactLauncher}" />
+                        <icons:SymbolIcon Symbol="Mic" FontSize="16" IsVisible="{Binding ShowLauncherActions}" />
+                    </Grid>
+                </Button>
+                <Button Grid.Column="{Binding SettingsColumn}" Classes="overlay-action" Command="{Binding OpenSettingsCommand}"
+                        IsVisible="{Binding ShowLauncherActions}"
+                        AutomationProperties.Name="{loc:Str Tray.Settings}">
+                    <icons:SymbolIcon Symbol="Settings" FontSize="18" />
+                </Button>
+            </Grid>
+            <TextBlock Text="{Binding DockTargetText}" FontSize="12" Foreground="White" Margin="8,4"
+                       TextWrapping="Wrap" MaxWidth="200" IsVisible="{Binding IsDockPreviewVisible}" />
+            </Grid>
+        </Border>
+        <Border Background="#F0181818" CornerRadius="18" Padding="7,4"
+                IsVisible="{Binding ShowCompactWorkflow}">
+            <StackPanel Spacing="4">
+            <Grid ColumnDefinitions="64,28,64" ColumnSpacing="4" Height="28" HorizontalAlignment="Center">
+                <StackPanel Grid.Column="{Binding WaveformColumn}" Orientation="Horizontal" Spacing="5"
+                            VerticalAlignment="Center" IsVisible="{Binding ShowRecordingControls}">
+                    <StackPanel Orientation="Horizontal" Spacing="2" Height="18" VerticalAlignment="Center">
+                        <Border Width="3" Height="{Binding WaveformBar0Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
+                        <Border Width="3" Height="{Binding WaveformBar1Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
+                        <Border Width="3" Height="{Binding WaveformBar2Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
+                        <Border Width="3" Height="{Binding WaveformBar3Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
+                        <Border Width="3" Height="{Binding WaveformBar4Height}" Background="#1593F5" CornerRadius="2" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding RecordingTimerText}" FontSize="10" Foreground="White" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button Grid.Column="{Binding PrimaryColumn}" Classes="overlay-action" Width="26" Height="26"
+                        MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Center"
+                        IsVisible="{Binding ShowRecordingControls}" Command="{Binding StopDictationCommand}"
+                        AutomationProperties.Name="{loc:Str Overlay.StopDictation}">
+                    <Border Width="9" Height="9" CornerRadius="2" Background="White" />
+                </Button>
+                <StackPanel Grid.Column="{Binding BusyStatusColumn}" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6"
+                            VerticalAlignment="Center" IsVisible="{Binding ShowProcessingControls}">
+                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="#1593F5" StrokeThickness="3"
+                          Data="M 12,2 A 10,10 0 1 1 2,12" RenderTransformOrigin="50%,50%"
+                          Classes="finishing-spinner" Classes.active="{Binding ShowProcessingControls}">
+                        <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
+                    </Path>
+                    <TextBlock Text="{loc:Str Overlay.Finishing}" FontSize="12" Foreground="White" />
+                </StackPanel>
+                <Button Grid.Column="{Binding CancelColumn}" Classes="overlay-action" Width="26" Height="26"
+                        MinWidth="26" MinHeight="26" Padding="0" HorizontalAlignment="Right"
+                        Command="{Binding CancelDictationCommand}" AutomationProperties.Name="{loc:Str Common.Cancel}">
+                    <TextBlock Text="×" FontSize="18" LineHeight="20" />
+                </Button>
+            </Grid>
+            <ScrollViewer x:Name="CompactPartialPreviewScrollViewer" MaxHeight="120"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding ShowInlinePartialText}">
+                <TextBlock Text="{Binding PartialText}" TextWrapping="Wrap" MaxWidth="340"
+                           FontSize="12" Foreground="#E6FFFFFF" />
+            </ScrollViewer>
+            </StackPanel>
+        </Border>
+        <Border Background="#F0181818" CornerRadius="12" Width="{Binding QuietWidth}" Height="{Binding QuietHeight}"
+                IsVisible="{Binding ShowSuccessConfirmation}" AutomationProperties.Name="{loc:Str Overlay.Delivered}">
+            <Path Width="14" Height="14" Stretch="Uniform" Stroke="#66E3A2" StrokeThickness="2"
+                  Data="M 2,8 L 6,12 L 14,3" />
+        </Border>
         <!-- No BorderBrush: the translucent-white 1px stroke reads as jagged
              white on the rounded caps under NVIDIA + XWayland, where the
              anti-aliased curved edge is mis-composited. The dark fill alone
@@ -29,7 +136,7 @@
                 CornerRadius="22"
                 MinWidth="320"
                 Padding="14,10"
-                IsVisible="{Binding IsOverlayVisible}">
+                IsVisible="{Binding ShowLegacyWorkflow}">
             <StackPanel Spacing="8">
                 <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
                     <Border Width="{Binding IndicatorSize}"
@@ -152,14 +259,17 @@
         <Border Background="#F0181818"
                 CornerRadius="18"
                 Padding="14,7"
-                IsVisible="{Binding ShowFeedback}">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                IsVisible="{Binding ShowDetailedFeedback}">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
                 <TextBlock Text="{Binding FeedbackText}"
                            Foreground="{Binding FeedbackForeground}"
                            TextTrimming="CharacterEllipsis"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
-                           FontSize="11" />
+                           FontSize="11" MaxWidth="360" TextWrapping="Wrap" />
+                <Button Grid.Column="2" Padding="8,2" Cursor="Hand" Focusable="False"
+                        Command="{Binding CopyRecoveryCommand}" IsVisible="{Binding HasRecoveryText}"
+                        Content="{loc:Str Overlay.CopyText}" />
                 <Button x:Name="ActionResultButton"
                         Grid.Column="1"
                         Padding="8,2"

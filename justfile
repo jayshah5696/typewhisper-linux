@@ -93,6 +93,18 @@ ui-check out=("artifacts/verification/" + `date +%F` + "-ui"):
 ui-live out=("artifacts/verification/" + `date +%F` + "-hidden-desktop"):
     uv run --no-project scripts/verification/hidden_desktop.py --out "{{out}}"
 
+# Hover/click the optional floating control and dictate into a private GTK editor.
+verify-flow-control out=("artifacts/verification/" + `date +%F-%H%M%S` + "-flow-control") desktop="x11":
+    uv run --no-project scripts/verification/flow_control_smoke.py --out "{{out}}" --desktop "{{desktop}}"
+
+# Drag to all four edges, restart, cancel finishing, and recover a clipboard failure.
+verify-quiet-dock out=("artifacts/verification/" + `date +%F-%H%M%S` + "-quiet-dock") desktop="mutter":
+    uv run --no-project scripts/verification/quiet_dock_smoke.py --out "{{out}}" --desktop "{{desktop}}"
+
+# Real clicks beside the control, after collapse, and in its former disabled area.
+verify-overlay-clicks out=("artifacts/verification/" + `date +%F-%H%M%S` + "-overlay-clicks") desktop="mutter":
+    uv run --no-project scripts/verification/overlay_click_through.py --out "{{out}}" --desktop "{{desktop}}"
+
 # Public audio to History, recovery UI, and clipboard read-back in a private desktop.
 # Requires xclip, xdotool, and system Python GI bindings. Never touches the user's clipboard.
 verify-recovery out=("artifacts/verification/" + `date +%F` + "-recovery-e2e"):

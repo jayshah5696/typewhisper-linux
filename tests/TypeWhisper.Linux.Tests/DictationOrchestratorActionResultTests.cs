@@ -6,6 +6,16 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationOrchestratorActionResultTests
 {
     [Fact]
+    public void FailedDelivery_KeepsRecoveryTextAndDoesNotClaimSuccess()
+    {
+        var state = DictationOrchestrator.FeedbackState(DictationOverlayState.Hidden, "Insertion failed", true,
+            deliverySucceeded: true, recoveryText: "Words to recover");
+        Assert.False(state.DeliverySucceeded);
+        Assert.Equal("Words to recover", state.RecoveryText);
+        Assert.Equal(10000, state.FeedbackDurationMilliseconds);
+    }
+
+    [Fact]
     public void FeedbackState_preserves_plugin_terminal_message_and_presentation_fields()
     {
         var result = new ActionPluginExecutionResult(

@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 
@@ -29,6 +30,40 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private bool _applyingCoordinatorPresentation;
     private long _lastCoordinatorRevision;
+    private readonly Func<Task>? _startDictation;
+    private readonly Func<Task>? _stopDictation;
+    private readonly Func<Task>? _cancelDictation;
+    private bool _startingControl;
+    private bool _dictationOwnsPresentation;
+    private bool _deliverySucceeded;
+    private OverlayPresentationToken? _presentedToken;
+    private readonly HashSet<OverlayPresentationToken> _stoppingControls = [];
+    private readonly HashSet<OverlayPresentationToken> _cancelingControls = [];
+    private readonly Func<OverlayPresentationToken, Task>? _stopPresentedWork;
+    private readonly Func<OverlayPresentationToken, Task>? _cancelPresentedWork;
+    private readonly Func<string, Task<bool>>? _copyRecoveryText;
+    private string? _recoveryText;
+    private bool _copyRunning;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCompactLauncher))]
+    [NotifyPropertyChangedFor(nameof(ShowLauncherActions))]
+    [NotifyPropertyChangedFor(nameof(LauncherButtonHeight))]
+    [NotifyPropertyChangedFor(nameof(LauncherButtonWidth))]
+    [NotifyPropertyChangedFor(nameof(LauncherSpacing))]
+    [NotifyPropertyChangedFor(nameof(LauncherActionLabel))]
+    private bool _isLauncherExpanded;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDockPreviewVisible))]
+    [NotifyPropertyChangedFor(nameof(DockTargetText))]
+    private OverlayPosition? _dockTargetEdge;
+
+    public bool IsDockPreviewVisible => DockTargetEdge is not null;
+    public string DockTargetText => DockTargetEdge is { } edge
+        ? Loc.Instance.GetString("Overlay.DockTarget", Loc.Instance["Appearance.Position" + edge]) : "";
+    public double QuietWidth => IsSideDock ? 18 : 36;
+    public double QuietHeight => IsSideDock ? 36 : 18;
 
     [ObservableProperty]
     private string? _activeAppName;
@@ -79,14 +114,23 @@ public partial class DictationOverlayViewModel : ObservableObject
         ISettingsService settings,
         IDetectionFailureTracker failureTracker,
         UrlLauncher urlLauncher,
-        OverlayCoordinator overlayCoordinator
+        OverlayCoordinator overlayCoordinator,
+        DictationOrchestrator dictation,
+        TextInsertionService insertion
     )
         : this(
             settings,
             static action => Dispatcher.UIThread.Post(action),
             openUrl: urlLauncher.Open,
             overlayCoordinator: overlayCoordinator,
-            failureTracker: failureTracker
+            failureTracker: failureTracker,
+            startDictation: async () => { await dictation.StartAsync(); },
+            stopDictation: dictation.StopAsync,
+            cancelDictation: dictation.CancelAsync,
+            stopPresentedWork: dictation.StopOverlayAsync,
+            cancelPresentedWork: dictation.CancelOverlayAsync,
+            copyRecoveryText: async text => await insertion.InsertTextAsync(new TextInsertionRequest(text, AutoPaste: false))
+                == InsertionResult.CopiedToClipboard
         )
     {
         SubscribeToAudioLevels(audio);
@@ -100,10 +144,22 @@ public partial class DictationOverlayViewModel : ObservableObject
         AudioRecordingService? audio = null,
         Func<string?, bool>? openUrl = null,
         OverlayCoordinator? overlayCoordinator = null,
-        IDetectionFailureTracker? failureTracker = null
+        IDetectionFailureTracker? failureTracker = null,
+        Func<Task>? startDictation = null,
+        Func<Task>? stopDictation = null,
+        Func<Task>? cancelDictation = null,
+        Func<OverlayPresentationToken, Task>? stopPresentedWork = null,
+        Func<OverlayPresentationToken, Task>? cancelPresentedWork = null,
+        Func<string, Task<bool>>? copyRecoveryText = null
     )
     {
         _settings = settings;
+        _startDictation = startDictation;
+        _stopDictation = stopDictation;
+        _cancelDictation = cancelDictation;
+        _stopPresentedWork = stopPresentedWork;
+        _cancelPresentedWork = cancelPresentedWork;
+        _copyRecoveryText = copyRecoveryText;
         _postToUiThread = postToUiThread;
         _openUrl = openUrl ?? (_ => false);
         _overlayCoordinator = overlayCoordinator;
@@ -154,6 +210,11 @@ public partial class DictationOverlayViewModel : ObservableObject
         }
 
         _settings.SettingsChanged += _ => _postToUiThread(RefreshOverlaySlots);
+        Loc.Instance.LanguageChanged += (_, _) => _postToUiThread(() =>
+        {
+            OnPropertyChanged(nameof(LauncherActionLabel));
+            OnPropertyChanged(nameof(DockTargetText));
+        });
     }
 
     private void SubscribeToAudioLevels(AudioRecordingService audio)
@@ -169,7 +230,180 @@ public partial class DictationOverlayViewModel : ObservableObject
         };
     }
 
-    public bool HasVisibleContent => IsOverlayVisible || ShowFeedback;
+    public bool HasVisibleContent => IsOverlayVisible || ShowFeedback || ShowLauncher;
+
+    public bool ShowLauncher => _settings.Current.ShowFloatingControl && !IsOverlayVisible && !ShowFeedback;
+    public bool ShowCompactLauncher => ShowLauncher && !IsLauncherExpanded;
+    public bool ShowLauncherActions => ShowLauncher && IsLauncherExpanded;
+    public bool ShowRecordingControls => _settings.Current.ShowFloatingControl && _dictationOwnsPresentation && IsOverlayVisible && IsRecording;
+    public bool ShowProcessingControls => _settings.Current.ShowFloatingControl && _dictationOwnsPresentation && IsOverlayVisible && !IsRecording && !ShowFeedback;
+    public bool ShowCompactWorkflow => ShowRecordingControls || ShowProcessingControls;
+    public bool ShowLegacyWorkflow => IsOverlayVisible && !ShowFeedback && !ShowCompactWorkflow;
+    public bool ShowSuccessConfirmation => _settings.Current.ShowFloatingControl && ShowFeedback && _deliverySucceeded
+        && !FeedbackIsError && !HasActionResultUrl;
+    public bool ShowDetailedFeedback => ShowFeedback && !ShowSuccessConfirmation;
+    public bool IsSideDock => _settings.Current.OverlayPosition is OverlayPosition.Left or OverlayPosition.Right;
+    public double QuietMarkWidth => IsSideDock ? 3 : 18;
+    public double QuietMarkHeight => IsSideDock ? 18 : 3;
+    public double LauncherButtonWidth => IsLauncherExpanded ? 44 : IsSideDock ? 10 : 28;
+    public double LauncherSpacing => IsLauncherExpanded ? 4 : 0;
+    public int PrimaryColumn => _settings.Current.OverlayPosition switch { OverlayPosition.Left => 0, OverlayPosition.Right => 2, _ => 1 };
+    public int RecorderColumn => _settings.Current.OverlayPosition == OverlayPosition.Left ? 1 : 0;
+    public int SettingsColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 1 : 2;
+    public int WaveformColumn => IsSideDock ? 1 : 0;
+    public int CancelColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 0 : 2;
+    public int BusyStatusColumn => _settings.Current.OverlayPosition == OverlayPosition.Right ? 1 : 0;
+    public bool HasRecoveryText => ShowDetailedFeedback && !string.IsNullOrWhiteSpace(_recoveryText);
+    private bool CanCopyRecovery() => HasRecoveryText && !_copyRunning && _copyRecoveryText is not null;
+
+    [RelayCommand(CanExecute = nameof(CanCopyRecovery))]
+    private async Task CopyRecovery()
+    {
+        if (!CanCopyRecovery()) return;
+        var text = _recoveryText!;
+        var revision = _lastCoordinatorRevision;
+        _copyRunning = true;
+        CopyRecoveryCommand.NotifyCanExecuteChanged();
+        try
+        {
+            bool success;
+            try { success = await _copyRecoveryText!(text); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"[FloatingControl] Recovery copy failed: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+                success = false;
+            }
+            if (revision != _lastCoordinatorRevision || !ShowDetailedFeedback) return;
+            var message = Loc.Instance[success ? "Overlay.RecoveryCopied" : "Overlay.RecoveryCopyFailed"];
+            if (_overlayCoordinator is not null)
+                _overlayCoordinator.ReplacePresentedFeedback(state => state with
+                {
+                    FeedbackText = message, FeedbackIsError = !success, DeliverySucceeded = false,
+                    RecoveryText = success ? null : text,
+                });
+            else
+            {
+                FeedbackText = message;
+                FeedbackIsError = !success;
+                _recoveryText = success ? null : text;
+            }
+        }
+        finally
+        {
+            _copyRunning = false;
+            RefreshLauncherState();
+        }
+    }
+
+    public event EventHandler? OpenRecorderRequested;
+    public event EventHandler? OpenSettingsRequested;
+
+    public void SetLauncherExpanded(bool expanded) => IsLauncherExpanded = expanded && ShowLauncher;
+
+    public double LauncherButtonHeight => IsLauncherExpanded ? 28 : IsSideDock ? 28 : 10;
+    public string LauncherActionLabel => Loc.Instance[IsLauncherExpanded ? "Overlay.StartDictation" : "Overlay.ShowControls"];
+
+    [RelayCommand(CanExecute = nameof(CanStartDictation))]
+    private async Task ActivateLauncher()
+    {
+        if (!CanStartDictation())
+            return;
+        if (!IsLauncherExpanded)
+            SetLauncherExpanded(true);
+        else
+            await StartDictation();
+    }
+
+    [RelayCommand]
+    private void OpenRecorder() => OpenRecorderRequested?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private void OpenSettings() => OpenSettingsRequested?.Invoke(this, EventArgs.Empty);
+
+    private bool CanStartDictation() => ShowLauncher && !_startingControl && _startDictation is not null;
+    private bool CanStopDictation() => ShowRecordingControls && _presentedToken is { } owner && !_stoppingControls.Contains(owner)
+        && (_stopDictation is not null || _stopPresentedWork is not null);
+    private bool CanCancelDictation() => ShowCompactWorkflow && _presentedToken is { } owner && !_cancelingControls.Contains(owner)
+        && (_cancelDictation is not null || _cancelPresentedWork is not null);
+
+    [RelayCommand(CanExecute = nameof(CanStartDictation))]
+    private async Task StartDictation()
+    {
+        if (CanStartDictation())
+            await RunControlCommandAsync(_startDictation!);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanStopDictation), AllowConcurrentExecutions = true)]
+    private async Task StopDictation()
+    {
+        if (CanStopDictation() && _presentedToken is { } owner)
+            await RunControlCommandAsync(() => _stopPresentedWork?.Invoke(owner) ?? _stopDictation!(), owner, _stoppingControls);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCancelDictation), AllowConcurrentExecutions = true)]
+    private async Task CancelDictation()
+    {
+        if (CanCancelDictation() && _presentedToken is { } owner)
+            await RunControlCommandAsync(() => _cancelPresentedWork?.Invoke(owner) ?? _cancelDictation!(), owner, _cancelingControls);
+    }
+
+    private async Task RunControlCommandAsync(Func<Task> command, OverlayPresentationToken? owner = null,
+        HashSet<OverlayPresentationToken>? lane = null)
+    {
+        if (lane is not null && owner is not null) lane.Add(owner);
+        else _startingControl = true;
+        RefreshLauncherState();
+        try
+        {
+            await command();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"[FloatingControl] {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            if (owner is null || ReferenceEquals(owner, _presentedToken))
+                ShowSystemErrorFeedback(Loc.Instance["Overlay.ControlFailed"]);
+        }
+        finally
+        {
+            if (lane is not null && owner is not null) lane.Remove(owner);
+            else _startingControl = false;
+            RefreshLauncherState();
+        }
+    }
+
+    private void RefreshLauncherState()
+    {
+        if (!ShowLauncher)
+            IsLauncherExpanded = false;
+        OnPropertyChanged(nameof(ShowLauncher));
+        OnPropertyChanged(nameof(ShowCompactLauncher));
+        OnPropertyChanged(nameof(ShowLauncherActions));
+        OnPropertyChanged(nameof(ShowRecordingControls));
+        OnPropertyChanged(nameof(ShowProcessingControls));
+        OnPropertyChanged(nameof(ShowCompactWorkflow));
+        OnPropertyChanged(nameof(ShowLegacyWorkflow));
+        OnPropertyChanged(nameof(ShowSuccessConfirmation));
+        OnPropertyChanged(nameof(ShowDetailedFeedback));
+        OnPropertyChanged(nameof(QuietMarkWidth));
+        OnPropertyChanged(nameof(QuietMarkHeight));
+        OnPropertyChanged(nameof(LauncherButtonWidth));
+        OnPropertyChanged(nameof(LauncherButtonHeight));
+        OnPropertyChanged(nameof(PrimaryColumn));
+        OnPropertyChanged(nameof(RecorderColumn));
+        OnPropertyChanged(nameof(SettingsColumn));
+        OnPropertyChanged(nameof(WaveformColumn));
+        OnPropertyChanged(nameof(CancelColumn));
+        OnPropertyChanged(nameof(BusyStatusColumn));
+        OnPropertyChanged(nameof(HasRecoveryText));
+        CopyRecoveryCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(QuietWidth));
+        OnPropertyChanged(nameof(QuietHeight));
+        OnPropertyChanged(nameof(HasVisibleContent));
+        ActivateLauncherCommand.NotifyCanExecuteChanged();
+        StartDictationCommand.NotifyCanExecuteChanged();
+        StopDictationCommand.NotifyCanExecuteChanged();
+        CancelDictationCommand.NotifyCanExecuteChanged();
+    }
 
     public bool HasActionResultUrl => !string.IsNullOrWhiteSpace(ActionResultUrl);
 
@@ -232,15 +466,17 @@ public partial class DictationOverlayViewModel : ObservableObject
         return Math.Sqrt(Math.Clamp(level, 0f, 1f));
     }
 
+    partial void OnIsRecordingChanged(bool value) => RefreshLauncherState();
+
     partial void OnIsOverlayVisibleChanged(bool value)
     {
-        OnPropertyChanged(nameof(HasVisibleContent));
+        RefreshLauncherState();
         UpdateClockTimer();
     }
 
     partial void OnShowFeedbackChanged(bool value)
     {
-        OnPropertyChanged(nameof(HasVisibleContent));
+        RefreshLauncherState();
 
         _feedbackTimer.Stop();
         if (value && !_applyingCoordinatorPresentation)
@@ -393,6 +629,8 @@ public partial class DictationOverlayViewModel : ObservableObject
         }
 
         _lastCoordinatorRevision = presentation.Revision;
+        _dictationOwnsPresentation = presentation.Requester == OverlayRequester.Dictation;
+        _presentedToken = presentation.Token;
         _feedbackTimer.Stop();
         _applyingCoordinatorPresentation = true;
         try
@@ -411,6 +649,8 @@ public partial class DictationOverlayViewModel : ObservableObject
     )
     {
         var wasShowingFeedback = ShowFeedback;
+        _deliverySucceeded = state.DeliverySucceeded;
+        _recoveryText = state.RecoveryText;
         IsOverlayVisible = state.IsOverlayVisible;
         FeedbackIsError = state.FeedbackIsError;
         FeedbackDurationMilliseconds = state.FeedbackDurationMilliseconds;
@@ -480,6 +720,7 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     private void RefreshOverlaySlots()
     {
+        RefreshLauncherState();
         OnPropertyChanged(nameof(ShowLeftIndicator));
         OnPropertyChanged(nameof(ShowLeftWaveform));
         OnPropertyChanged(nameof(ShowLeftText));

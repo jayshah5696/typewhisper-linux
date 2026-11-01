@@ -75,6 +75,15 @@ public sealed class LiveTextWindowTests
     }
 
     [Theory]
+    [InlineData(OverlayPosition.Left, 324)]
+    [InlineData(OverlayPosition.Right, 1056)]
+    public void SideDock_LiveTextStaysInsideTheChosenEdgeWithoutCoveringTheControl(OverlayPosition edge, int x)
+    {
+        var position = LiveTextWindowPlacement.DefaultPosition(new PixelRect(100, 200, 1600, 900), new PixelSize(420, 220), edge);
+        Assert.Equal(new PixelPoint(x, 540), position);
+    }
+
+    [Theory]
     [InlineData(OverlayPosition.Bottom, 740)]
     [InlineData(OverlayPosition.Top, 80)]
     public void DefaultPosition_SitsBesideTheOverlayOnTheConfiguredEdge(OverlayPosition overlay, int expectedY)

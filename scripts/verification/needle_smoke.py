@@ -38,7 +38,10 @@ settings = {
 with HiddenDesktop(out / "desktop") as desktop:
     with IsolatedApp(out / "app", configuration="Release", settings=settings,
                      plugin_data=[plugin], virtual_mic=True, display="none",
-                     extra_env=private_x11_env(desktop.app_env()),
+                     # The virtual session must not inherit the physical desktop's lock state.
+                     # Its private bus has no logind, so the supported non-systemd path applies.
+                     extra_env={**private_x11_env(desktop.app_env()),
+                                "DBUS_SYSTEM_BUS_ADDRESS": desktop.bus_address},
                      assembly=args.app_dir / "typewhisper.dll" if args.app_dir else None,
                      executable=executable) as app:
         load = app.load_model("needle-whistle", "whistle")
