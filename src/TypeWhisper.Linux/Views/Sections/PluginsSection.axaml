@@ -605,12 +605,26 @@
                         <ItemsControl ItemsSource="{Binding EnabledGroups}"
                                       IsVisible="{Binding HasEnabledPlugins}"
                                       ItemTemplate="{StaticResource PluginCategoryGroupTemplate}" />
-                        <TextBlock Text="{loc:Str Plugins.NoEnabledPlugins}"
-                                   FontSize="12.5"
-                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,4,0,0"
-                                   IsVisible="{Binding !HasEnabledPlugins}" />
+                        <StackPanel Margin="0,8,0,0"
+                                    Spacing="10"
+                                    IsVisible="{Binding !HasEnabledPlugins}">
+                            <TextBlock Text="{loc:Str Plugins.NoInstalledPlugins}"
+                                       FontSize="12.5"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding !HasAnyPlugins}" />
+                            <StackPanel Spacing="10"
+                                        IsVisible="{Binding HasAnyPlugins}">
+                                <TextBlock Text="{loc:Str Plugins.NoEnabledPlugins}"
+                                           FontSize="12.5"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <Button Content="{loc:Str Plugins.ViewDisabledPlugins}"
+                                        Command="{Binding SetTabCommand}"
+                                        CommandParameter="1"
+                                        HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </StackPanel>
                     </StackPanel>
 
                     <!-- Disabled tab -->
@@ -618,12 +632,20 @@
                         <ItemsControl ItemsSource="{Binding DisabledGroups}"
                                       IsVisible="{Binding HasDisabledPlugins}"
                                       ItemTemplate="{StaticResource PluginCategoryGroupTemplate}" />
-                        <TextBlock Text="{loc:Str Plugins.NoDisabledPlugins}"
-                                   FontSize="12.5"
-                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,4,0,0"
-                                   IsVisible="{Binding !HasDisabledPlugins}" />
+                        <StackPanel Margin="0,8,0,0"
+                                    Spacing="10"
+                                    IsVisible="{Binding !HasDisabledPlugins}">
+                            <TextBlock Text="{loc:Str Plugins.NoInstalledPlugins}"
+                                       FontSize="12.5"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding !HasAnyPlugins}" />
+                            <TextBlock Text="{loc:Str Plugins.NoDisabledPlugins}"
+                                       FontSize="12.5"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding HasAnyPlugins}" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </Border>

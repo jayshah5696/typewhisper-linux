@@ -104,6 +104,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     public int DisabledCount => DistinctRows(DisabledGroups).Count();
     public bool HasEnabledPlugins => EnabledCount > 0;
     public bool HasDisabledPlugins => DisabledCount > 0;
+    public bool HasAnyPlugins => EnabledCount + DisabledCount > 0;
 
     public string EnabledTabLabel => Loc.Instance.GetString("Plugins.TabEnabled", EnabledCount);
     public string DisabledTabLabel => Loc.Instance.GetString("Plugins.TabDisabled", DisabledCount);
@@ -300,6 +301,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(DisabledCount));
         OnPropertyChanged(nameof(HasEnabledPlugins));
         OnPropertyChanged(nameof(HasDisabledPlugins));
+        OnPropertyChanged(nameof(HasAnyPlugins));
         OnPropertyChanged(nameof(EnabledTabLabel));
         OnPropertyChanged(nameof(DisabledTabLabel));
 

@@ -5,6 +5,7 @@
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:converters="using:TypeWhisper.Linux.Converters"
+             xmlns:icons="using:FluentIcons.Avalonia"
              x:Class="TypeWhisper.Linux.Views.Sections.ProfilesSection"
              x:DataType="vm:ProfilesSectionViewModel">
     <UserControl.Styles>
@@ -83,16 +84,49 @@
     </UserControl.Styles>
 
     <Grid Margin="24">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="2*" MinWidth="200" MaxWidth="280" />
-            <ColumnDefinition Width="18" />
-            <ColumnDefinition Width="5*" />
-        </Grid.ColumnDefinitions>
-        <Grid Grid.Column="0"
-              RowDefinitions="Auto,*,Auto">
-            <StackPanel Margin="0,0,0,8">
-                <TextBlock Text="{loc:Str Profiles.Title}"
-                           Classes="panel-title" />
+        <!-- Empty state when no profiles exist -->
+        <Border Classes="section-panel"
+                Padding="36,32"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                MaxWidth="540"
+                IsVisible="{Binding ShowEmptyState}">
+            <StackPanel Spacing="14" HorizontalAlignment="Center">
+                <icons:SymbolIcon Symbol="Person"
+                                  FontSize="36"
+                                  Foreground="{DynamicResource TwTextDisabledBrush}"
+                                  HorizontalAlignment="Center" />
+                <TextBlock Text="{loc:Str Profiles.EmptyTitle}"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{loc:Str Profiles.EmptySubtitle}"
+                           FontSize="13"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"
+                           HorizontalAlignment="Center" />
+                <Button Content="{loc:Str Profiles.CreateFirst}"
+                        Command="{Binding AddProfileCommand}"
+                        Classes="accent"
+                        HorizontalAlignment="Center"
+                        Padding="16,9"
+                        Margin="0,8,0,0" />
+            </StackPanel>
+        </Border>
+
+        <!-- Populated 2-column view -->
+        <Grid IsVisible="{Binding HasProfiles}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" MinWidth="200" MaxWidth="280" />
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="5*" />
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0"
+                  RowDefinitions="Auto,*,Auto">
+                <StackPanel Margin="0,0,0,8">
+                    <TextBlock Text="{loc:Str Profiles.Title}"
+                               Classes="panel-title" />
                 <TextBlock Text="{Binding Summary}"
                            Classes="page-subtitle" />
             </StackPanel>
@@ -733,5 +767,6 @@
                 </Border>
             </Grid>
         </Border>
+        </Grid>
     </Grid>
 </UserControl>

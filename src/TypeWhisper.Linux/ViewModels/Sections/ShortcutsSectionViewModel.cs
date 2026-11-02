@@ -112,6 +112,9 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     [ObservableProperty]
     private bool _compositorBindsExpanded;
 
+    [ObservableProperty]
+    private bool _isDiagnosticsExpanded;
+
     // Test-friendly overload — production wiring passes the DI-registered
     // writer collection through the three-arg constructor.
     public ShortcutsSectionViewModel(HotkeyService hotkey, ISettingsService settings)
@@ -1122,6 +1125,20 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         // pending/late access probe never overwrites this choice.
         _compositorBindsUserControlled = true;
         CompositorBindsExpanded = !CompositorBindsExpanded;
+    }
+
+    public string DiagnosticsToggleLabel =>
+        Loc.Instance[IsDiagnosticsExpanded ? "Shortcuts.HideDiagnostics" : "Shortcuts.DetailedDiagnostics"];
+
+    [RelayCommand]
+    private void ToggleDiagnostics()
+    {
+        IsDiagnosticsExpanded = !IsDiagnosticsExpanded;
+    }
+
+    partial void OnIsDiagnosticsExpandedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(DiagnosticsToggleLabel));
     }
 
     partial void OnCompositorBindsExpandedChanged(bool value)

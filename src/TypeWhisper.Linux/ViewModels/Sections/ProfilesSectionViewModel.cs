@@ -180,6 +180,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(IsGlobalFallbackProfile));
             OnPropertyChanged(nameof(IsContextMatchModeVisible));
         };
+        Profiles.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasProfiles));
+            OnPropertyChanged(nameof(ShowEmptyState));
+        };
         _failureTracker.OnFailure += (_, e) =>
         {
             if (!e.ShouldShowPersistentBanner)
@@ -212,6 +217,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
     }
 
     public ObservableCollection<Profile> Profiles { get; } = [];
+    public bool HasProfiles => Profiles.Count > 0;
+    public bool ShowEmptyState => Profiles.Count == 0;
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
     public ObservableCollection<MemorySourceOption> MemorySourceOptions { get; } = [];

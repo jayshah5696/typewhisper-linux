@@ -83,11 +83,12 @@ public partial class MainWindowViewModel : ObservableObject
             new NavItem("Nav.TextInsertion", Symbol.TextAlignLeft, TextInsertion, false),
             new NavItem("Nav.FileTranscription", Symbol.DocumentText, FileTranscription, false),
             new NavItem("Nav.Recorder", Symbol.Record, Recorder, false),
-            new NavItem("Nav.GroupLibrary", null, null, true),
-            new NavItem("Nav.History", Symbol.History, History, false),
+            new NavItem("Nav.GroupText", null, null, true),
             new NavItem("Nav.Dictionary", Symbol.Book, Dictionary, false),
             new NavItem("Nav.Snippets", Symbol.Cut, Snippets, false),
             new NavItem("Nav.Profiles", Symbol.Person, Profiles, false),
+            new NavItem("Nav.GroupLibrary", null, null, true),
+            new NavItem("Nav.History", Symbol.History, History, false),
             new NavItem("Nav.GroupAi", null, null, true),
             new NavItem("Nav.Prompts", Symbol.Prompt, Prompts, false),
             new NavItem("Nav.Plugins", Symbol.PlugConnected, Plugins, false),
@@ -100,6 +101,9 @@ public partial class MainWindowViewModel : ObservableObject
 
         SelectedItem = NavItems.First(i => i.Content is DashboardSectionViewModel);
         CurrentSection = SelectedItem.Content;
+
+        History.NavigateToDictationAction = () => Navigate<DictationSectionViewModel>();
+        History.NavigateToFileTranscriptionAction = () => Navigate<FileTranscriptionSectionViewModel>();
     }
 
     // All section VMs stay in memory so nav switches are instantaneous.

@@ -2,11 +2,16 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
-using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Setup;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -27,8 +32,18 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     private readonly TimeZoneInfo _timeZone;
     private readonly IUsageStatisticsService _statistics;
     private readonly PluginManager? _plugins;
+    private readonly ModelManagerService? _models;
+    private readonly HotkeyService? _hotkey;
+    private readonly IReadOnlyList<ISetupTask>? _setupTasks;
+    private readonly Action? _openWizardAction;
     private readonly TimeProvider _timeProvider;
     private readonly Action<Action> _postToUi;
+    private readonly object _readinessGate = new();
+    private Task _activeRefreshTask = Task.CompletedTask;
+    private int _readinessSequence;
+    private CancellationTokenSource? _readinessCts;
+    private string? _lastHookError;
+    private ISetupTask? _pendingSetupTask;
 
     [ObservableProperty]
     private int _daysActive;
@@ -47,7 +62,6 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _wpmTrendLabel = string.Empty;
-
 
     [ObservableProperty]
     private int _appCount;
@@ -106,14 +120,82 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _wordCount;
 
+    // Readiness & Setup properties
+    [ObservableProperty]
+    private bool _isDictationReady;
+
+    [ObservableProperty]
+    private bool _isReadinessWarning;
+
+    [ObservableProperty]
+    private string _readinessGlyph = "✓";
+
+    [ObservableProperty]
+    private string _readinessTone = "ok";
+
+    [ObservableProperty]
+    private string _readinessStatusText = Loc.Instance["Dashboard.ReadinessReady"];
+
+    [ObservableProperty]
+    private string _readinessSubtitle = "";
+
+    [ObservableProperty]
+    private string _currentModelDisplayName = Loc.Instance["Dashboard.NoModelSelected"];
+
+    [ObservableProperty]
+    private string _modelStatusDetail = "";
+
+    [ObservableProperty]
+    private bool _isModelReady;
+
+    [ObservableProperty]
+    private bool _isModelDownloading;
+
+    [ObservableProperty]
+    private double _downloadProgress;
+
+    [ObservableProperty]
+    private string _downloadProgressPercentText = "0%";
+
+    [ObservableProperty]
+    private string _currentHotkeyDisplay = "";
+
+    [ObservableProperty]
+    private string _hotkeyStatusDetail = "";
+
+    [ObservableProperty]
+    private bool _isHotkeyReady;
+
+    [ObservableProperty]
+    private bool _hasSetupAction;
+
+    [ObservableProperty]
+    private string _setupNextActionTitle = "";
+
+    [ObservableProperty]
+    private string _setupNextActionSummary = "";
+
+    [ObservableProperty]
+    private string _setupActionLabel = "";
+
+    [ObservableProperty]
+    private bool _canRunDirectSetupAction;
+
+    [ObservableProperty]
+    private bool _isStatisticsExpanded;
+
     public DashboardSectionViewModel(
         IHistoryService history,
         ISettingsService settings,
         IHistoryInsightsService insights,
         IUsageStatisticsService statistics,
-        PluginManager? plugins = null
+        PluginManager? plugins = null,
+        ModelManagerService? models = null,
+        HotkeyService? hotkey = null,
+        IEnumerable<ISetupTask>? setupTasks = null,
+        Action<Action>? postToUi = null
     )
-        : this(history, settings, insights, statistics, TimeZoneInfo.Local, plugins) { }
+        : this(history, settings, insights, statistics, TimeZoneInfo.Local, plugins, postToUi: postToUi, models: models, hotkey: hotkey, setupTasks: setupTasks) { }
 
     internal DashboardSectionViewModel(
         IHistoryService history,
@@ -123,7 +205,11 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         TimeZoneInfo timeZone,
         PluginManager? plugins = null,
         TimeProvider? timeProvider = null,
-        Action<Action>? postToUi = null
+        Action<Action>? postToUi = null,
+        ModelManagerService? models = null,
+        HotkeyService? hotkey = null,
+        IEnumerable<ISetupTask>? setupTasks = null,
+        Action? openWizard = null
     )
     {
         _history = history;
@@ -132,6 +218,10 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         _timeZone = timeZone;
         _statistics = statistics;
         _plugins = plugins;
+        _models = models;
+        _hotkey = hotkey;
+        _setupTasks = setupTasks?.Where(t => t.AppliesToThisMachine()).ToArray();
+        _openWizardAction = openWizard;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _postToUi = postToUi ?? (action => Dispatcher.UIThread.Post(action));
         _statistics.StatisticsChanged += OnRecordsChanged;
@@ -139,6 +229,15 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         {
             _plugins.PluginStateChanged += OnPluginStateChanged;
         }
+        if (_models is not null)
+        {
+            _models.PropertyChanged += OnModelsPropertyChanged;
+        }
+        if (_hotkey is not null)
+        {
+            _hotkey.HookFailed += OnHotkeyHookFailed;
+        }
+        _settings.SettingsChanged += OnSettingsChanged;
         // ReadSelectedRange guards against out-of-range ints stored by older
         // versions of the app (DashboardSelectedPeriod is an unvalidated int).
         _selectedRange = ReadSelectedRange(settings.Current.DashboardSelectedPeriod);
@@ -147,6 +246,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         // are resolved into stored strings, so rebuild them on a live language switch.
         Loc.Instance.LanguageChanged += OnLanguageChanged;
         _ = InitializeAsync();
+        _ = RefreshReadinessAsync();
     }
 
     public ObservableCollection<DashboardRecentActivityRow> RecentActivity { get; } = [];
@@ -163,15 +263,38 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     public bool HasTopApps => TopApps.Count > 0;
     public bool HasRecentActivity => RecentActivity.Count > 0;
 
+    public string StatisticsToggleLabel => Loc.Instance[IsStatisticsExpanded ? "Dashboard.HideStatistics" : "Dashboard.ShowStatistics"];
+    public string StatisticsToggleAccessibleName => StatisticsToggleLabel;
+    public string StatisticsSummaryLabel => WordCount > 0 ? Loc.Instance.GetString("Dashboard.ActivityRow", WordCount, TranscriptionCount) : Loc.Instance["Dashboard.StatisticsHint"];
+    public string RecentActivityCountLabel => RecentActivity.Count > 0 ? Loc.Instance.GetString("Dashboard.ActivityRow", RecentActivity.Sum(r => r.Record.WordCount), RecentActivity.Count) : "";
+    public string EmptyActivityGuidance => IsDictationReady && !string.IsNullOrWhiteSpace(CurrentHotkeyDisplay)
+        ? Loc.Instance.GetString("Dashboard.ReadinessReadyHint", CurrentHotkeyDisplay)
+        : Loc.Instance["Dashboard.NoRecentActivityHint"];
+
     public void Dispose()
     {
         _disposed = true;
         _dayRefreshTimer?.Dispose();
         _history.RecordsChanged -= OnRecordsChanged;
         _statistics.StatisticsChanged -= OnRecordsChanged;
+        _settings.SettingsChanged -= OnSettingsChanged;
         if (_plugins is not null)
         {
             _plugins.PluginStateChanged -= OnPluginStateChanged;
+        }
+        if (_models is not null)
+        {
+            _models.PropertyChanged -= OnModelsPropertyChanged;
+        }
+        if (_hotkey is not null)
+        {
+            _hotkey.HookFailed -= OnHotkeyHookFailed;
+        }
+        lock (_readinessGate)
+        {
+            _readinessCts?.Cancel();
+            _readinessCts?.Dispose();
+            _readinessCts = null;
         }
         Loc.Instance.LanguageChanged -= OnLanguageChanged;
         GC.SuppressFinalize(this);
@@ -181,6 +304,57 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
     {
         PersistSelectedRange(value);
         Refresh();
+    }
+
+    partial void OnIsStatisticsExpandedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(StatisticsToggleLabel));
+        OnPropertyChanged(nameof(StatisticsToggleAccessibleName));
+    }
+
+    [RelayCommand]
+    private void ToggleStatistics()
+    {
+        IsStatisticsExpanded = !IsStatisticsExpanded;
+    }
+
+    [RelayCommand]
+    public async Task RunSetupActionAsync()
+    {
+        if (_pendingSetupTask is { } task)
+        {
+            try
+            {
+                await task.RunActionAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dashboard] Setup task execution threw: {ex.Message}");
+            }
+            await RefreshReadinessAsync();
+        }
+        else if (!IsModelReady && _models is not null && !string.IsNullOrEmpty(_settings.Current.SelectedModelId))
+        {
+            try
+            {
+                await _models.DownloadAndLoadModelAsync(_settings.Current.SelectedModelId);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dashboard] Model download threw: {ex.Message}");
+            }
+            await RefreshReadinessAsync();
+        }
+        else
+        {
+            _openWizardAction?.Invoke();
+        }
+    }
+
+    [RelayCommand]
+    public void OpenWizard()
+    {
+        _openWizardAction?.Invoke();
     }
 
     [RelayCommand]
@@ -218,11 +392,49 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         }
     }
 
-    // LanguageChanged is raised on the UI thread (from the settings binding), so
-    // Refresh can run directly and re-resolve the localized labels/rows in place.
-    private void OnLanguageChanged(object? sender, EventArgs e) => Refresh();
+    private void OnModelsPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!_disposed)
+        {
+            _postToUi(() => _ = RefreshReadinessAsync());
+        }
+    }
 
-    private void OnPluginStateChanged(object? sender, EventArgs e) => OnRecordsChanged();
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        _lastHookError = null;
+        if (!_disposed)
+        {
+            _postToUi(() => _ = RefreshReadinessAsync());
+        }
+    }
+
+    private void OnHotkeyHookFailed(object? sender, string message)
+    {
+        _lastHookError = message;
+        if (!_disposed)
+        {
+            _postToUi(() => _ = RefreshReadinessAsync());
+        }
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        Refresh();
+        _ = RefreshReadinessAsync();
+        OnPropertyChanged(nameof(StatisticsToggleLabel));
+        OnPropertyChanged(nameof(StatisticsToggleAccessibleName));
+        OnPropertyChanged(nameof(StatisticsSummaryLabel));
+    }
+
+    private void OnPluginStateChanged(object? sender, EventArgs e)
+    {
+        OnRecordsChanged();
+        if (!_disposed)
+        {
+            _postToUi(() => _ = RefreshReadinessAsync());
+        }
+    }
 
     internal void Refresh()
     {
@@ -280,8 +492,417 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 
         OnPropertyChanged(nameof(HasTopApps));
         OnPropertyChanged(nameof(HasRecentActivity));
+        OnPropertyChanged(nameof(RecentActivityCountLabel));
+        OnPropertyChanged(nameof(EmptyActivityGuidance));
         ScheduleDayRefresh();
     }
+
+    internal async Task RefreshReadinessAsync()
+    {
+        Task taskToWait;
+        lock (_readinessGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _readinessCts?.Cancel();
+            _readinessCts?.Dispose();
+            _readinessCts = new CancellationTokenSource();
+            var ct = _readinessCts.Token;
+            var sequence = ++_readinessSequence;
+
+            _activeRefreshTask = RefreshReadinessCoreAsync(sequence, ct);
+            taskToWait = _activeRefreshTask;
+        }
+
+        try
+        {
+            await taskToWait.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            Task? nextTask = null;
+            lock (_readinessGate)
+            {
+                if (!_disposed && _activeRefreshTask != taskToWait)
+                {
+                    nextTask = _activeRefreshTask;
+                }
+            }
+
+            if (nextTask is not null)
+            {
+                try
+                {
+                    await nextTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+    }
+
+    private async Task RefreshReadinessCoreAsync(int sequence, CancellationToken ct)
+    {
+        try
+        {
+            // 1. Evaluate selected model
+            var selectedModelId = _settings.Current.SelectedModelId;
+            var isModelReady = false;
+            var isDownloading = false;
+            var downloadProgress = 0.0;
+            string modelDetail;
+            string modelDisplay;
+
+            if (string.IsNullOrEmpty(selectedModelId))
+            {
+                modelDisplay = Loc.Instance["Dashboard.NoModelSelected"];
+                modelDetail = Loc.Instance["Dashboard.SelectModelHint"];
+            }
+            else
+            {
+                if (ModelManagerService.IsPluginModel(selectedModelId))
+                {
+                    try
+                    {
+                        var (pluginId, rawModelId) = ModelManagerService.ParsePluginModelId(selectedModelId);
+                        var engines = _plugins?.TranscriptionEngines ?? _models?.PluginManager.TranscriptionEngines;
+                        var engine = engines?.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
+                        var modelInfo = engine?.TranscriptionModels.FirstOrDefault(m => m.Id == rawModelId);
+                        var modelName = modelInfo?.DisplayName ?? rawModelId;
+                        modelDisplay = engine is not null ? $"{engine.ProviderDisplayName} · {modelName}" : selectedModelId;
+                    }
+                    catch
+                    {
+                        modelDisplay = selectedModelId;
+                    }
+                }
+                else
+                {
+                    modelDisplay = selectedModelId;
+                }
+
+                if (_models is not null)
+                {
+                    var status = _models.GetStatus(selectedModelId);
+                    if (status.Type == ModelStatusType.Downloading)
+                    {
+                        isDownloading = true;
+                        downloadProgress = Math.Clamp(status.Progress, 0, 1);
+                        modelDetail = Loc.Instance.GetString("Dashboard.ModelDownloading", $"{(int)(downloadProgress * 100)}%");
+                    }
+                    else if (_models.IsDownloaded(selectedModelId))
+                    {
+                        isModelReady = true;
+                        modelDetail = Loc.Instance["Dashboard.ModelReady"];
+                    }
+                    else
+                    {
+                        modelDetail = Loc.Instance["Dashboard.ModelNeedsDownload"];
+                    }
+                }
+                else
+                {
+                    isModelReady = false;
+                    modelDetail = Loc.Instance["Dashboard.ModelUnavailable"];
+                }
+            }
+
+            // 2. Evaluate hotkey
+            var configuredHotkey = _settings.Current.ToggleHotkey;
+            var isConfigured = !string.IsNullOrWhiteSpace(configuredHotkey) && configuredHotkey != "None";
+            string hotkeyDisplay;
+            string hotkeyDetail;
+            bool isHotkeyReady;
+
+            if (!isConfigured)
+            {
+                hotkeyDisplay = Loc.Instance["Dashboard.NoHotkey"];
+                hotkeyDetail = Loc.Instance["Dashboard.NoHotkey"];
+                isHotkeyReady = false;
+            }
+            else
+            {
+                hotkeyDisplay = _hotkey?.CurrentHotkeyString ?? configuredHotkey;
+                if (string.IsNullOrWhiteSpace(hotkeyDisplay) || hotkeyDisplay == "None")
+                {
+                    hotkeyDisplay = configuredHotkey;
+                }
+
+                if (_hotkey is null)
+                {
+                    isHotkeyReady = false;
+                    hotkeyDetail = Loc.Instance["Dashboard.HotkeyInactive"];
+                }
+                else if (_lastHookError is not null)
+                {
+                    isHotkeyReady = false;
+                    hotkeyDetail = _lastHookError;
+                }
+                else if (_hotkey.ActiveBackendId is null || _hotkey.ActiveBackendDisplayName is null)
+                {
+                    isHotkeyReady = false;
+                    hotkeyDetail = Loc.Instance["Dashboard.HotkeyInactive"];
+                }
+                else
+                {
+                    isHotkeyReady = true;
+                    hotkeyDetail = Loc.Instance.GetString("Dashboard.HotkeyBackendFormat", _hotkey.ActiveBackendDisplayName);
+                }
+            }
+
+            // 3. Evaluate setup tasks
+            ISetupTask? nextTask = null;
+            SetupTaskState? nextTaskState = null;
+            if (_setupTasks is not null)
+            {
+                foreach (var task in _setupTasks.Where(t => t.Severity == SetupTaskSeverity.Required))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var state = await task.EvaluateAsync(ct).ConfigureAwait(false);
+                        if (state.Kind is SetupTaskStatusKind.NeedsAction or SetupTaskStatusKind.Failed)
+                        {
+                            nextTask = task;
+                            nextTaskState = state;
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.WriteLine($"[Dashboard] Required setup task '{task.Title}' evaluation failed: {ex}");
+                        nextTask = task;
+                        nextTaskState = new SetupTaskState(
+                            SetupTaskStatusKind.Failed,
+                            ex.Message,
+                            Detail: ex.ToString(),
+                            ActionLabel: Loc.Instance["Common.OpenWizard"]
+                        );
+                        break;
+                    }
+                }
+
+                if (nextTask is null)
+                {
+                    foreach (var task in _setupTasks.Where(t => t.Severity == SetupTaskSeverity.Recommended))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        try
+                        {
+                            var state = await task.EvaluateAsync(ct).ConfigureAwait(false);
+                            if (state.Kind is SetupTaskStatusKind.NeedsAction or SetupTaskStatusKind.Failed)
+                            {
+                                nextTask = task;
+                                nextTaskState = state;
+                                break;
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.WriteLine($"[Dashboard] Recommended setup task '{task.Title}' evaluation threw: {ex.Message}");
+                        }
+                    }
+                }
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            // 4. Determine next action & overall readiness
+            bool hasSetupAction;
+            string setupTitle;
+            string setupSummary;
+            string setupActionLabel;
+            bool canRunDirectAction;
+
+            if (nextTask is not null && nextTaskState is not null)
+            {
+                hasSetupAction = true;
+                setupTitle = nextTask.Title;
+                setupSummary = nextTaskState.Summary;
+                setupActionLabel = !string.IsNullOrWhiteSpace(nextTaskState.ActionLabel)
+                    ? nextTaskState.ActionLabel
+                    : Loc.Instance["Common.OpenWizard"];
+                canRunDirectAction = !string.IsNullOrWhiteSpace(nextTaskState.ActionLabel);
+            }
+            else if (string.IsNullOrEmpty(selectedModelId))
+            {
+                hasSetupAction = true;
+                setupTitle = Loc.Instance["Dashboard.NoModelSelected"];
+                setupSummary = Loc.Instance["Dashboard.SelectModelHint"];
+                setupActionLabel = Loc.Instance["Common.OpenWizard"];
+                canRunDirectAction = false;
+            }
+            else if (!isModelReady && !isDownloading)
+            {
+                hasSetupAction = true;
+                setupTitle = _models is null ? Loc.Instance["Dashboard.ModelUnavailable"] : Loc.Instance["Dashboard.ModelNeedsDownload"];
+                setupSummary = _models is null ? Loc.Instance["Dashboard.ModelUnavailableHint"] : Loc.Instance["Dashboard.DownloadModelHint"];
+                setupActionLabel = _models is null ? Loc.Instance["Common.OpenWizard"] : Loc.Instance["Dashboard.DownloadModel"];
+                canRunDirectAction = _models is not null;
+            }
+            else if (!isHotkeyReady)
+            {
+                hasSetupAction = true;
+                setupTitle = isConfigured ? Loc.Instance["Dashboard.HotkeyInactive"] : Loc.Instance["Dashboard.NoHotkey"];
+                setupSummary = isConfigured ? hotkeyDetail : Loc.Instance["Dashboard.SetupRequiredHint"];
+                setupActionLabel = Loc.Instance["Common.OpenWizard"];
+                canRunDirectAction = false;
+            }
+            else
+            {
+                hasSetupAction = false;
+                setupTitle = Loc.Instance["Dashboard.SetupAllReady"];
+                setupSummary = Loc.Instance.GetString("Dashboard.ReadinessReadyHint", hotkeyDisplay);
+                setupActionLabel = Loc.Instance["Common.OpenWizard"];
+                canRunDirectAction = false;
+            }
+
+            // Overall readiness tone & text
+            bool isReady;
+            string readinessStatus;
+            string readinessSubtitle;
+            string readinessTone;
+            string readinessGlyph;
+
+            if (isDownloading)
+            {
+                isReady = false;
+                readinessTone = "busy";
+                readinessGlyph = "…";
+                readinessStatus = Loc.Instance["Dashboard.ReadinessDownloading"];
+                readinessSubtitle = modelDetail;
+            }
+            else if (!isModelReady || !isHotkeyReady || (nextTask is not null && nextTask.Severity == SetupTaskSeverity.Required))
+            {
+                isReady = false;
+                readinessTone = "warning";
+                readinessGlyph = "!";
+                readinessStatus = Loc.Instance["Dashboard.ReadinessNeedsSetup"];
+                readinessSubtitle = setupSummary;
+            }
+            else
+            {
+                isReady = true;
+                readinessTone = "ok";
+                readinessGlyph = "✓";
+                readinessStatus = Loc.Instance["Dashboard.ReadinessReady"];
+                readinessSubtitle = Loc.Instance.GetString("Dashboard.ReadinessReadyHint", hotkeyDisplay);
+            }
+
+            if (ct.IsCancellationRequested || _disposed || sequence != Volatile.Read(ref _readinessSequence))
+            {
+                return;
+            }
+
+            var snapshot = new ReadinessSnapshot(
+                modelDisplay,
+                modelDetail,
+                isDownloading,
+                downloadProgress,
+                $"{(int)(downloadProgress * 100)}%",
+                isModelReady,
+                hotkeyDisplay,
+                hotkeyDetail,
+                isHotkeyReady,
+                hasSetupAction,
+                setupTitle,
+                setupSummary,
+                setupActionLabel,
+                canRunDirectAction,
+                nextTask,
+                isReady,
+                readinessTone == "warning",
+                readinessStatus,
+                readinessSubtitle,
+                readinessTone,
+                readinessGlyph
+            );
+
+            _postToUi(() =>
+            {
+                if (_disposed || sequence != Volatile.Read(ref _readinessSequence))
+                {
+                    return;
+                }
+                ApplyReadinessSnapshot(snapshot);
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dashboard] Readiness evaluation threw: {ex.Message}");
+        }
+    }
+
+    private void ApplyReadinessSnapshot(ReadinessSnapshot snapshot)
+    {
+        _pendingSetupTask = snapshot.PendingSetupTask;
+
+        CurrentModelDisplayName = snapshot.ModelDisplay;
+        ModelStatusDetail = snapshot.ModelDetail;
+        IsModelDownloading = snapshot.IsModelDownloading;
+        DownloadProgress = snapshot.DownloadProgress;
+        DownloadProgressPercentText = snapshot.DownloadProgressPercentText;
+        IsModelReady = snapshot.IsModelReady;
+
+        CurrentHotkeyDisplay = snapshot.HotkeyDisplay;
+        HotkeyStatusDetail = snapshot.HotkeyDetail;
+        IsHotkeyReady = snapshot.IsHotkeyReady;
+
+        HasSetupAction = snapshot.HasSetupAction;
+        SetupNextActionTitle = snapshot.SetupTitle;
+        SetupNextActionSummary = snapshot.SetupSummary;
+        SetupActionLabel = snapshot.SetupActionLabel;
+        CanRunDirectSetupAction = snapshot.CanRunDirectAction;
+
+        IsDictationReady = snapshot.IsReady;
+        IsReadinessWarning = snapshot.IsWarning;
+        ReadinessStatusText = snapshot.ReadinessStatus;
+        ReadinessSubtitle = snapshot.ReadinessSubtitle;
+        ReadinessTone = snapshot.ReadinessTone;
+        ReadinessGlyph = snapshot.ReadinessGlyph;
+
+        OnPropertyChanged(nameof(EmptyActivityGuidance));
+    }
+
+    private sealed record ReadinessSnapshot(
+        string ModelDisplay,
+        string ModelDetail,
+        bool IsModelDownloading,
+        double DownloadProgress,
+        string DownloadProgressPercentText,
+        bool IsModelReady,
+        string HotkeyDisplay,
+        string HotkeyDetail,
+        bool IsHotkeyReady,
+        bool HasSetupAction,
+        string SetupTitle,
+        string SetupSummary,
+        string SetupActionLabel,
+        bool CanRunDirectAction,
+        ISetupTask? PendingSetupTask,
+        bool IsReady,
+        bool IsWarning,
+        string ReadinessStatus,
+        string ReadinessSubtitle,
+        string ReadinessTone,
+        string ReadinessGlyph
+    );
 
     private void ScheduleDayRefresh()
     {
@@ -363,6 +984,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasModels));
         OnPropertyChanged(nameof(CurrentStreakLabel));
         OnPropertyChanged(nameof(LongestStreakLabel));
+        OnPropertyChanged(nameof(StatisticsSummaryLabel));
     }
 
     private void BuildActivityDays(UsageStatisticsDaySnapshot[] days, DateOnly start, DateOnly today)

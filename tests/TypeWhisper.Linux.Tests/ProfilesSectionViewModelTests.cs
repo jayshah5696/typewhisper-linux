@@ -460,6 +460,82 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void EmptyState_WhenNoProfilesExist_ShowsEmptyStateAndTransitionsOnAdd()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "empty-state-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        Assert.Empty(sut.Profiles);
+        Assert.False(sut.HasProfiles);
+        Assert.True(sut.ShowEmptyState);
+        Assert.False(sut.HasSelectedProfile);
+
+        sut.AddProfileCommand.Execute(null);
+
+        Assert.NotEmpty(sut.Profiles);
+        Assert.True(sut.HasProfiles);
+        Assert.False(sut.ShowEmptyState);
+        Assert.True(sut.HasSelectedProfile);
+        Assert.NotNull(sut.SelectedProfile);
+    }
+
+    [Fact]
+    public void CreateFirstProfile_ThroughSaving_TransitionsToPopulatedProfileViewAndPersists()
+    {
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "first-profile-actions.json"));
+
+        var sut = new ProfilesSectionViewModel(
+            service,
+            activeWindow.Object,
+            pluginManager,
+            promptActions,
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.False(sut.HasProfiles);
+
+        sut.AddProfileCommand.Execute(null);
+
+        Assert.False(sut.ShowEmptyState);
+        Assert.True(sut.HasProfiles);
+        Assert.NotNull(sut.SelectedProfile);
+
+        sut.EditName = "Coding Profile";
+        sut.ProcessNameInput = "code";
+        sut.AddProcessNameChipCommand.Execute(null);
+        sut.SaveProfileCommand.Execute(null);
+
+        var saved = Assert.Single(service.Profiles);
+        Assert.Equal("Coding Profile", saved.Name);
+        Assert.Equal(["code"], saved.ProcessNames);
+        Assert.Equal(saved, sut.SelectedProfile);
+        Assert.False(sut.ShowEmptyState);
+        Assert.True(sut.HasProfiles);
+    }
+
+    [Fact]
     public void AddProfile_DefaultsContextMatchModeToAny()
     {
         var service = CreateProfileService();

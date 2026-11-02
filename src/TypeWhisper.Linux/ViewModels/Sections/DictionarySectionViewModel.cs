@@ -160,26 +160,38 @@ public partial class DictionarySectionViewModel : ObservableObject
     public bool ShowEntriesList => SelectedTab != 3 && FilteredEntries.Count > 0;
     public bool ShowPacksList => SelectedTab == 3 && Packs.Count > 0;
     public bool ShowEmptyState => SelectedTab != 3 && FilteredEntries.Count == 0;
+    public int TotalEntriesCount => _dict.Entries.Count;
+    public int CurrentTabUnfilteredCount => SelectedTab switch
+    {
+        1 => _dict.Entries.Count(entry => entry.EntryType == DictionaryEntryType.Term),
+        2 => _dict.Entries.Count(entry => entry.EntryType == DictionaryEntryType.Correction),
+        _ => _dict.Entries.Count,
+    };
+    public bool IsSearchFilteredEmpty => ShowEmptyState && CurrentTabUnfilteredCount > 0 && !string.IsNullOrWhiteSpace(SearchText);
     public bool ShowAddBar => SelectedTab != 3;
     public bool ShowSearchBox => SelectedTab != 3;
     public bool ShowFilterRow => SelectedTab != 3;
     public bool ShowPacksHeader => SelectedTab == 3;
 
     public string EmptyStateTitle =>
-        SelectedTab switch
-        {
-            1 => Loc.Instance["Dictionary.EmptyTitleTerms"],
-            2 => Loc.Instance["Dictionary.EmptyTitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptyTitleAll"],
-        };
+        IsSearchFilteredEmpty
+            ? Loc.Instance["Dictionary.FilteredEmptyTitle"]
+            : SelectedTab switch
+            {
+                1 => Loc.Instance["Dictionary.EmptyTitleTerms"],
+                2 => Loc.Instance["Dictionary.EmptyTitleCorrections"],
+                _ => Loc.Instance["Dictionary.EmptyTitleAll"],
+            };
 
     public string EmptyStateSubtitle =>
-        SelectedTab switch
-        {
-            1 => Loc.Instance["Dictionary.EmptySubtitleTerms"],
-            2 => Loc.Instance["Dictionary.EmptySubtitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptySubtitleAll"],
-        };
+        IsSearchFilteredEmpty
+            ? Loc.Instance["Dictionary.FilteredEmptySubtitle"]
+            : SelectedTab switch
+            {
+                1 => Loc.Instance["Dictionary.EmptySubtitleTerms"],
+                2 => Loc.Instance["Dictionary.EmptySubtitleCorrections"],
+                _ => Loc.Instance["Dictionary.EmptySubtitleAll"],
+            };
 
     public bool IsNewTypeCorrection
     {
@@ -540,6 +552,8 @@ public partial class DictionarySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowEntriesList));
         OnPropertyChanged(nameof(ShowPacksList));
         OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(CurrentTabUnfilteredCount));
+        OnPropertyChanged(nameof(IsSearchFilteredEmpty));
         OnPropertyChanged(nameof(ShowAddBar));
         OnPropertyChanged(nameof(ShowSearchBox));
         OnPropertyChanged(nameof(ShowFilterRow));
