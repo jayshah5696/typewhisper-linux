@@ -77,6 +77,15 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="0" />
         </Style>
+        <!-- The rounded tile owns selection and hover paint, including its spacing.
+             Fluent's presenter fill otherwise leaks into square corners and the gap. -->
+        <Style Selector="ListBox.profile-list ListBoxItem /template/ ContentPresenter#PART_ContentPresenter,
+                         ListBox.profile-list ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         ListBox.profile-list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter,
+                         ListBox.profile-list ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         ListBox.profile-list ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
         <Style Selector="ListBox.profile-list ListBoxItem:selected Border.profile-tile">
             <Setter Property="Background" Value="{DynamicResource TwSurfaceStrongBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource TwBorderAccentSubtleBrush}" />

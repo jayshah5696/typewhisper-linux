@@ -66,3 +66,5 @@ File transcription can run headlessly. Control commands communicate with the run
 The desktop Dashboard shows model and shortcut readiness, setup actions, and recent activity before expandable usage statistics.
 
 Readiness is based on runtime services and required setup checks. Failed required checks prevent a ready indication, and stale asynchronous refreshes cannot replace newer state. History, Profiles, and Plugins distinguish empty states, while Shortcuts and Dictionary put frequent controls first. Render tests cover six languages, two window sizes, and Light and Dark themes.
+
+Profile selection is painted by the rounded profile tile. The list item's theme presenter stays transparent so the desktop accent does not leak into square corners or the spacing below the tile.

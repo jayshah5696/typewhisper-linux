@@ -1,5 +1,7 @@
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -67,6 +69,17 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
                     var section = (ProfilesSectionViewModel)profiles.Content!;
                     section.SelectedProfile = section.Profiles.Single(profile => profile.Id == ProfileId);
                     MainWindowRenderTests.Settle();
+                    var profileList = window.GetVisualDescendants().OfType<ListBox>()
+                        .Single(list => list.Classes.Contains("profile-list"));
+                    var selectedRow = profileList.GetVisualDescendants().OfType<ListBoxItem>()
+                        .Single(row => row.IsSelected);
+                    // The rounded tile owns selection paint. A theme fill on its presenter
+                    // leaks into the square corners and the gap beneath the tile.
+                    var presenter = Assert.Single(selectedRow.GetVisualDescendants().OfType<ContentPresenter>()
+                        .Where(presenter => presenter.TemplatedParent == selectedRow));
+                    Assert.True(presenter.Background is null
+                                || presenter.Background is ISolidColorBrush { Color.A: 0 },
+                        $"Selected profile presenter {presenter.Name} paints {presenter.Background} outside its tile");
                     Assert.Contains(window.GetVisualDescendants().OfType<ComboBox>(), combo =>
                         combo.IsEffectivelyVisible
                         && AutomationProperties.GetName(combo) == Loc.Instance["Profiles.Language"]);
