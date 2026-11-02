@@ -29,7 +29,10 @@ artifacts/
 !.agents/skills/
 !.agents/skills/verify-typewhisper-linux/
 !.agents/skills/verify-typewhisper-linux/**
+!.agents/skills/lat-md/
+!.agents/skills/lat-md/**
 .claude/
+.lat-build
 .serena/
 .venv
 __pycache__/

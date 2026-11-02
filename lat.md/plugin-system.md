@@ -1,0 +1,46 @@
+# Plugin System
+
+TypeWhisper features a modular plugin architecture that decouples speech recognition, LLM text cleanup, text-to-speech, and memory persistence from the host application.
+
+All plugins live under the [[plugins]] directory and are loaded dynamically into isolated plugin contexts.
+
+## PluginSDK Boundary
+
+The [[src/TypeWhisper.PluginSDK]] package defines the contracts, models, and interfaces that all plugins must implement.
+
+Critical invariants for the SDK boundary include:
+- **Binary compatibility**: The installed host application and all bundled plugins must compile against and target the exact same PluginSDK version.
+- **Error preservation**: When a plugin loader encounters assembly or dependency resolution failures, it must preserve the underlying loader exception for diagnostic reporting.
+- **Isolation**: Plugins must not reference internal host types or cross-reference other plugin assemblies directly.
+
+## ASR and Transcription Providers
+
+Speech recognition plugins convert PCM audio byte streams into raw transcript tokens with timestamps and confidence scores.
+
+Supported transcription plugins include:
+- **Local offline engines**: Needle Whistle, Sherpa-ONNX, Whisper.cpp, Parakeet CTC, and Qwen3 STT.
+- **Cloud services**: Deepgram, AssemblyAI, Gladia, Soniox, Speechmatics, Google Cloud STT, and Cloudflare ASR.
+
+## LLM and Processing Providers
+
+Text processing plugins enhance raw transcripts through grammar correction, filler-word stripping, tone adaptation, or arbitrary prompt execution.
+
+Processing providers implement single-turn and streaming transformation APIs. Built-in plugins include OpenAI, Anthropic Claude, Google Gemini, Groq, Cerebras, Cohere, Fireworks, Meta, OpenRouter, and xAI.
+
+## Catalog and Settings Transactions
+
+The plugin catalog aggregates metadata, configuration schemas, and deployment state across all bundled and local plugins.
+
+Key rules for catalog and settings handling:
+- Opening the plugin settings dialog must not trigger network catalog refreshes or mutate persistent settings.
+- Explicit user refresh preserves in-progress form edits and persists only dirty fields.
+- Provider refreshes are bounded by strict deadlines and cancel immediately if credentials change or a newer refresh begins.
+
+## Acceleration and Native Runtimes
+
+Plugins utilizing hardware acceleration must verify native library availability and GPU compatibility before binding execution backends.
+
+When hardware acceleration (e.g. Vulkan, WebGPU, or ROCm/MIGraphX) is requested:
+- The plugin probes the native loader and device environment first.
+- If compatible hardware or runtime libraries are absent, the plugin falls back cleanly to CPU execution and logs the concrete reason.
+- UI elements distinguish between requested acceleration, preparing state, and the active execution backend.

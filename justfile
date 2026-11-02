@@ -165,3 +165,7 @@ prepare-corpus:
 benchmark engine="sherpa-onnx" model="parakeet-tdt-0.6b" backend="webgpu" language="en" cli="src/TypeWhisper.Cli/bin/Debug/net10.0/typewhisper-cli":
     mkdir -p "artifacts/verification/$(date +%F)-{{backend}}"
     uv run --no-project scripts/verification/benchmark_transcription.py --manifest benchmarks/data/librispeech-50.jsonl --engine "{{engine}}" --model "{{model}}" --expect-backend "{{backend}}" --language "{{language}}" --cli "{{cli}}" --output "artifacts/verification/$(date +%F)-{{backend}}/benchmark.json"
+
+# Validate the lat.md knowledge graph and link integrity.
+lat-check:
+    npx -y lat.md check
