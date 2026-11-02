@@ -503,7 +503,10 @@ public sealed partial class SherpaOnnxPlugin
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
             TranscriptionAccelerationPreference.AmdMigraphx => "migraphx",
             TranscriptionAccelerationPreference.WebGpu => "webgpu",
-            _ => "cpu",
+            TranscriptionAccelerationPreference.Auto
+            or TranscriptionAccelerationPreference.Cpu
+            or TranscriptionAccelerationPreference.Vulkan
+            or _ => "cpu",
         };
 
         // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx (no
@@ -1731,7 +1734,7 @@ public sealed partial class SherpaOnnxPlugin
         {
             SherpaModelFamily.Canary => CreateCanaryRecognizer(modelDir, "en", "en", provider),
             SherpaModelFamily.Qwen3Asr => _qwenRecognizerFactory(modelDir, provider),
-            _ => _parakeetRecognizerFactory(modelDir, provider),
+            SherpaModelFamily.Transducer or _ => _parakeetRecognizerFactory(modelDir, provider),
         };
 
     private static OfflineRecognizer CreateQwenRecognizer(string modelDir, string provider)
@@ -1809,7 +1812,9 @@ public sealed partial class SherpaOnnxPlugin
             TranscriptionAccelerationBackend.NvidiaCuda => "Using NVIDIA CUDA",
             TranscriptionAccelerationBackend.AmdMigraphx => "Using AMD MIGraphX",
             TranscriptionAccelerationBackend.WebGpu => "Using WebGPU",
-            _ => "Using CPU",
+            TranscriptionAccelerationBackend.Cpu
+            or TranscriptionAccelerationBackend.Vulkan
+            or _ => "Using CPU",
         };
 
     // Runtime changes need a restart because the managed import resolver is process-wide.
@@ -1819,7 +1824,10 @@ public sealed partial class SherpaOnnxPlugin
                 TranscriptionAccelerationPreference.NvidiaCuda => _loadedNativeProvider != "cuda",
                 TranscriptionAccelerationPreference.AmdMigraphx => _loadedNativeProvider != "migraphx",
                 TranscriptionAccelerationPreference.WebGpu => _loadedNativeProvider != "webgpu",
-                _ => false,
+                TranscriptionAccelerationPreference.Auto
+                or TranscriptionAccelerationPreference.Cpu
+                or TranscriptionAccelerationPreference.Vulkan
+                or _ => false,
             };
 
         if (requiresRestart)
@@ -1868,7 +1876,10 @@ public sealed partial class SherpaOnnxPlugin
                 "Preparing WebGPU",
                 "Uses the Vulkan driver through ONNX Runtime WebGPU for Parakeet."
             ),
-            _ => new TranscriptionAccelerationStatus(
+            TranscriptionAccelerationPreference.Auto
+            or TranscriptionAccelerationPreference.Cpu
+            or TranscriptionAccelerationPreference.Vulkan
+            or _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
                 "Will apply on next model load."

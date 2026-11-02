@@ -4,5 +4,7 @@
         <Company>Excel on the Web</Company>
         <Product>TypeWhisper</Product>
         <Copyright>Copyright © 2026 Excel on the Web. Portions © 2026 TypeWhisper.</Copyright>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <WarningsAsErrors>$(WarningsAsErrors);CS8509;IDE0044;IDE0051;IDE0052;IDE0057;IDE0059;IDE0066;IDE1006;CA1510;CA1511;CA1512;CA1513;CA1825;CA1826;CA1827;CA1829;CA1845;CA1854;CA1859;CA1860;CA1865;CA1866;CA1867;CA2012;CA2013;CA2014;CA2016;CA2200;CA2201;SYSLIB1045</WarningsAsErrors>
     </PropertyGroup>
 </Project>

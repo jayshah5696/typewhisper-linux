@@ -499,7 +499,7 @@ public sealed class LocalDiagnosticLogService : IDiagnosticsReporter, IDisposabl
                 DiagnosticsOutcome.Ok => "ok",
                 DiagnosticsOutcome.Cancelled => "canceled",
                 DiagnosticsOutcome.Failed => "failed",
-                _ => "aborted",
+                DiagnosticsOutcome.Aborted or _ => "aborted",
             });
             data["duration-ms"] = ((long)owner._time.GetElapsedTime(_started).TotalMilliseconds)
                 .ToString(CultureInfo.InvariantCulture);

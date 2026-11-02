@@ -112,7 +112,7 @@ public sealed class RecorderService : IDisposable
 
     public async Task<bool> StartAsync()
     {
-        if (!await _gate.WaitAsync(0).ConfigureAwait(false))
+        if (!await _gate.WaitAsync(TimeSpan.Zero).ConfigureAwait(false))
         {
             throw new RecorderBusyException("A recorder transition is in progress.");
         }

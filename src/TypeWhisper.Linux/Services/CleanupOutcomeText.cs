@@ -10,6 +10,6 @@ internal static class CleanupOutcomeText
         CleanupFallbackReason.TimedOut => "Recovery.CleanupTimedOut",
         CleanupFallbackReason.ProviderUnavailable => "Recovery.ProviderUnavailable",
         CleanupFallbackReason.EmptyResponse => "Recovery.EmptyResponse",
-        _ => "Recovery.CleanupFailed",
+        CleanupFallbackReason.ProviderFailed or _ => "Recovery.CleanupFailed",
     }];
 }

@@ -51,7 +51,7 @@ public static class DictationShortcutSpecFactory
                 cancelTrigger,
                 cancelTrigger is null ? null : $"{gui} record cancel"
             ),
-            _ => null,
+            RecordingMode.PushToTalk or RecordingMode.Hybrid or _ => null,
         };
     }
 

@@ -274,7 +274,7 @@ public sealed class AssemblyAiPlugin
         for (var i = 0; i < 300; i++)
         {
             ct.ThrowIfCancellationRequested();
-            await Task.Delay(1000, ct);
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
 
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,

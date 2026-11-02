@@ -170,7 +170,7 @@ public sealed partial class Reson8Plugin
             Reson8KeyCheck.Invalid => "Settings.InvalidApiKey",
             Reson8KeyCheck.Unreachable => "Settings.ServerUnreachable",
             Reson8KeyCheck.Redirected => "Settings.ServerRedirected",
-            _ => null,
+            Reson8KeyCheck.Valid or _ => null,
         };
         if (keyProblem is not null)
             return new PluginSettingsValidationResult(false, Loc.L(keyProblem));

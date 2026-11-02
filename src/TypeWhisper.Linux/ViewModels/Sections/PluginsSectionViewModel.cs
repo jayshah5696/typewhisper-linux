@@ -2046,7 +2046,7 @@ internal static class PluginCategories
                 Loc.Instance["Plugins.CategoryUtility"],
                 7
             ),
-            _ => new PluginCategoryInfo(
+            PluginCategory.Unknown or _ => new PluginCategoryInfo(
                 "unknown",
                 Loc.Instance["Plugins.CategoryUnknown"],
                 8

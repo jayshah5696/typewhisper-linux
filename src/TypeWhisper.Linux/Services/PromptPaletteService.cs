@@ -338,7 +338,11 @@ public sealed class PromptPaletteService
             "TypeWhisper could not replace the selected text because no clipboard tool is available.",
         InsertionResult.MissingPasteTool =>
             "TypeWhisper could not replace the selected text because no paste tool is available.",
-        _ => "The correction was not applied because TypeWhisper could not replace the selected text.",
+        InsertionResult.ActionFailed
+            or InsertionResult.ActionUnavailable
+            or InsertionResult.Failed
+            or InsertionResult.NoText
+            or _ => "The correction was not applied because TypeWhisper could not replace the selected text.",
     };
 
     /// <summary>

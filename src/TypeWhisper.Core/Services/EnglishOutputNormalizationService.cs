@@ -39,7 +39,7 @@ public static partial class EnglishOutputNormalizationService
         {
             EnglishOutputVariant.UnitedStates => s_americanSpellings.Value,
             EnglishOutputVariant.UnitedKingdom => s_britishSpellings.Value,
-            _ => null,
+            EnglishOutputVariant.AsTranscribed or _ => null,
         };
 
         return spellings is null

@@ -96,7 +96,7 @@ public sealed partial class AppImportViewModel : ObservableObject, IDisposable
                 AppImportReadFailure.TooManyEntries => Loc.Instance.GetString("AppImport.TooManyEntries", _source.AppName),
                 AppImportReadFailure.TooLarge => Loc.Instance[_source.TooLargeKey],
                 AppImportReadFailure.SqliteUnavailable => Loc.Instance["AppImport.SqliteUnavailable"],
-                _ => Loc.Instance[_source.MalformedKey],
+                AppImportReadFailure.Malformed or _ => Loc.Instance[_source.MalformedKey],
             };
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -181,7 +181,7 @@ public sealed partial class AppImportViewModel : ObservableObject, IDisposable
                 DictionaryImportCommitResult.ImportedNotDurable =>
                     Loc.Instance.GetString("AppImport.AddedNotDurable", _review.Additions.Count, _source.AppName),
                 DictionaryImportCommitResult.Stale => Loc.Instance["AppImport.Stale"],
-                _ => Loc.Instance["AppImport.NothingToAdd"],
+                DictionaryImportCommitResult.NothingToImport or _ => Loc.Instance["AppImport.NothingToAdd"],
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)

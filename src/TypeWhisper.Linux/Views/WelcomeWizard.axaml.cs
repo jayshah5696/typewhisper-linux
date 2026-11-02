@@ -61,7 +61,7 @@ public partial class WelcomeWizard : Window
 
             // Give the simulated paste time to land in the text box, then verify the
             // window/view model are still alive before reading the result back.
-            await Task.Delay(350);
+            await Task.Delay(TimeSpan.FromMilliseconds(350));
             if (_isClosed || !IsVisible || !ReferenceEquals(DataContext, vm))
             {
                 return;

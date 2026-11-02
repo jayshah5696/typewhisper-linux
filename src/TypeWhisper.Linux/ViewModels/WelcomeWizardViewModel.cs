@@ -271,7 +271,6 @@ public partial class WelcomeWizardViewModel : ObservableObject
         }
 
         // Remaining values (Pasted, Typed, NoText, …) are handled by the check below.
-        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (result)
         {
             case InsertionResult.MissingClipboardTool:
@@ -286,6 +285,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
             case InsertionResult.CopiedToClipboard:
                 PasteTestStatus = Loc.Instance["Wizard.PasteTestCopiedOnly"];
                 return false;
+            case InsertionResult.NoText:
+            case InsertionResult.Pasted:
+            case InsertionResult.Typed:
+            case InsertionResult.Failed:
+            case InsertionResult.ActionHandled:
+            case InsertionResult.ActionUnavailable:
+            case InsertionResult.ActionFailed:
+                break;
         }
 
         if (result is not InsertionResult.Pasted)
@@ -1321,7 +1328,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "ok",
         SetupTaskStatusKind.Failed => "error",
         SetupTaskStatusKind.Working => "busy",
-        _ => "missing",
+        SetupTaskStatusKind.NeedsAction or _ => "missing",
     };
 
     public string StatusGlyph => Kind switch
@@ -1329,7 +1336,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "✓",
         SetupTaskStatusKind.Failed => "!",
         SetupTaskStatusKind.Working => "…",
-        _ => "•",
+        SetupTaskStatusKind.NeedsAction or _ => "•",
     };
 
     public void Apply(SetupTaskState state)

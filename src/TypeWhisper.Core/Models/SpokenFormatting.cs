@@ -189,7 +189,7 @@ public static class SpokenFormattingStrategyValues
     {
         SpokenFormattingStrategy.NativeOnly => "nativeOnly",
         SpokenFormattingStrategy.FallbackOnly => "fallbackOnly",
-        _ => "automatic",
+        SpokenFormattingStrategy.Automatic or _ => "automatic",
     };
 }
 
@@ -215,7 +215,7 @@ public static class SpokenFormattingVerificationStateValues
         SpokenFormattingVerificationState.VendorHint => "vendorHint",
         SpokenFormattingVerificationState.UserVerifiedGood => "userVerifiedGood",
         SpokenFormattingVerificationState.UserVerifiedBad => "userVerifiedBad",
-        _ => "unknown",
+        SpokenFormattingVerificationState.Unknown or _ => "unknown",
     };
 }
 

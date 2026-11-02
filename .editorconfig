@@ -1,4 +1,4 @@
-﻿root = true
+root = true
 # top-most EditorConfig file
 
 [*.cs]
@@ -7,14 +7,36 @@
 # tell ReSharper that is the intended style so it stops flagging them for removal.
 resharper_csharp_trailing_comma_in_multiline_lists = true
 
-# IDE0066: Convert switch statement to expression
-dotnet_diagnostic.ide0066.severity = none
-
-# CA1859: Use concrete types when possible for improved performance
-dotnet_diagnostic.CA1859.severity = warning
-
-# CA1826: Use property/indexer instead of Enumerable methods on indexable collections
+# Compiler and Roslyn code-guideline diagnostics (promoted to build errors in Directory.Build.props)
+dotnet_diagnostic.CS8509.severity = error
+dotnet_diagnostic.IDE0044.severity = warning
+dotnet_diagnostic.IDE0051.severity = warning
+dotnet_diagnostic.IDE0052.severity = warning
+dotnet_diagnostic.IDE0057.severity = warning
+dotnet_diagnostic.IDE0059.severity = warning
+dotnet_diagnostic.IDE0066.severity = warning
+dotnet_diagnostic.CA1510.severity = warning
+dotnet_diagnostic.CA1511.severity = warning
+dotnet_diagnostic.CA1512.severity = warning
+dotnet_diagnostic.CA1513.severity = warning
+dotnet_diagnostic.CA1825.severity = warning
 dotnet_diagnostic.CA1826.severity = warning
+dotnet_diagnostic.CA1827.severity = warning
+dotnet_diagnostic.CA1829.severity = warning
+dotnet_diagnostic.CA1845.severity = warning
+dotnet_diagnostic.CA1854.severity = warning
+dotnet_diagnostic.CA1859.severity = warning
+dotnet_diagnostic.CA1860.severity = warning
+dotnet_diagnostic.CA1865.severity = warning
+dotnet_diagnostic.CA1866.severity = warning
+dotnet_diagnostic.CA1867.severity = warning
+dotnet_diagnostic.CA2012.severity = warning
+dotnet_diagnostic.CA2013.severity = warning
+dotnet_diagnostic.CA2014.severity = warning
+dotnet_diagnostic.CA2016.severity = warning
+dotnet_diagnostic.CA2200.severity = warning
+dotnet_diagnostic.CA2201.severity = warning
+dotnet_diagnostic.SYSLIB1045.severity = warning
 
 # Indentation
 csharp_indent_labels = one_less_than_current
@@ -345,3 +367,8 @@ indent_size = 2
 indent_style = space
 indent_size = 4
 tab_width = 4
+
+[tests/**/*.cs]
+# Tests intentionally construct generic or reserved exception types to verify scrubbers and error guards.
+dotnet_diagnostic.CA2201.severity = none
+

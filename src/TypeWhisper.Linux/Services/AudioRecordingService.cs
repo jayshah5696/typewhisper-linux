@@ -1846,21 +1846,6 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
-    private static byte[] FloatSamplesToWav(float[] samples, int sampleRate)
-    {
-        return WriteWav(
-            sampleRate,
-            samples.Length,
-            writer =>
-            {
-                foreach (var sample in samples)
-                {
-                    writer.Write(ToPcm16(sample));
-                }
-            }
-        );
-    }
-
     private RecordedAudioSnapshot SnapshotRecordedAudio()
     {
         lock (_sampleLock)
@@ -1925,65 +1910,6 @@ public sealed class AudioRecordingService : IDisposable
         w.Write("data"u8);
         w.Write(dataSize);
         w.Write(pcmBytes);
-
-        return ms.ToArray();
-    }
-
-    private byte[] BuildWavFromRecordedAudio(RecordedAudioSnapshot snapshot)
-    {
-        _wavMaterializationObserver?.Invoke(_sampleLock.IsHeldByCurrentThread);
-
-        var samples = new float[snapshot.SampleCount];
-        var offset = 0;
-        foreach (var chunk in snapshot.Chunks)
-        {
-            Array.Copy(chunk, 0, samples, offset, chunk.Length);
-            offset += chunk.Length;
-        }
-
-        var outputSamples = ResampleToSampleRate(
-            samples,
-            snapshot.CaptureSampleRate,
-            SampleRate
-        );
-        Trace.WriteLine(
-            $"[AudioRecordingService] Finalized WAV: capturedSamples={samples.Length} @ {snapshot.CaptureSampleRate} Hz "
-            + $"({samples.Length / (double)snapshot.CaptureSampleRate:F2}s real-time), "
-            + $"outputSamples={outputSamples.Length} @ {SampleRate} Hz "
-            + $"({outputSamples.Length / (double)SampleRate:F2}s tagged)."
-        );
-        return FloatSamplesToWav(outputSamples, SampleRate);
-    }
-
-    private static byte[] WriteWav(
-        int sampleRate,
-        int sampleCount,
-        Action<BinaryWriter> writeSamples
-    )
-    {
-        const short bitsPerSample = 16;
-        const short channels = 1;
-        var byteRate = sampleRate * channels * bitsPerSample / 8;
-        const int blockAlign = channels * bitsPerSample / 8;
-        var dataSize = sampleCount * 2;
-
-        using var ms = new MemoryStream();
-        using var w = new BinaryWriter(ms);
-        w.Write("RIFF"u8);
-        w.Write(36 + dataSize);
-        w.Write("WAVE"u8);
-        w.Write("fmt "u8);
-        w.Write(16); // fmt chunk size
-        w.Write((short)1); // PCM
-        w.Write(channels);
-        w.Write(sampleRate);
-        w.Write(byteRate);
-        w.Write((short)blockAlign);
-        w.Write(bitsPerSample);
-        w.Write("data"u8);
-        w.Write(dataSize);
-
-        writeSamples(w);
 
         return ms.ToArray();
     }

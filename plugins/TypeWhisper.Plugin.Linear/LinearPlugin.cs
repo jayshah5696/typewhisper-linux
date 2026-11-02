@@ -125,7 +125,7 @@ public sealed partial class LinearPlugin : IActionPlugin, IPluginSettingsProvide
                     Loc.L("Settings.IssueCreateUncertain"),
                     DisplayDuration: 10.0
                 ),
-                _ => new ActionResult(
+                IssueCreateOutcome.Failed or _ => new ActionResult(
                     false,
                     Loc.L("Settings.IssueCreateFailed")
                 ),

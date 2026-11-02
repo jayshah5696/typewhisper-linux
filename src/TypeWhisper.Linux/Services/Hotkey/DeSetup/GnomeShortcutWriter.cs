@@ -474,7 +474,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
 
         // Drop the brackets and trim — an empty body means an empty
         // list, full stop.
-        var body = s.Substring(1, s.Length - 2).Trim();
+        var body = s[1..^1].Trim();
         if (body.Length == 0)
         {
             return result;
@@ -661,7 +661,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             return s;
         }
 
-        var inner = s.Substring(1, s.Length - 2);
+        var inner = s[1..^1];
         return inner.Replace("\\'", "'").Replace(@"\\", "\\");
     }
 

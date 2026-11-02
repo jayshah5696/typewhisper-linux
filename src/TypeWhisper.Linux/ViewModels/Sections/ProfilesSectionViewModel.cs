@@ -936,7 +936,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 Loc.Instance["Profiles.HotkeyMalformed"],
             HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
                 Loc.Instance["Profiles.HotkeyPromptActionRequired"],
-            _ => Loc.Instance["Profiles.HotkeyCollision"],
+            HotkeyCandidateValidationStatus.Valid
+            or HotkeyCandidateValidationStatus.CollidesWithFixedBinding
+            or HotkeyCandidateValidationStatus.CollidesWithProfile
+            or HotkeyCandidateValidationStatus.CollidesWithPromptAction
+            or _ => Loc.Instance["Profiles.HotkeyCollision"],
         };
     }
 

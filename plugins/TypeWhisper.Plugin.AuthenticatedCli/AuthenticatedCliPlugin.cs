@@ -1683,7 +1683,7 @@ public sealed partial class AuthenticatedCliPlugin :
                 {
                     if (attempt < 2)
                     {
-                        await Task.Delay(50).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(50)).ConfigureAwait(false);
                     }
                 }
             }
@@ -1920,7 +1920,10 @@ public sealed partial class AuthenticatedCliPlugin :
             {
                 null => [],
                 { Kind: CliProviderKind.OpenCode } descriptor => CreateOpenCodeModels(descriptor),
-                _ => [new PluginModelInfo("default", owner.GetString("Model.Default"))],
+                { Kind: CliProviderKind.Claude or CliProviderKind.Codex } or _ =>
+                [
+                    new PluginModelInfo("default", owner.GetString("Model.Default")),
+                ],
             };
 
         public Task<string> ProcessAsync(

@@ -84,7 +84,7 @@ public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager
             PluginNetworkAccess.Local => true,
             PluginNetworkAccess.UserControlled =>
                 provider is ILlmProviderEndpoint endpoint && LoopbackEndpoint.IsLoopback(endpoint.LlmEndpoint),
-            _ => false,
+            PluginNetworkAccess.Mixed or PluginNetworkAccess.Network or null or _ => false,
         };
 
     // A local server can list models that it runs remotely; Ollama names those "…:cloud" or "…-cloud".

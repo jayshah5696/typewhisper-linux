@@ -71,7 +71,7 @@ internal static class LinuxDictationReadbackLanguagePolicy
         {
             FinalLanguage.TranslatedToTarget => target,
             FinalLanguage.Rewritten => null,
-            _ => engineTranslatedToEnglish ? "en" : sourceLanguage,
+            FinalLanguage.Unchanged or _ => engineTranslatedToEnglish ? "en" : sourceLanguage,
         };
     }
 

@@ -48,6 +48,9 @@ jobs:
         run: |
           mkdir -p artifacts/logs artifacts/test-results
 
+      - name: Check code guidelines
+        run: python3 scripts/verification/code_guidelines_lint.py
+
       - name: Restore solution
         run: dotnet restore TypeWhisper.slnx
 

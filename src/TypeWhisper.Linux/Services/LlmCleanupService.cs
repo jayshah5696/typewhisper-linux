@@ -72,13 +72,15 @@ public sealed class LlmCleanupService
     {
         ct.ThrowIfCancellationRequested();
         // Medium/High intentionally fall through to the LLM cleanup path below.
-        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
         switch (level)
         {
             case CleanupLevel.None:
                 return new CleanupResult(text, new CleanupOutcome(level, level));
             case CleanupLevel.Light:
                 return new CleanupResult(_cleanup.Clean(text, CleanupLevel.Light, sourceLanguage, stylePreset), new CleanupOutcome(level, level));
+            case CleanupLevel.Medium:
+            case CleanupLevel.High:
+                break;
         }
 
         var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage, stylePreset);

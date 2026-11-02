@@ -69,7 +69,7 @@ public sealed partial class CleanupService
             CleanupLevel.Light => CleanLight(text, sourceLanguage, stylePreset),
             // The Linux service adds the provider-backed pass after these local rules.
             CleanupLevel.Medium or CleanupLevel.High => CleanLight(text, sourceLanguage, stylePreset),
-            _ => text,
+            CleanupLevel.None or _ => text,
         };
     }
 
@@ -95,7 +95,13 @@ public sealed partial class CleanupService
                 + " Keep a natural, casual chat tone with clean sentence punctuation.",
             ProfileStylePreset.MeetingNotes => basePrompt
                 + " When the speaker dictates an explicit list (such as 'first... second... third...'), format it as a clean numbered or bulleted list without adding extra items.",
-            _ => basePrompt,
+            ProfileStylePreset.Clean
+                or ProfileStylePreset.Concise
+                or ProfileStylePreset.Developer
+                or ProfileStylePreset.Raw
+                or ProfileStylePreset.TerminalSafe
+                or null
+                or _ => basePrompt,
         };
     }
 

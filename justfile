@@ -46,7 +46,7 @@ verify-upgrade out=("artifacts/verification/" + `date +%F-%H%M%S` + "-upgrade-ch
 # Run one named CI test project, for example: just test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj
 test project:
     mkdir -p "{{test_results}}"
-    PATH="$(dirname "{{dotnet}}"):$PATH" "{{dotnet}}" test "{{project}}" -c Release --no-build --logger "trx" --results-directory "{{test_results}}" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+    TMPDIR=/tmp PATH="$(dirname "{{dotnet}}"):$PATH" "{{dotnet}}" test "{{project}}" -c Release --no-build --logger "trx" --results-directory "{{test_results}}" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
 
 test-core:
     just test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj
@@ -70,8 +70,15 @@ test-ui:
 
 test-all: test-core test-plugins test-linux test-cli test-integration test-ui
 
+# Static code guideline and compiler analyzer checks.
+lint:
+    uv run --no-project python scripts/verification/code_guidelines_lint.py
+
+# Fast pre-push gate: static lint checks, verification script unit tests, Release build, and core/plugin/CLI unit tests.
+pre-push: lint eval-tests build-release test-core test-plugins test-cli
+
 # Full Linux CI build and test set, including restore for a fresh checkout.
-ci: restore build-release test-all
+ci: lint restore build-release test-all
 
 doctor:
     uv run --no-project scripts/verification/doctor.py

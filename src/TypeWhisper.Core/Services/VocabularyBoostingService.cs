@@ -12,7 +12,7 @@ namespace TypeWhisper.Core.Services;
 ///     words against a normalized catalog of dictionary terms and replaces near-misses, rebuilding
 ///     the catalog whenever the dictionary changes.
 /// </summary>
-public sealed class VocabularyBoostingService : IVocabularyBoostingService
+public sealed partial class VocabularyBoostingService : IVocabularyBoostingService
 {
     private const int MaxWindowTokens = 6; // sliding window of up to 6 words checked against each term
     private const int MaxReplacements = 10; // safety cap to avoid runaway substitutions on long transcripts
@@ -436,7 +436,7 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
             stem = text;
         }
 
-        var spacedStem = Regex.Replace(stem, @"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ");
+        var spacedStem = CamelCaseBoundaryRegex().Replace(stem, " ");
         var hasCamelCase = !string.Equals(spacedStem, stem, StringComparison.Ordinal);
 
         if (ext is not null)
@@ -649,4 +649,8 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
     private readonly record struct TokenSpan(int Start, int End);
 
     private readonly record struct WindowTrim(int CoreStartOffset, int CoreLength);
+
+    // Matches transitions between lowercase/digit and uppercase characters, or between an acronym and a TitleCase word.
+    [GeneratedRegex(@"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")]
+    private static partial Regex CamelCaseBoundaryRegex();
 }

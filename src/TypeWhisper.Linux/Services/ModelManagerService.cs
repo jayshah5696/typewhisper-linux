@@ -618,7 +618,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// <summary>Loads a model without waiting for another operation; returns false when busy.</summary>
     public async Task<bool> TryLoadModelAsync(string modelId, CancellationToken ct)
     {
-        if (!await _modelLock.WaitAsync(0, ct))
+        if (!await _modelLock.WaitAsync(TimeSpan.Zero, ct))
         {
             return false;
         }
@@ -689,7 +689,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         await PrepareModelFilesAsync(modelId, ct);
-        if (!await _modelLock.WaitAsync(0, ct))
+        if (!await _modelLock.WaitAsync(TimeSpan.Zero, ct))
         {
             return false;
         }
@@ -724,7 +724,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public async Task<(ModelUnloadOutcome Outcome, string? ModelId)> TryUnloadModelAsync(
         ITranscriptionEngineRole? engine = null)
     {
-        if (!await _modelLock.WaitAsync(0))
+        if (!await _modelLock.WaitAsync(TimeSpan.Zero))
         {
             return (ModelUnloadOutcome.Busy, null);
         }
@@ -820,7 +820,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// <summary>Deletes a model without waiting, reporting busy or loaded without unloading it.</summary>
     public async Task<ModelDeleteOutcome> TryDeleteModelAsync(string modelId, CancellationToken ct)
     {
-        if (!await _modelLock.WaitAsync(0, ct))
+        if (!await _modelLock.WaitAsync(TimeSpan.Zero, ct))
         {
             return ModelDeleteOutcome.Busy;
         }
@@ -996,7 +996,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
-        if (!await _modelLock.WaitAsync(0, cancellationToken))
+        if (!await _modelLock.WaitAsync(TimeSpan.Zero, cancellationToken))
         {
             return null;
         }

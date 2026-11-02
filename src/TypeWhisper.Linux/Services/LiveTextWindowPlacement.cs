@@ -70,6 +70,7 @@ internal static class LiveTextWindowPlacement
             case OverlayPosition.Top: y = workArea.Y + offset; break;
             case OverlayPosition.Left: x = workArea.X + sideOffset; break;
             case OverlayPosition.Right: x = workArea.Right - sideOffset - size.Width; break;
+            case OverlayPosition.Bottom:
             default: y = workArea.Bottom - offset - size.Height; break;
         }
         return Fit(new PixelPoint(x, y), size, workArea).Position;

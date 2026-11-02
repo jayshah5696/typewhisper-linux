@@ -15,6 +15,7 @@ internal static class OverlayDocking
             case OverlayPosition.Top: y = area.Y + inset; break;
             case OverlayPosition.Left: x = area.X + inset; break;
             case OverlayPosition.Right: x = area.Right - size.Width - inset; break;
+            case OverlayPosition.Bottom:
             default: y = area.Bottom - size.Height - inset; break;
         }
         return new PixelPoint(

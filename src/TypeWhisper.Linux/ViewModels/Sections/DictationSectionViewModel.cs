@@ -783,7 +783,7 @@ public partial class DictationSectionViewModel : ObservableObject
             SpokenFormattingVerificationState.VendorHint => "Dictation.SpokenFormattingStatusVendorHint",
             SpokenFormattingVerificationState.UserVerifiedGood => "Dictation.SpokenFormattingStatusVerifiedGood",
             SpokenFormattingVerificationState.UserVerifiedBad => "Dictation.SpokenFormattingStatusVerifiedBad",
-            _ => "Dictation.SpokenFormattingStatusUnknown",
+            SpokenFormattingVerificationState.Unknown or _ => "Dictation.SpokenFormattingStatusUnknown",
         }];
 
     public string SpokenFormattingProfileContext => ResolveSpokenFormattingVerification()?.Profile is { } profile
@@ -1609,7 +1609,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 status.Progress.ToString("P0")
             ),
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
-            _ => Loc.Instance["Dictation.StatusNotReady"],
+            ModelStatusType.NotDownloaded or _ => Loc.Instance["Dictation.StatusNotReady"],
         };
         RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
@@ -1885,7 +1885,6 @@ public partial class DictationSectionViewModel : ObservableObject
         try
         {
             var result = await _cudaLibraryPathSetup.SetUpAsync(CancellationToken.None);
-            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the two failures with a dedicated message are handled here; the rest fall through to the generic !Success branch below.
             switch (result.Failure)
             {
                 // Clear the detail line in both: a stale "saved" note from an earlier run
@@ -1898,6 +1897,11 @@ public partial class DictationSectionViewModel : ObservableObject
                     CudaSetupStatus = "";
                     StatusText = Loc.Instance["Dictation.CudaLibsMissingRetry"];
                     return;
+                case CudaLibraryPathSetupFailure.None:
+                case CudaLibraryPathSetupFailure.ConcurrentShellProfileEdit:
+                case CudaLibraryPathSetupFailure.EnvironmentFileRefused:
+                case CudaLibraryPathSetupFailure.ShellProfileRefused:
+                    break;
             }
 
             if (!result.Success)
