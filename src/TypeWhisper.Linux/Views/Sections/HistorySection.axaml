@@ -4,6 +4,7 @@
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:icons="using:FluentIcons.Avalonia"
              x:Class="TypeWhisper.Linux.Views.Sections.HistorySection"
              x:DataType="vm:HistorySectionViewModel">
     <UserControl.Styles>
@@ -168,14 +169,69 @@
                            Margin="0,12,0,0" />
             </StackPanel>
 
-            <TextBlock Grid.Row="1"
-                       Text="{loc:Str History.EmptyState}"
-                       Foreground="{DynamicResource TwTextSecondaryBrush}"
-                       FontSize="14"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Top"
-                       Margin="0,40,0,0"
-                       IsVisible="{Binding ShowEmptyState}" />
+            <StackPanel Grid.Row="1"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,50,0,0"
+                        Spacing="12"
+                        IsVisible="{Binding ShowEmptyState}">
+                <!-- Completely Empty (no records ever recorded) -->
+                <StackPanel Spacing="8"
+                            HorizontalAlignment="Center"
+                            IsVisible="{Binding IsCompletelyEmpty}">
+                    <icons:SymbolIcon Symbol="Mic"
+                                      FontSize="36"
+                                      Foreground="{DynamicResource TwTextDisabledBrush}"
+                                      HorizontalAlignment="Center" />
+                    <TextBlock Text="{loc:Str History.EmptyTitle}"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="{loc:Str History.EmptySubtitle}"
+                               FontSize="13"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center" />
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="10"
+                                HorizontalAlignment="Center"
+                                Margin="0,8,0,0">
+                        <Button Content="{loc:Str History.StartDictation}"
+                                Command="{Binding GoToDictationCommand}"
+                                Classes="accent"
+                                Padding="14,8" />
+                        <Button Content="{loc:Str History.TranscribeFile}"
+                                Command="{Binding GoToFileTranscriptionCommand}"
+                                Padding="14,8" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Filtered Empty (records exist, but none match current filter/search) -->
+                <StackPanel Spacing="10"
+                            HorizontalAlignment="Center"
+                            IsVisible="{Binding IsFilteredEmpty}">
+                    <icons:SymbolIcon Symbol="Search"
+                                      FontSize="32"
+                                      Foreground="{DynamicResource TwTextDisabledBrush}"
+                                      HorizontalAlignment="Center" />
+                    <TextBlock Text="{loc:Str History.FilteredEmptyTitle}"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="{loc:Str History.FilteredEmptySubtitle}"
+                               FontSize="13"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center" />
+                    <Button Content="{loc:Str History.ClearFilters}"
+                            Command="{Binding ClearFiltersCommand}"
+                            HorizontalAlignment="Center"
+                            Padding="14,8"
+                            Margin="0,4,0,0" />
+                </StackPanel>
+            </StackPanel>
 
             <ScrollViewer Grid.Row="1"
                           x:Name="HistoryScroll"

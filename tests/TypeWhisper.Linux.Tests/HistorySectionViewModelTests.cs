@@ -718,6 +718,78 @@ public sealed class HistorySectionViewModelTests : IDisposable
         Assert.Equal("23:30", row.TimeLabel);
     }
 
+    [Fact]
+    public async Task EmptyState_WhenNoRecords_ShowsCompletelyEmptyState()
+    {
+        var history = CreateHistoryService();
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        await sut.LoadTask;
+
+        Assert.Equal(0, sut.TotalRecordsCount);
+        Assert.True(sut.ShowEmptyState);
+        Assert.True(sut.IsCompletelyEmpty);
+        Assert.False(sut.IsFilteredEmpty);
+    }
+
+    [Fact]
+    public async Task EmptyState_WhenRecordsExistButFiltered_ShowsFilteredEmptyAndClearsFilters()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("Meeting notes from yesterday"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        await sut.LoadTask;
+
+        Assert.Equal(1, sut.TotalRecordsCount);
+        Assert.False(sut.ShowEmptyState);
+
+        sut.SearchQuery = "completely unfindable term";
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.False(sut.IsCompletelyEmpty);
+        Assert.True(sut.IsFilteredEmpty);
+
+        sut.ClearFiltersCommand.Execute(null);
+
+        Assert.Equal("", sut.SearchQuery);
+        Assert.False(sut.ShowEmptyState);
+        Assert.True(sut.ShowTimeline);
+    }
+
+    [Fact]
+    public async Task EmptyState_WhenNoRecordsAndSearchActive_ShowsCompletelyEmptyNotFilteredEmpty()
+    {
+        var history = CreateHistoryService();
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        await sut.LoadTask;
+
+        Assert.Equal(0, sut.TotalRecordsCount);
+        sut.SearchQuery = "active query on empty store";
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.True(sut.IsCompletelyEmpty);
+        Assert.False(sut.IsFilteredEmpty);
+    }
+
+    [Fact]
+    public async Task NavigationCommands_WhenInvoked_CallConfiguredNavigationActions()
+    {
+        var history = CreateHistoryService();
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        await sut.LoadTask;
+
+        var dictationNavigated = false;
+        var fileNavigated = false;
+
+        sut.NavigateToDictationAction = () => dictationNavigated = true;
+        sut.NavigateToFileTranscriptionAction = () => fileNavigated = true;
+
+        sut.GoToDictationCommand.Execute(null);
+        Assert.True(dictationNavigated);
+
+        sut.GoToFileTranscriptionCommand.Execute(null);
+        Assert.True(fileNavigated);
+    }
+
     private HistoryService CreateHistoryService()
     {
         return new HistoryService(Path.Join(_tempDir, "history.json"), Path.Join(_tempDir, "audio"));

@@ -1,7 +1,11 @@
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -532,5 +536,453 @@ public sealed class DashboardSectionViewModelTests : IDisposable
             PromptActionApplied = promptApplied,
             TranslationApplied = translationApplied,
         };
+    }
+
+    [Fact]
+    public async Task Readiness_WhenModelDownloadedAndHotkeyConfigured_ReportsReady()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        var modelId = ModelManagerService.GetPluginModelId("provider", "base");
+        settings.Update(s => s with
+        {
+            SelectedModelId = modelId,
+            ToggleHotkey = "Ctrl+Shift+Space",
+        });
+
+        using var plugins = TestPluginManagerFactory.Create();
+        var engine = new Moq.Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(p => p.PluginId).Returns("provider");
+        engine.SetupGet(p => p.ProviderId).Returns("provider");
+        engine.SetupGet(p => p.ProviderDisplayName).Returns("Test Engine");
+        engine.Setup(p => p.IsModelDownloaded("base")).Returns(true);
+        engine.SetupGet(p => p.SupportsModelDownload).Returns(true);
+        engine.SetupGet(p => p.TranscriptionModels).Returns([new TypeWhisper.PluginSDK.Models.PluginModelInfo("base", "Whisper Base")]);
+        TypeWhisper.Tests.PluginManagerTestAccess.SetTranscriptionEngines(plugins, [engine.Object]);
+
+        using var models = new ModelManagerService(plugins, settings);
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.Initialize();
+        hotkey.TrySetHotkeyFromString("Ctrl+Shift+Space");
+
+        var setupTask = new FakeDashboardSetupTask("hotkey", "Hotkey setup", SetupTaskSeverity.Required, SetupTaskStatusKind.Satisfied, "Ready");
+
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            plugins: plugins,
+            models: models,
+            hotkey: hotkey,
+            setupTasks: [setupTask],
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.True(sut.IsModelReady, $"Model not ready: {sut.ModelStatusDetail}");
+        Assert.True(sut.IsHotkeyReady, $"Hotkey not ready: {sut.HotkeyStatusDetail}");
+        Assert.False(sut.HasSetupAction, $"Has setup action: {sut.SetupNextActionTitle} - {sut.SetupNextActionSummary}");
+        Assert.True(sut.IsDictationReady);
+        Assert.Equal(Loc.Instance["Dashboard.ReadinessReady"], sut.ReadinessStatusText);
+        Assert.Equal("ok", sut.ReadinessTone);
+        Assert.Equal("✓", sut.ReadinessGlyph);
+        Assert.Contains("Test Engine", sut.CurrentModelDisplayName);
+        Assert.Contains("Whisper Base", sut.CurrentModelDisplayName);
+        Assert.Equal(Loc.Instance["Dashboard.ModelReady"], sut.ModelStatusDetail);
+        Assert.Equal("Ctrl+Shift+Space", sut.CurrentHotkeyDisplay);
+        Assert.False(sut.HasSetupAction);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenNoModelSelected_ReportsNoModelAndSetupNeeded()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Update(s => s with { SelectedModelId = null });
+
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsDictationReady);
+        Assert.Equal(Loc.Instance["Dashboard.NoModelSelected"], sut.CurrentModelDisplayName);
+        Assert.True(sut.HasSetupAction);
+        Assert.Equal("warning", sut.ReadinessTone);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenRequiredSetupTaskUnsatisfied_ReportsSetupAction()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        var modelId = ModelManagerService.GetPluginModelId("provider", "base");
+        settings.Update(s => s with { SelectedModelId = modelId });
+
+        using var plugins = TestPluginManagerFactory.Create();
+        var engine = new Moq.Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(p => p.PluginId).Returns("provider");
+        engine.SetupGet(p => p.ProviderId).Returns("provider");
+        engine.SetupGet(p => p.ProviderDisplayName).Returns("Test Engine");
+        engine.Setup(p => p.IsModelDownloaded("base")).Returns(true);
+        engine.SetupGet(p => p.SupportsModelDownload).Returns(true);
+        TypeWhisper.Tests.PluginManagerTestAccess.SetTranscriptionEngines(plugins, [engine.Object]);
+
+        using var models = new ModelManagerService(plugins, settings);
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.Initialize();
+
+        var setupTask = new FakeDashboardSetupTask(
+            "ydotool",
+            "Auto paste setup",
+            SetupTaskSeverity.Required,
+            SetupTaskStatusKind.NeedsAction,
+            "ydotool service not running",
+            "Start ydotool"
+        );
+
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            plugins: plugins,
+            models: models,
+            hotkey: hotkey,
+            setupTasks: [setupTask],
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsDictationReady);
+        Assert.True(sut.HasSetupAction);
+        Assert.Equal("Auto paste setup", sut.SetupNextActionTitle);
+        Assert.Equal("Start ydotool", sut.SetupActionLabel);
+        Assert.True(sut.CanRunDirectSetupAction);
+
+        sut.RunSetupActionCommand.Execute(null);
+        Assert.True(setupTask.RanAction);
+    }
+
+    [Fact]
+    public void Statistics_IsCollapsibleAndDefaultsToCollapsed()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics()
+        );
+
+        Assert.False(sut.IsStatisticsExpanded);
+        Assert.Equal(Loc.Instance["Dashboard.ShowStatistics"], sut.StatisticsToggleLabel);
+
+        sut.ToggleStatisticsCommand.Execute(null);
+
+        Assert.True(sut.IsStatisticsExpanded);
+        Assert.Equal(Loc.Instance["Dashboard.HideStatistics"], sut.StatisticsToggleLabel);
+
+        sut.ToggleStatisticsCommand.Execute(null);
+
+        Assert.False(sut.IsStatisticsExpanded);
+        Assert.Equal(Loc.Instance["Dashboard.ShowStatistics"], sut.StatisticsToggleLabel);
+    }
+
+    [Fact]
+    public async Task RecentActivity_EmptyState_ProvidesActionableGuidance()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.HasRecentActivity);
+        Assert.NotEmpty(sut.EmptyActivityGuidance);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenRequiredSetupTaskThrowsException_ReportsSetupFailureAndPreservesError()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        var modelId = ModelManagerService.GetPluginModelId("provider", "base");
+        settings.Update(s => s with
+        {
+            SelectedModelId = modelId,
+            ToggleHotkey = "Ctrl+Shift+Space",
+        });
+
+        using var plugins = TestPluginManagerFactory.Create();
+        var engine = new Moq.Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(p => p.PluginId).Returns("provider");
+        engine.SetupGet(p => p.ProviderId).Returns("provider");
+        engine.SetupGet(p => p.ProviderDisplayName).Returns("Test Engine");
+        engine.Setup(p => p.IsModelDownloaded("base")).Returns(true);
+        engine.SetupGet(p => p.SupportsModelDownload).Returns(true);
+        TypeWhisper.Tests.PluginManagerTestAccess.SetTranscriptionEngines(plugins, [engine.Object]);
+
+        using var models = new ModelManagerService(plugins, settings);
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.Initialize();
+        hotkey.TrySetHotkeyFromString("Ctrl+Shift+Space");
+
+        var failingTask = new ThrowingDashboardSetupTask("crash", "Crash Task", SetupTaskSeverity.Required, new InvalidOperationException("Device unreachable"));
+
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            plugins: plugins,
+            models: models,
+            hotkey: hotkey,
+            setupTasks: [failingTask],
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsDictationReady);
+        Assert.Equal("warning", sut.ReadinessTone);
+        Assert.Equal(Loc.Instance["Dashboard.ReadinessNeedsSetup"], sut.ReadinessStatusText);
+        Assert.True(sut.HasSetupAction);
+        Assert.Equal("Crash Task", sut.SetupNextActionTitle);
+        Assert.Contains("Device unreachable", sut.SetupNextActionSummary);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenHotkeyBackendInactiveOrNull_ReportsInactiveBackendAndNotReady()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        var modelId = ModelManagerService.GetPluginModelId("provider", "base");
+        settings.Update(s => s with
+        {
+            SelectedModelId = modelId,
+            ToggleHotkey = "Ctrl+Shift+Space",
+        });
+
+        using var plugins = TestPluginManagerFactory.Create();
+        var engine = new Moq.Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(p => p.PluginId).Returns("provider");
+        engine.SetupGet(p => p.ProviderId).Returns("provider");
+        engine.SetupGet(p => p.ProviderDisplayName).Returns("Test Engine");
+        engine.Setup(p => p.IsModelDownloaded("base")).Returns(true);
+        engine.SetupGet(p => p.SupportsModelDownload).Returns(true);
+        TypeWhisper.Tests.PluginManagerTestAccess.SetTranscriptionEngines(plugins, [engine.Object]);
+
+        using var models = new ModelManagerService(plugins, settings);
+
+        // hotkey service is null (backend inactive/absent)
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            plugins: plugins,
+            models: models,
+            hotkey: null,
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsHotkeyReady);
+        Assert.False(sut.IsDictationReady);
+        Assert.NotEqual(Loc.Instance["Dashboard.HotkeyActive"], sut.HotkeyStatusDetail);
+        Assert.True(sut.HasSetupAction);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenHotkeyMissing_ProvidesActionableGuidanceAndDoesNotClaimReady()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        var modelId = ModelManagerService.GetPluginModelId("provider", "base");
+        settings.Update(s => s with
+        {
+            SelectedModelId = modelId,
+            ToggleHotkey = "",
+        });
+
+        using var plugins = TestPluginManagerFactory.Create();
+        var engine = new Moq.Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(p => p.PluginId).Returns("provider");
+        engine.SetupGet(p => p.ProviderId).Returns("provider");
+        engine.SetupGet(p => p.ProviderDisplayName).Returns("Test Engine");
+        engine.Setup(p => p.IsModelDownloaded("base")).Returns(true);
+        engine.SetupGet(p => p.SupportsModelDownload).Returns(true);
+        TypeWhisper.Tests.PluginManagerTestAccess.SetTranscriptionEngines(plugins, [engine.Object]);
+
+        using var models = new ModelManagerService(plugins, settings);
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.Initialize();
+
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            plugins: plugins,
+            models: models,
+            hotkey: hotkey,
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsHotkeyReady);
+        Assert.False(sut.IsDictationReady);
+        Assert.True(sut.HasSetupAction);
+        Assert.Equal(Loc.Instance["Dashboard.ReadinessNeedsSetup"], sut.ReadinessStatusText);
+        Assert.DoesNotContain("Ready", sut.ReadinessSubtitle, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Not configured", sut.ReadinessSubtitle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenModelManagerAbsent_DoesNotAssumeModelReady()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        settings.Update(s => s with
+        {
+            SelectedModelId = "provider:large",
+            ToggleHotkey = "Ctrl+Shift+Space",
+        });
+
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.Initialize();
+        hotkey.TrySetHotkeyFromString("Ctrl+Shift+Space");
+
+        // models is null
+        using var sut = new DashboardSectionViewModel(
+            new HistoryService(Path.Join(_tempDir, "history.json")),
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            models: null,
+            hotkey: hotkey,
+            postToUi: action => action()
+        );
+
+        await sut.RefreshReadinessAsync();
+
+        Assert.False(sut.IsModelReady);
+        Assert.False(sut.IsDictationReady);
+        Assert.NotEqual(Loc.Instance["Dashboard.ModelReady"], sut.ModelStatusDetail);
+        Assert.True(sut.HasSetupAction);
+    }
+
+    [Fact]
+    public async Task Readiness_DispatchesToUiAndNewerSnapshotSupersedes()
+    {
+        var settingsPath = Path.Join(_tempDir, "settings.json");
+        var settings = new SettingsService(settingsPath);
+        var queue = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+
+        var history = new HistoryService(Path.Join(_tempDir, "history.json"));
+        await history.EnsureLoadedAsync();
+
+        var tcs = new TaskCompletionSource();
+        var blockingTask = new BlockingDashboardSetupTask("block", "Blocking Task", tcs.Task);
+
+        using var sut = new DashboardSectionViewModel(
+            history,
+            settings,
+            new HistoryInsightsService(),
+            new FakeStatistics(),
+            TimeZoneInfo.Utc,
+            postToUi: queue.Enqueue,
+            setupTasks: [blockingTask]
+        );
+
+        // Drain any initial initialization
+        while (queue.TryDequeue(out var initAction))
+        {
+            initAction();
+        }
+
+        // Start first refresh (will block on task gate)
+        var task1 = sut.RefreshReadinessAsync();
+
+        // Second readiness refresh with updated settings
+        settings.Update(s => s with { SelectedModelId = "new-model" });
+        var task2 = sut.RefreshReadinessAsync();
+
+        // Release first task
+        tcs.SetResult();
+
+        await Task.WhenAll(task1, task2);
+
+        // Run all queued UI actions
+        while (queue.TryDequeue(out var action))
+        {
+            action();
+        }
+
+        // Newest snapshot should have won
+        Assert.Contains("new-model", sut.CurrentModelDisplayName);
+    }
+
+    private sealed class BlockingDashboardSetupTask(string id, string title, Task gate) : ISetupTask
+    {
+        public string Id => id;
+        public string Title => title;
+        public SetupTaskSeverity Severity => SetupTaskSeverity.Required;
+        public bool AppliesToThisMachine() => true;
+        public async Task<SetupTaskState> EvaluateAsync(CancellationToken ct)
+        {
+            await Task.WhenAny(gate, Task.Delay(Timeout.Infinite, ct));
+            return new SetupTaskState(SetupTaskStatusKind.Satisfied, "Gate open");
+        }
+        public Task<SetupActionOutcome> RunActionAsync(CancellationToken ct) =>
+            Task.FromResult(new SetupActionOutcome(true, "Done"));
+    }
+
+    private sealed class ThrowingDashboardSetupTask(string id, string title, SetupTaskSeverity severity, Exception exception) : ISetupTask
+    {
+        public string Id => id;
+        public string Title => title;
+        public SetupTaskSeverity Severity => severity;
+        public bool AppliesToThisMachine() => true;
+        public Task<SetupTaskState> EvaluateAsync(CancellationToken ct) =>
+            Task.FromException<SetupTaskState>(exception);
+        public Task<SetupActionOutcome> RunActionAsync(CancellationToken ct) =>
+            Task.FromException<SetupActionOutcome>(exception);
+    }
+
+    private sealed class FakeDashboardSetupTask(
+        string id,
+        string title,
+        SetupTaskSeverity severity,
+        SetupTaskStatusKind kind,
+        string summary,
+        string? actionLabel = null) : ISetupTask
+    {
+        public string Id => id;
+        public string Title => title;
+        public SetupTaskSeverity Severity => severity;
+        public bool RanAction { get; private set; }
+        public bool AppliesToThisMachine() => true;
+        public Task<SetupTaskState> EvaluateAsync(CancellationToken ct) =>
+            Task.FromResult(new SetupTaskState(kind, summary, ActionLabel: actionLabel));
+        public Task<SetupActionOutcome> RunActionAsync(CancellationToken ct)
+        {
+            RanAction = true;
+            return Task.FromResult(new SetupActionOutcome(true, "Fixed"));
+        }
     }
 }

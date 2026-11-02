@@ -6,6 +6,7 @@
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:services="using:TypeWhisper.Linux.Services"
+             xmlns:icons="using:FluentIcons.Avalonia"
              x:Class="TypeWhisper.Linux.Views.Sections.DictionarySection"
              x:DataType="vm:DictionarySectionViewModel">
     <UserControl.Resources>
@@ -182,62 +183,6 @@
                 </Border>
             </Panel>
 
-            <Border Classes="panel"
-                    Padding="14,12"
-                    Margin="0,0,0,12">
-                <Grid ColumnDefinitions="*,Auto"
-                      ColumnSpacing="16">
-                    <StackPanel>
-                        <TextBlock Text="{loc:Str Dictionary.EnableVocabularyBoosting}"
-                                   FontSize="13"
-                                   FontWeight="SemiBold" />
-                        <TextBlock
-                            Text="{loc:Str Dictionary.VocabularyBoostingHint}"
-                            FontSize="12"
-                            Foreground="{DynamicResource TwTextSecondaryBrush}"
-                            TextWrapping="Wrap"
-                            Margin="0,4,0,0" />
-                        <TextBlock Text="{Binding VocabularyBoostingStatusText}"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                   Margin="0,8,0,0" />
-                    </StackPanel>
-
-                    <ToggleSwitch Grid.Column="1"
-                                  AutomationProperties.Name="{loc:Str Dictionary.EnableVocabularyBoosting}"
-                                  IsChecked="{Binding VocabularyBoostingEnabled}"
-                                  VerticalAlignment="Top" />
-                </Grid>
-            </Border>
-
-            <Border Classes="panel"
-                    Padding="14,12"
-                    Margin="0,0,0,12">
-                <Grid ColumnDefinitions="*,Auto"
-                      ColumnSpacing="16">
-                    <StackPanel>
-                        <TextBlock Text="{loc:Str Dictionary.EnableAcousticBoosting}"
-                                   FontSize="13"
-                                   FontWeight="SemiBold" />
-                        <TextBlock
-                            Text="{loc:Str Dictionary.AcousticBoostingHint}"
-                            FontSize="12"
-                            Foreground="{DynamicResource TwTextSecondaryBrush}"
-                            TextWrapping="Wrap"
-                            Margin="0,4,0,0" />
-                        <TextBlock Text="{Binding AcousticBoostingStatusText}"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                   Margin="0,8,0,0" />
-                    </StackPanel>
-
-                    <ToggleSwitch Grid.Column="1"
-                                  AutomationProperties.Name="{loc:Str Dictionary.EnableAcousticBoosting}"
-                                  IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
-                                  VerticalAlignment="Top" />
-                </Grid>
-            </Border>
-
             <StackPanel Orientation="Horizontal"
                         Margin="0,0,0,12">
                 <Button Command="{Binding SetTabCommand}"
@@ -303,10 +248,10 @@
                     <StackPanel HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 IsVisible="{Binding ShowEmptyState}">
-                        <TextBlock Text="▣"
-                                   FontSize="38"
-                                   Foreground="{DynamicResource TwTextDisabledBrush}"
-                                   HorizontalAlignment="Center" />
+                        <icons:SymbolIcon Symbol="Book"
+                                          FontSize="36"
+                                          Foreground="{DynamicResource TwTextDisabledBrush}"
+                                          HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding EmptyStateTitle}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
@@ -317,6 +262,12 @@
                                    Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,6,0,0" />
+                        <Button Content="{loc:Str Dictionary.ClearSearch}"
+                                Command="{Binding ClearSearchCommand}"
+                                HorizontalAlignment="Center"
+                                Margin="0,12,0,0"
+                                Padding="14,7"
+                                IsVisible="{Binding IsSearchFilteredEmpty}" />
                     </StackPanel>
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -510,6 +461,7 @@
 
             <Border Classes="panel"
                     Padding="14,12"
+                    Margin="0,0,0,12"
                     IsVisible="{Binding ShowAddBar}">
                 <StackPanel Spacing="6">
                     <Grid ColumnDefinitions="*,Auto,*,92"
@@ -572,6 +524,62 @@
                                Foreground="{DynamicResource TwWarningTextBrush}"
                                TextWrapping="Wrap" />
                 </StackPanel>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="14,12"
+                    Margin="0,0,0,12">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="16">
+                    <StackPanel>
+                        <TextBlock Text="{loc:Str Dictionary.EnableVocabularyBoosting}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="{loc:Str Dictionary.VocabularyBoostingHint}"
+                            FontSize="12"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding VocabularyBoostingStatusText}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableVocabularyBoosting}"
+                                  IsChecked="{Binding VocabularyBoostingEnabled}"
+                                  VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="14,12"
+                    Margin="0,0,0,12">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="16">
+                    <StackPanel>
+                        <TextBlock Text="{loc:Str Dictionary.EnableAcousticBoosting}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="{loc:Str Dictionary.AcousticBoostingHint}"
+                            FontSize="12"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding AcousticBoostingStatusText}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableAcousticBoosting}"
+                                  IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
+                                  VerticalAlignment="Top" />
+                </Grid>
             </Border>
         </StackPanel>
     </DockPanel>
