@@ -100,6 +100,48 @@ public sealed class PluginsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void EmptyState_WhenNoPluginsInstalled_ReportsNoPluginsInstalled()
+    {
+        var vm = CreateVm();
+
+        Assert.Equal(0, vm.EnabledCount);
+        Assert.Equal(0, vm.DisabledCount);
+        Assert.False(vm.HasAnyPlugins);
+        Assert.False(vm.HasEnabledPlugins);
+        Assert.False(vm.HasDisabledPlugins);
+    }
+
+    [Fact]
+    public void EmptyState_WhenPluginsExistButNoneEnabled_HasAnyPluginsIsTrue()
+    {
+        var vm = CreateVm(("com.test.a", false));
+
+        Assert.Equal(0, vm.EnabledCount);
+        Assert.Equal(1, vm.DisabledCount);
+        Assert.True(vm.HasAnyPlugins);
+        Assert.False(vm.HasEnabledPlugins);
+        Assert.True(vm.HasDisabledPlugins);
+    }
+
+    [Fact]
+    public void DisabledFilterAction_WhenNoEnabledPlugins_SwitchesToDisabledTab()
+    {
+        var vm = CreateVm(("com.test.disabled", false));
+
+        Assert.Equal(0, vm.SelectedTab);
+        Assert.True(vm.IsEnabledTabSelected);
+        Assert.False(vm.HasEnabledPlugins);
+        Assert.True(vm.HasAnyPlugins);
+
+        // Action button command bound to SetTabCommand with parameter 1
+        vm.SetTabCommand.Execute("1");
+
+        Assert.Equal(1, vm.SelectedTab);
+        Assert.True(vm.IsDisabledTabSelected);
+        Assert.True(vm.HasDisabledPlugins);
+    }
+
+    [Fact]
     public void LanguageChange_RebuildsCardsAndSummaryInTheNewLanguage()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;

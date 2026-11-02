@@ -65,113 +65,6 @@
                     Margin="0,8,0,0" />
             </StackPanel>
 
-            <TextBlock Text="{loc:Str Shortcuts.Status}"
-                       Classes="section-label" />
-            <Border Classes="section-panel">
-                <StackPanel>
-                    <Border Classes="section-row">
-                        <StackPanel>
-                            <TextBlock Text="{loc:Str Shortcuts.Backend}" Classes="row-title" />
-                            <TextBlock Classes="row-hint"
-                                       Text="{Binding ActiveBackendDisplayName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusActive}" />
-                            <TextBlock Classes="row-hint"
-                                       Text="{Binding SessionType, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusDisplayServer}" />
-                            <TextBlock Classes="row-hint"
-                                       Text="{Binding ScopeText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusCaptureScope}" />
-                            <TextBlock Classes="row-hint"
-                                       Text="{Binding SupportsPressReleaseText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusPressRelease}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
-                            IsVisible="{Binding ShowStaleIntegrationBanner}" />
-
-                    <Border Classes="section-row"
-                            Background="{DynamicResource TwWarningSubtleBrush}"
-                            BorderBrush="{DynamicResource TwWarningBorderBrush}"
-                            BorderThickness="0,1"
-                            IsVisible="{Binding ShowStaleIntegrationBanner}">
-                        <StackPanel>
-                            <TextBlock Text="{loc:Str Shortcuts.DesktopIntegrationStale}"
-                                       Classes="row-title"
-                                       Foreground="{DynamicResource TwWarningTextBrush}" />
-                            <TextBlock Text="{Binding StaleIntegrationMessage}"
-                                       Classes="row-hint"
-                                       TextWrapping="Wrap" />
-                            <StackPanel Orientation="Horizontal"
-                                        Spacing="8"
-                                        Margin="0,10,0,0">
-                                <Button Content="{Binding SetupAutomaticallyLabel}"
-                                        Command="{Binding SetupAutomaticallyCommand}"
-                                        IsVisible="{Binding CanRefreshDesktopIntegration}" />
-                                <Button Content="{loc:Str Common.RemoveIntegration}"
-                                        Command="{Binding RemoveIntegrationCommand}"
-                                        IsEnabled="{Binding CanRemoveDesktopIntegration}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
-                            IsVisible="{Binding ShowKeyboardAccessBanner}" />
-
-                    <Border Classes="section-row"
-                            IsVisible="{Binding ShowKeyboardAccessBanner}">
-                        <StackPanel>
-                            <TextBlock Text="{loc:Str Shortcuts.KeyboardAccessBanner}"
-                                       Classes="row-title"
-                                       Foreground="{DynamicResource TwWarningTextBrush}" />
-                            <TextBlock TextWrapping="Wrap"
-                                       Classes="row-hint"
-                                       Text="{loc:Str Shortcuts.KeyboardAccessBannerHint}" />
-                            <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
-                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="6"
-                                    Padding="10,6"
-                                    Margin="0,8,0,0">
-                                <SelectableTextBlock Text="{Binding KeyboardAccessCommand}"
-                                                     FontFamily="Cascadia Mono, JetBrains Mono, monospace"
-                                                     FontSize="12" />
-                            </Border>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
-                            IsVisible="{Binding ShowCapabilityMismatch}" />
-
-                    <Border Classes="section-row"
-                            IsVisible="{Binding ShowCapabilityMismatch}">
-                        <StackPanel>
-                            <TextBlock Text="{loc:Str Shortcuts.CapabilityMismatch}"
-                                       Classes="row-title"
-                                       Foreground="{DynamicResource TwWarningTextBrush}" />
-                            <TextBlock TextWrapping="Wrap"
-                                       Classes="row-hint"
-                                       Text="{loc:Str Shortcuts.CapabilityMismatchHint}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
-
-                    <Border Classes="section-row">
-                        <Grid ColumnDefinitions="*,Auto"
-                              ColumnSpacing="16">
-                            <StackPanel Margin="0,0,16,0">
-                                <TextBlock Text="{loc:Str Shortcuts.WaylandEvdev}"
-                                           Classes="row-title" />
-                                <TextBlock TextWrapping="Wrap"
-                                           Classes="row-hint"
-                                           Text="{loc:Str Shortcuts.WaylandEvdevHint}" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1"
-                                          AutomationProperties.Name="{loc:Str Shortcuts.WaylandEvdev}"
-                                          VerticalAlignment="Center"
-                                          IsChecked="{Binding WaylandEvdevHotkeysEnabled}" />
-                        </Grid>
-                    </Border>
-                </StackPanel>
-            </Border>
-
             <TextBlock Text="{loc:Str Shortcuts.MainCapture}"
                        Classes="section-label" />
             <Border Classes="section-panel">
@@ -217,6 +110,17 @@
                                Classes="row-hint"
                                Margin="18,0,18,14"
                                IsVisible="{Binding IsCapturingHotkey}" />
+                    <Border Classes="section-row"
+                            Background="{DynamicResource TwWarningSubtleBrush}"
+                            BorderBrush="{DynamicResource TwWarningBorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,10"
+                            IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding StatusMessage}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwWarningTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </Border>
                 </StackPanel>
             </Border>
 
@@ -431,6 +335,128 @@
                             </StackPanel>
                         </Grid>
                     </Border>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="{loc:Str Shortcuts.Status}"
+                       Classes="section-label" />
+            <Border Classes="section-panel" Margin="0,0,0,18">
+                <StackPanel>
+                    <Border Classes="section-row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel>
+                                <TextBlock Text="{loc:Str Shortcuts.Backend}" Classes="row-title" />
+                                <TextBlock Classes="row-hint"
+                                           Text="{Binding ActiveBackendDisplayName, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusActive}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="{Binding DiagnosticsToggleLabel}"
+                                    Command="{Binding ToggleDiagnosticsCommand}"
+                                    VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
+                            IsVisible="{Binding ShowStaleIntegrationBanner}" />
+
+                    <Border Classes="section-row"
+                            Background="{DynamicResource TwWarningSubtleBrush}"
+                            BorderBrush="{DynamicResource TwWarningBorderBrush}"
+                            BorderThickness="0,1"
+                            IsVisible="{Binding ShowStaleIntegrationBanner}">
+                        <StackPanel>
+                            <TextBlock Text="{loc:Str Shortcuts.DesktopIntegrationStale}"
+                                       Classes="row-title"
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
+                            <TextBlock Text="{Binding StaleIntegrationMessage}"
+                                       Classes="row-hint"
+                                       TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal"
+                                        Spacing="8"
+                                        Margin="0,10,0,0">
+                                <Button Content="{Binding SetupAutomaticallyLabel}"
+                                        Command="{Binding SetupAutomaticallyCommand}"
+                                        IsVisible="{Binding CanRefreshDesktopIntegration}" />
+                                <Button Content="{loc:Str Common.RemoveIntegration}"
+                                        Command="{Binding RemoveIntegrationCommand}"
+                                        IsEnabled="{Binding CanRemoveDesktopIntegration}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
+                            IsVisible="{Binding ShowKeyboardAccessBanner}" />
+
+                    <Border Classes="section-row"
+                            IsVisible="{Binding ShowKeyboardAccessBanner}">
+                        <StackPanel>
+                            <TextBlock Text="{loc:Str Shortcuts.KeyboardAccessBanner}"
+                                       Classes="row-title"
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Classes="row-hint"
+                                       Text="{loc:Str Shortcuts.KeyboardAccessBannerHint}" />
+                            <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,6"
+                                    Margin="0,8,0,0">
+                                <SelectableTextBlock Text="{Binding KeyboardAccessCommand}"
+                                                     FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                     FontSize="12" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
+                            IsVisible="{Binding ShowCapabilityMismatch}" />
+
+                    <Border Classes="section-row"
+                            IsVisible="{Binding ShowCapabilityMismatch}">
+                        <StackPanel>
+                            <TextBlock Text="{loc:Str Shortcuts.CapabilityMismatch}"
+                                       Classes="row-title"
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Classes="row-hint"
+                                       Text="{loc:Str Shortcuts.CapabilityMismatchHint}" />
+                        </StackPanel>
+                    </Border>
+
+                    <StackPanel IsVisible="{Binding IsDiagnosticsExpanded}">
+                        <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
+                        <Border Classes="section-row">
+                            <StackPanel Spacing="4">
+                                <TextBlock Classes="row-hint"
+                                           Text="{Binding SessionType, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusDisplayServer}" />
+                                <TextBlock Classes="row-hint"
+                                           Text="{Binding ScopeText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusCaptureScope}" />
+                                <TextBlock Classes="row-hint"
+                                           Text="{Binding SupportsPressReleaseText, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Shortcuts.StatusPressRelease}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
+
+                        <Border Classes="section-row">
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="16">
+                                <StackPanel Margin="0,0,16,0">
+                                    <TextBlock Text="{loc:Str Shortcuts.WaylandEvdev}"
+                                               Classes="row-title" />
+                                    <TextBlock TextWrapping="Wrap"
+                                               Classes="row-hint"
+                                               Text="{loc:Str Shortcuts.WaylandEvdevHint}" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1"
+                                              AutomationProperties.Name="{loc:Str Shortcuts.WaylandEvdev}"
+                                              VerticalAlignment="Center"
+                                              IsChecked="{Binding WaylandEvdevHotkeysEnabled}" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

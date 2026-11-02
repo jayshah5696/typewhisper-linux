@@ -53,8 +53,8 @@ public sealed class MainWindowRenderTests(UiSession ui)
     internal static readonly (string Name, double Width, double Height)[] s_sizes =
         [("wide", 1200, 780), ("compact", 960, 640)];
 
-    // Every window pins RequestedThemeVariant="Dark"; add Light here when the app supports it.
-    private static readonly (string Name, ThemeVariant Variant)[] s_themes = [("dark", ThemeVariant.Dark)];
+    private static readonly (string Name, ThemeVariant Variant)[] s_themes =
+        [("dark", ThemeVariant.Dark), ("light", ThemeVariant.Light)];
 
     [Theory]
     [MemberData(nameof(Languages))]

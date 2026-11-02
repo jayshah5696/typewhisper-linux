@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
 using Xunit;
@@ -1026,6 +1027,40 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Equal(1, writer.IsInstalledCallCount);
         Assert.Equal(1, backend.RegisterCount);
         Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
+    }
+
+    [Fact]
+    public void DiagnosticsExpanded_DefaultsToFalseAndTogglesWithCommand()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, []);
+
+        Assert.False(sut.IsDiagnosticsExpanded);
+
+        sut.ToggleDiagnosticsCommand.Execute(null);
+        Assert.True(sut.IsDiagnosticsExpanded);
+
+        sut.ToggleDiagnosticsCommand.Execute(null);
+        Assert.False(sut.IsDiagnosticsExpanded);
+    }
+
+    [Fact]
+    public async Task StatusMessage_InvalidHotkey_UpdatesStatusMessageWhileDiagnosticsCollapsed()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer]);
+
+        Assert.False(sut.IsDiagnosticsExpanded);
+
+        sut.HotkeyText = "Invalid+Shortcut+Chord";
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.False(sut.IsDiagnosticsExpanded);
+        Assert.False(string.IsNullOrWhiteSpace(sut.StatusMessage));
+        Assert.Equal(Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", "Invalid+Shortcut+Chord"), sut.StatusMessage);
     }
 
     private SettingsService CreateToggleSettings(string toggleHotkey = "Ctrl+Shift+Space")

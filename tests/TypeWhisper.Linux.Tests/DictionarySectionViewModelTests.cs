@@ -482,6 +482,73 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         Assert.Equal(opens, sut.AliasSuggestions.IsOpen);
     }
 
+    [Fact]
+    public void EmptyState_WhenSearchFiltersAllEntries_ReportsFilteredEmptyAndClearsSearch()
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = "entry-1",
+            Original = "Kubernetes",
+            EntryType = DictionaryEntryType.Term,
+        });
+        var sut = CreateViewModel(dictionary);
+
+        Assert.Equal(1, sut.TotalEntriesCount);
+        Assert.False(sut.ShowEmptyState);
+        Assert.False(sut.IsSearchFilteredEmpty);
+
+        sut.SearchText = "nomatchforthisterm";
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.True(sut.IsSearchFilteredEmpty);
+        Assert.Equal(Loc.Instance["Dictionary.FilteredEmptyTitle"], sut.EmptyStateTitle);
+        Assert.Equal(Loc.Instance["Dictionary.FilteredEmptySubtitle"], sut.EmptyStateSubtitle);
+
+        sut.ClearSearchCommand.Execute(null);
+
+        Assert.Equal("", sut.SearchText);
+        Assert.False(sut.ShowEmptyState);
+        Assert.True(sut.ShowEntriesList);
+    }
+
+    [Fact]
+    public void EmptyState_WhenStoreEmptyAndSearchActive_AvoidsFilteredEmptyDeadEnd()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+
+        Assert.Equal(0, sut.TotalEntriesCount);
+        sut.SearchText = "query on empty dictionary";
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.False(sut.IsSearchFilteredEmpty);
+        Assert.Equal(Loc.Instance["Dictionary.EmptyTitleAll"], sut.EmptyStateTitle);
+    }
+
+    [Fact]
+    public void EmptyState_WhenTabHasNoEntriesAndSearchActive_AvoidsFilteredEmptyDeadEnd()
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(new DictionaryEntry
+        {
+            Id = "term-1",
+            Original = "Kubernetes",
+            EntryType = DictionaryEntryType.Term,
+        });
+        var sut = CreateViewModel(dictionary);
+
+        // Switch to Corrections tab (index 2) where 0 entries exist
+        sut.SetTabCommand.Execute("2");
+        Assert.Equal(2, sut.SelectedTab);
+        Assert.Empty(sut.FilteredEntries);
+
+        sut.SearchText = "some search";
+        Assert.True(sut.ShowEmptyState);
+        Assert.False(sut.IsSearchFilteredEmpty);
+        Assert.Equal(Loc.Instance["Dictionary.EmptyTitleCorrections"], sut.EmptyStateTitle);
+    }
+
     private DictionaryService CreateDictionaryService()
     {
         return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));

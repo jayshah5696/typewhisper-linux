@@ -136,8 +136,10 @@ public partial class HistorySectionViewModel : ObservableObject
         // "All apps" and the date-group headers are computed text; the app filter also compares
         // against "All apps", so a stale label would stop matching after a language change.
         Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
-        _ = LoadAsync();
+        LoadTask = LoadAsync();
     }
+
+    internal Task LoadTask { get; private set; } = Task.CompletedTask;
 
     internal bool CanCleanAgain => _cleanAgain is not null;
     internal Task<CleanupResult> CleanAgainAsync(TranscriptionRecord record, CancellationToken token) =>
@@ -153,6 +155,9 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
+    public int TotalRecordsCount => _history.Records.Count;
+    public bool IsFilteredEmpty => ShowEmptyState && TotalRecordsCount > 0;
+    public bool IsCompletelyEmpty => ShowEmptyState && TotalRecordsCount == 0;
 
     // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
     // "capture is off" (and point at the setting) rather than implying the LLM simply
@@ -500,7 +505,31 @@ public partial class HistorySectionViewModel : ObservableObject
             IsLoading = false;
             OnPropertyChanged(nameof(ShowTimeline));
             OnPropertyChanged(nameof(ShowEmptyState));
+            OnPropertyChanged(nameof(IsFilteredEmpty));
+            OnPropertyChanged(nameof(IsCompletelyEmpty));
         }
+    }
+
+    [RelayCommand]
+    private void ClearFilters()
+    {
+        SearchQuery = string.Empty;
+        SelectedAppFilter = Loc.Instance["History.AllApps"];
+    }
+
+    public Action? NavigateToDictationAction { get; set; }
+    public Action? NavigateToFileTranscriptionAction { get; set; }
+
+    [RelayCommand]
+    private void GoToDictation()
+    {
+        NavigateToDictationAction?.Invoke();
+    }
+
+    [RelayCommand]
+    private void GoToFileTranscription()
+    {
+        NavigateToFileTranscriptionAction?.Invoke();
     }
 
     partial void OnSearchQueryChanged(string value)
@@ -673,6 +702,8 @@ public partial class HistorySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(IsFilteredEmpty));
+        OnPropertyChanged(nameof(IsCompletelyEmpty));
         OnPropertyChanged(nameof(HasMore));
     }
 

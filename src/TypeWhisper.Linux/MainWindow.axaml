@@ -38,16 +38,16 @@
 
     <Grid ColumnDefinitions="272,1,*" RowDefinitions="*">
         <Grid Grid.Column="0" Margin="18,18,0,18" RowDefinitions="Auto,*">
-            <DockPanel Grid.Row="0" Margin="2,8,14,14">
+            <Grid Grid.Row="0" Margin="2,8,14,14" ColumnDefinitions="*,Auto" ColumnSpacing="12">
                 <TextBlock Text="{Binding AppTitle}"
                            FontSize="15"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-                <TextBlock DockPanel.Dock="Right"
+                <TextBlock Grid.Column="1"
                            Text="{Binding VersionLabel}"
                            FontSize="11"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-            </DockPanel>
+            </Grid>
 
             <ScrollViewer Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
@@ -107,7 +107,7 @@
 
         <Border Grid.Column="1" Background="{DynamicResource TwSurfaceStrongBrush}" Margin="0,18,0,18" />
 
-        <Grid Grid.Column="2" Margin="0,18,18,18" RowDefinitions="52,1,*">
+        <Grid Grid.Column="2" Margin="0,18,18,18" RowDefinitions="16,1,*">
             <Grid Grid.Row="0" Margin="28,0,28,0" ColumnDefinitions="*,Auto">
                 <Border Grid.Column="0"
                         IsVisible="{Binding UpdateBannerVisible}"
@@ -154,12 +154,6 @@
                     </StackPanel>
                 </Border>
 
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-                    <Button Content="{loc:Str Common.OpenWizard}"
-                            Command="{Binding OpenWizardCommand}" />
-                </StackPanel>
             </Grid>
 
             <Border Grid.Row="1" Background="{DynamicResource TwSurfaceStrongBrush}" />
