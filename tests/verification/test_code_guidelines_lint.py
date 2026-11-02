@@ -24,43 +24,28 @@ def write_text(path: Path, content: str) -> None:
 
 
 def write_valid_build_config(root: Path) -> None:
+    linter = load_linter()
+    codes = ";".join(linter.REQUIRED_BUILD_ERROR_CODES)
     write_text(
         root / "Directory.Build.props",
-        """
+        f"""
         <Project>
             <PropertyGroup>
                 <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-                <WarningsAsErrors>$(WarningsAsErrors);CS8509;IDE0057;IDE0066;IDE1006;CA1510;CA1511;CA1512;CA1513;CA1826;CA1859;CA1860;CA1865;CA1866;CA1867;CA2201;SYSLIB1045</WarningsAsErrors>
+                <WarningsAsErrors>$(WarningsAsErrors);{codes}</WarningsAsErrors>
             </PropertyGroup>
         </Project>
         """,
     )
-    write_text(
-        root / ".editorconfig",
-        """
-        root = true
-        [*.cs]
-        dotnet_diagnostic.CS8509.severity = error
-        dotnet_diagnostic.IDE0057.severity = warning
-        dotnet_diagnostic.IDE0066.severity = warning
-        dotnet_diagnostic.CA1510.severity = warning
-        dotnet_diagnostic.CA1511.severity = warning
-        dotnet_diagnostic.CA1512.severity = warning
-        dotnet_diagnostic.CA1513.severity = warning
-        dotnet_diagnostic.CA1826.severity = warning
-        dotnet_diagnostic.CA1859.severity = warning
-        dotnet_diagnostic.CA1860.severity = warning
-        dotnet_diagnostic.CA1865.severity = warning
-        dotnet_diagnostic.CA1866.severity = warning
-        dotnet_diagnostic.CA1867.severity = warning
-        dotnet_diagnostic.CA2201.severity = warning
-        dotnet_diagnostic.SYSLIB1045.severity = warning
-        """,
-    )
+    ec_lines = ["root = true", "[*.cs]"]
+    for code in linter.REQUIRED_EDITORCONFIG_DIAGNOSTICS:
+        sev = "error" if code == "CS8509" else "warning"
+        ec_lines.append(f"dotnet_diagnostic.{code}.severity = {sev}")
+    write_text(root / ".editorconfig", "\n".join(ec_lines) + "\n")
 
 
 class CodeGuidelinesLintTests(unittest.TestCase):
-    def test_flags_switch_expression_hiding_remaining_enum_variant_in_discard(self):
+    def test_flags_switch_expression_hiding_single_or_multiple_enum_variants_in_discard(self):
         linter = load_linter()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -74,6 +59,7 @@ class CodeGuidelinesLintTests(unittest.TestCase):
                     Red,
                     Green,
                     Blue,
+                    Yellow,
                 }
                 """,
             )
@@ -96,7 +82,7 @@ class CodeGuidelinesLintTests(unittest.TestCase):
             findings = linter.lint_repository(root)
             codes = [f.rule for f in findings]
             self.assertIn("BAML001", codes)
-            self.assertTrue(any("Color.Blue" in f.message for f in findings))
+            self.assertTrue(any("Color.Blue" in f.message and "Color.Yellow" in f.message for f in findings))
 
     def test_accepts_exhaustive_switch_expression_naming_all_enum_variants(self):
         linter = load_linter()
@@ -127,6 +113,88 @@ class CodeGuidelinesLintTests(unittest.TestCase):
                         Color.Green => "#0f0",
                         Color.Blue or _ => "#00f",
                     };
+                }
+                """,
+            )
+
+            self.assertEqual([], linter.lint_repository(root))
+
+    def test_flags_switch_statement_missing_enum_variants(self):
+        linter = load_linter()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_valid_build_config(root)
+            write_text(
+                root / "src/Sample/Color.cs",
+                """
+                namespace Sample;
+                public enum Color
+                {
+                    Red,
+                    Green,
+                    Blue,
+                }
+                """,
+            )
+            write_text(
+                root / "src/Sample/Printer.cs",
+                """
+                namespace Sample;
+                public static class Printer
+                {
+                    public static string Describe(Color c)
+                    {
+                        switch (c)
+                        {
+                            case Color.Red:
+                                return "red";
+                            default:
+                                return "other";
+                        }
+                    }
+                }
+                """,
+            )
+
+            findings = linter.lint_repository(root)
+            self.assertIn("BAML001", [f.rule for f in findings])
+            self.assertTrue(any("Color.Blue" in f.message and "Color.Green" in f.message for f in findings))
+
+    def test_accepts_switch_statement_naming_all_enum_variants(self):
+        linter = load_linter()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_valid_build_config(root)
+            write_text(
+                root / "src/Sample/Color.cs",
+                """
+                namespace Sample;
+                public enum Color
+                {
+                    Red,
+                    Green,
+                    Blue,
+                }
+                """,
+            )
+            write_text(
+                root / "src/Sample/Printer.cs",
+                """
+                namespace Sample;
+                public static class Printer
+                {
+                    public static string Describe(Color c)
+                    {
+                        switch (c)
+                        {
+                            case Color.Red:
+                                return "red";
+                            case Color.Green:
+                            case Color.Blue:
+                            default:
+                                return "other";
+                        }
+                    }
                 }
                 """,
             )
@@ -174,7 +242,7 @@ class CodeGuidelinesLintTests(unittest.TestCase):
             findings = linter.lint_repository(root)
             self.assertIn("BAML001", [f.rule for f in findings])
 
-    def test_flags_raw_integer_milliseconds_in_delay_sleep_and_cancel_after(self):
+    def test_flags_raw_integer_milliseconds_in_delay_sleep_timers_and_waits(self):
         linter = load_linter()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -188,11 +256,14 @@ class CodeGuidelinesLintTests(unittest.TestCase):
                 namespace Sample;
                 public static class Worker
                 {
-                    public static async Task RunAsync(CancellationTokenSource cts)
+                    public static async Task RunAsync(CancellationTokenSource cts, SemaphoreSlim gate)
                     {
                         await Task.Delay(250);
                         cts.CancelAfter(500);
                         Thread.Sleep(100);
+                        await gate.WaitAsync(0);
+                        using var timer = new System.Timers.Timer(100);
+                        using var timedCts = new CancellationTokenSource(1000);
                     }
                 }
                 """,
@@ -200,7 +271,7 @@ class CodeGuidelinesLintTests(unittest.TestCase):
 
             findings = linter.lint_repository(root)
             baml002 = [f for f in findings if f.rule == "BAML002"]
-            self.assertEqual(3, len(baml002))
+            self.assertEqual(6, len(baml002))
 
     def test_flags_throwing_generic_exception_types(self):
         linter = load_linter()
@@ -226,7 +297,7 @@ class CodeGuidelinesLintTests(unittest.TestCase):
             findings = linter.lint_repository(root)
             self.assertIn("BAML003", [f.rule for f in findings])
 
-    def test_flags_static_regex_with_string_literal_instead_of_generated_regex(self):
+    def test_flags_runtime_regex_with_string_literal(self):
         linter = load_linter()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -239,8 +310,8 @@ class CodeGuidelinesLintTests(unittest.TestCase):
                 namespace Sample;
                 public static class Matcher
                 {
-                    public static string Clean(string input) =>
-                        Regex.Replace(input, @"[a-z]+", " ");
+                    public static bool Check(string input) =>
+                        Regex.IsMatch(input, "^[a-z]+$");
                 }
                 """,
             )
@@ -248,32 +319,20 @@ class CodeGuidelinesLintTests(unittest.TestCase):
             findings = linter.lint_repository(root)
             self.assertIn("BAML004", [f.rule for f in findings])
 
-    def test_allows_dynamic_regex_pattern_built_at_runtime(self):
+    def test_flags_missing_warnings_as_errors_configuration(self):
         linter = load_linter()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            write_valid_build_config(root)
             write_text(
-                root / "src/Sample/DynamicMatcher.cs",
+                root / "Directory.Build.props",
                 """
-                using System.Text.RegularExpressions;
-
-                namespace Sample;
-                public static class DynamicMatcher
-                {
-                    public static string Scrub(string text, string word, string replacement) =>
-                        Regex.Replace(text, @"\\b" + Regex.Escape(word) + @"\\b", replacement);
-                }
+                <Project>
+                    <PropertyGroup>
+                        <Version>1.0.0</Version>
+                    </PropertyGroup>
+                </Project>
                 """,
             )
-
-            self.assertEqual([], linter.lint_repository(root))
-
-    def test_flags_missing_compiler_enforcement_in_build_props_or_editorconfig(self):
-        linter = load_linter()
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_text(root / "Directory.Build.props", "<Project></Project>")
             write_text(root / ".editorconfig", "root = true\n")
 
             findings = linter.lint_repository(root)
@@ -286,7 +345,8 @@ class CodeGuidelinesLintTests(unittest.TestCase):
         self.assertEqual(
             [],
             findings,
-            "Code guideline lint findings:\n" + "\n".join(str(f) for f in findings),
+            "Expected zero code guideline violations in repository, found:\n"
+            + "\n".join(str(f) for f in findings),
         )
 
 

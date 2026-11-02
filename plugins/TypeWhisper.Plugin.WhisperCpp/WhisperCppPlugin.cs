@@ -485,7 +485,11 @@ public sealed class WhisperCppPlugin
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
             TranscriptionAccelerationPreference.Vulkan => "vulkan",
-            _ => "cpu",
+            TranscriptionAccelerationPreference.Auto
+            or TranscriptionAccelerationPreference.Cpu
+            or TranscriptionAccelerationPreference.AmdMigraphx
+            or TranscriptionAccelerationPreference.WebGpu
+            or _ => "cpu",
         };
 
         // Always record the host's last requested preference so the SDK getter
@@ -1428,7 +1432,10 @@ public sealed class WhisperCppPlugin
                 "Preparing CPU",
                 "Will apply on next model load."
             ),
-            _ => new TranscriptionAccelerationStatus(
+            TranscriptionAccelerationPreference.Auto
+            or TranscriptionAccelerationPreference.AmdMigraphx
+            or TranscriptionAccelerationPreference.WebGpu
+            or _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing acceleration",
                 "Will apply on next model load."
@@ -1459,7 +1466,10 @@ public sealed class WhisperCppPlugin
             {
                 TranscriptionAccelerationBackend.NvidiaCuda => "Using NVIDIA CUDA",
                 TranscriptionAccelerationBackend.Vulkan => "Using Vulkan",
-                _ => "Using CPU",
+                TranscriptionAccelerationBackend.Cpu
+                or TranscriptionAccelerationBackend.AmdMigraphx
+                or TranscriptionAccelerationBackend.WebGpu
+                or _ => "Using CPU",
             };
 
         // A GPU runtime is process-pinned. CPU compute can use any loaded GPU runtime,
@@ -1468,7 +1478,11 @@ public sealed class WhisperCppPlugin
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
             TranscriptionAccelerationPreference.Vulkan => "vulkan",
-            _ => "cpu",
+            TranscriptionAccelerationPreference.Auto
+            or TranscriptionAccelerationPreference.Cpu
+            or TranscriptionAccelerationPreference.AmdMigraphx
+            or TranscriptionAccelerationPreference.WebGpu
+            or _ => "cpu",
         };
         var requiresRestart = requestedRuntime != "cpu"
             && !string.Equals(_pinnedRuntimeBackend, requestedRuntime, StringComparison.OrdinalIgnoreCase);

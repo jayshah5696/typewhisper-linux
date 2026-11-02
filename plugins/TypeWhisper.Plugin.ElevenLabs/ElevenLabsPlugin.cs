@@ -601,7 +601,7 @@ public sealed class ElevenLabsPlugin
             ApiKeyCheck.Valid => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid")),
             ApiKeyCheck.Unverified => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyUnverified")),
             ApiKeyCheck.Unavailable => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyUnavailable")),
-            _ => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid")),
+            ApiKeyCheck.Invalid or _ => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid")),
         };
     }
 

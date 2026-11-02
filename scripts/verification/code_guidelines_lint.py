@@ -11,37 +11,65 @@ import sys
 
 REQUIRED_BUILD_ERROR_CODES = (
     "CS8509",
+    "IDE0044",
+    "IDE0051",
+    "IDE0052",
     "IDE0057",
+    "IDE0059",
     "IDE0066",
     "IDE1006",
     "CA1510",
     "CA1511",
     "CA1512",
     "CA1513",
+    "CA1825",
     "CA1826",
+    "CA1827",
+    "CA1829",
+    "CA1845",
+    "CA1854",
     "CA1859",
     "CA1860",
     "CA1865",
     "CA1866",
     "CA1867",
+    "CA2012",
+    "CA2013",
+    "CA2014",
+    "CA2016",
+    "CA2200",
     "CA2201",
     "SYSLIB1045",
 )
 
 REQUIRED_EDITORCONFIG_DIAGNOSTICS = (
     "CS8509",
+    "IDE0044",
+    "IDE0051",
+    "IDE0052",
     "IDE0057",
+    "IDE0059",
     "IDE0066",
     "CA1510",
     "CA1511",
     "CA1512",
     "CA1513",
+    "CA1825",
     "CA1826",
+    "CA1827",
+    "CA1829",
+    "CA1845",
+    "CA1854",
     "CA1859",
     "CA1860",
     "CA1865",
     "CA1866",
     "CA1867",
+    "CA2012",
+    "CA2013",
+    "CA2014",
+    "CA2016",
+    "CA2200",
     "CA2201",
     "SYSLIB1045",
 )
@@ -51,13 +79,15 @@ ENUM_DECL_RE = re.compile(
     re.S,
 )
 SWITCH_START_RE = re.compile(r"\bswitch\s*\{", re.S)
+SWITCH_STMT_RE = re.compile(r"\bswitch\s*\([^)]+\)\s*\{", re.S)
 ENUM_IF_CHAIN_RE = re.compile(
     r"\bif\s*\(\s*([A-Za-z0-9_.]+)\s*==\s*([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\s*\)"
     r"\s*(?:\{[^{}]*\}|[^{;\n]+;)\s*else\s+if\s*\(\s*\1\s*==\s*\2\.[A-Za-z_][A-Za-z0-9_]*\s*\)",
     re.S,
 )
 RAW_DELAY_RE = re.compile(
-    r"\b(?:Task\.Delay|Thread\.Sleep|CancelAfter)\s*\(\s*([0-9][0-9_]*)\s*(?:,|\))"
+    r"\b(?:Task\.Delay|Thread\.Sleep|CancelAfter|WaitAsync|WaitForExit|WaitForExitAsync"
+    r"|new\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:Timer|PeriodicTimer|CancellationTokenSource))\s*\(\s*([0-9][0-9_]*)\s*(?:,|\))"
 )
 GENERIC_EXCEPTION_RE = re.compile(
     r"\bthrow\s+new\s+(?:System\.)?(Exception|ApplicationException|SystemException)\s*\("
@@ -82,7 +112,7 @@ class LintFinding:
 def _strip_comments(source: str) -> str:
     def replace_keep_newlines(match: re.Match[str]) -> str:
         text = match.group(0)
-        if text.startswith(("\"", "@\"", "$\"", "$@\"", "@$\"")):
+        if text.startswith(('"', '@"', '$"', '$@"', '@$"')):
             return text
         return "".join("\n" if ch == "\n" else " " for ch in text)
 
@@ -107,24 +137,30 @@ def _iter_source_files(root: Path) -> list[Path]:
     return files
 
 
+def discover_enums_in_text(cleaned: str) -> dict[str, set[str]]:
+    enums: dict[str, set[str]] = {}
+    for match in ENUM_DECL_RE.finditer(cleaned):
+        enum_name = match.group(1)
+        body = match.group(2)
+        members: list[str] = []
+        for raw_item in body.split(","):
+            item = raw_item.strip()
+            if not item:
+                continue
+            member = item.split("=")[0].strip()
+            member = re.sub(r"\[.*?\]\s*", "", member).strip()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", member):
+                members.append(member)
+        if len(members) >= 2:
+            enums[enum_name] = set(members)
+    return enums
+
+
 def discover_enums(files: list[Path]) -> dict[str, set[str]]:
     enums: dict[str, set[str]] = {}
     for path in files:
         cleaned = _strip_comments(path.read_text(encoding="utf-8"))
-        for match in ENUM_DECL_RE.finditer(cleaned):
-            enum_name = match.group(1)
-            body = match.group(2)
-            members: list[str] = []
-            for raw_item in body.split(","):
-                item = raw_item.strip()
-                if not item:
-                    continue
-                member = item.split("=")[0].strip()
-                member = re.sub(r"\[.*?\]\s*", "", member).strip()
-                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", member):
-                    members.append(member)
-            if len(members) >= 2:
-                enums[enum_name] = set(members)
+        enums.update(discover_enums_in_text(cleaned))
     return enums
 
 
@@ -133,6 +169,26 @@ def _has_suppression(lines: list[str], line_number: int, tokens: tuple[str, ...]
     end = min(len(lines), line_number + 1)
     window = "\n".join(lines[start:end])
     return any(token in window for token in tokens)
+
+
+def _extract_brace_block(cleaned: str, start: int, open_brace_index: int) -> str | None:
+    depth = 0
+    for idx in range(open_brace_index, len(cleaned)):
+        ch = cleaned[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return cleaned[start : idx + 1]
+    return None
+
+
+def _format_missing_enum_members(enum_name: str, missing: set[str]) -> str:
+    qualified = [f"'{enum_name}.{member}'" for member in sorted(missing)]
+    if len(qualified) == 1:
+        return qualified[0]
+    return ", ".join(qualified)
 
 
 def _check_switch_expressions(
@@ -145,22 +201,8 @@ def _check_switch_expressions(
     findings: list[LintFinding] = []
     for match in SWITCH_START_RE.finditer(cleaned):
         start = match.start()
-        depth = 0
-        end = None
-        for idx in range(match.end() - 1, len(cleaned)):
-            ch = cleaned[idx]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = idx + 1
-                    break
-        if end is None:
-            continue
-
-        block = cleaned[start:end]
-        if len(SWITCH_START_RE.findall(block)) > 1:
+        block = _extract_brace_block(cleaned, start, match.end() - 1)
+        if block is None or len(SWITCH_START_RE.findall(block)) > 1:
             continue
 
         patterns = re.findall(r"(?:^|\{|,)\s*([^,=]+?)\s*=>", block, flags=re.S)
@@ -180,9 +222,9 @@ def _check_switch_expressions(
         enum_name, matched_members = next(iter(by_enum.items()))
         missing = enums[enum_name] - matched_members
         has_non_throwing_discard = re.search(
-            r"(?:^|\{|,)\s*_\s*=>\s*(?!throw\b)", block, flags=re.S
+            r"(?:^|\{|,|\bor)\s*_\s*=>\s*(?!\s*throw\b)", block, flags=re.S
         )
-        if has_non_throwing_discard and len(missing) == 1:
+        if has_non_throwing_discard and len(missing) >= 1:
             line_no = raw[:start].count("\n") + 1
             if _has_suppression(
                 lines,
@@ -194,16 +236,76 @@ def _check_switch_expressions(
                 ),
             ):
                 continue
-            missing_member = sorted(missing)[0]
+            missing_list = _format_missing_enum_members(enum_name, missing)
             findings.append(
                 LintFinding(
                     path=rel_path,
                     line=line_no,
                     rule="BAML001",
                     message=(
-                        f"Switch on enum '{enum_name}' hides '{enum_name}.{missing_member}' "
-                        f"in a non-throwing '_ =>' arm. Name '{enum_name}.{missing_member}' "
+                        f"Switch expression on enum '{enum_name}' hides {missing_list} "
+                        f"in a non-throwing '_ =>' arm. Name {missing_list} "
                         "explicitly so adding a new enum variant cannot silently fall through."
+                    ),
+                )
+            )
+    return findings
+
+
+def _check_switch_statements(
+    rel_path: str,
+    raw: str,
+    cleaned: str,
+    lines: list[str],
+    enums: dict[str, set[str]],
+) -> list[LintFinding]:
+    findings: list[LintFinding] = []
+    for match in SWITCH_STMT_RE.finditer(cleaned):
+        start = match.start()
+        block = _extract_brace_block(cleaned, start, match.end() - 1)
+        if block is None or len(SWITCH_STMT_RE.findall(block)) > 1:
+            continue
+
+        cases = re.findall(r"\bcase\s+([^:]+):", block)
+        by_enum: dict[str, set[str]] = {}
+        for case_expr in cases:
+            if re.search(r"\bwhen\b", case_expr):
+                continue
+            for enum_name, member in re.findall(
+                r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b", case_expr
+            ):
+                if enum_name in enums and member in enums[enum_name]:
+                    by_enum.setdefault(enum_name, set()).add(member)
+
+        if len(by_enum) != 1:
+            continue
+
+        enum_name, matched_members = next(iter(by_enum.items()))
+        missing = enums[enum_name] - matched_members
+        has_throwing_default = re.search(r"\bdefault\s*:\s*throw\b", block, flags=re.S)
+        if not has_throwing_default and len(missing) >= 1:
+            line_no = raw[:start].count("\n") + 1
+            if _has_suppression(
+                lines,
+                line_no,
+                (
+                    "BAML001",
+                    "IDE0010",
+                    "SwitchStatementMissingSomeEnumCasesNoDefault",
+                    "SwitchStatementHandlesSomeKnownEnumValuesWithDefault",
+                ),
+            ):
+                continue
+            missing_list = _format_missing_enum_members(enum_name, missing)
+            findings.append(
+                LintFinding(
+                    path=rel_path,
+                    line=line_no,
+                    rule="BAML001",
+                    message=(
+                        f"Switch statement on enum '{enum_name}' is missing explicit case labels "
+                        f"for {missing_list}. Name every enum variant explicitly so adding a new "
+                        "variant cannot silently fall through."
                     ),
                 )
             )
@@ -250,10 +352,12 @@ def _check_file_rules(
     raw = path.read_text(encoding="utf-8")
     cleaned = _strip_comments(raw)
     lines = raw.splitlines()
+    effective_enums = {**enums, **discover_enums_in_text(cleaned)}
     findings: list[LintFinding] = []
 
-    findings.extend(_check_switch_expressions(rel_path, raw, cleaned, lines, enums))
-    findings.extend(_check_enum_if_chains(rel_path, raw, cleaned, lines, enums))
+    findings.extend(_check_switch_expressions(rel_path, raw, cleaned, lines, effective_enums))
+    findings.extend(_check_switch_statements(rel_path, raw, cleaned, lines, effective_enums))
+    findings.extend(_check_enum_if_chains(rel_path, raw, cleaned, lines, effective_enums))
 
     for match in RAW_DELAY_RE.finditer(cleaned):
         line_no = raw[: match.start()].count("\n") + 1
@@ -265,8 +369,8 @@ def _check_file_rules(
                 line=line_no,
                 rule="BAML002",
                 message=(
-                    "Pass an explicit TimeSpan (such as TimeSpan.FromMilliseconds or "
-                    "TimeSpan.FromSeconds) instead of a raw integer millisecond literal."
+                    "Pass an explicit TimeSpan (such as TimeSpan.FromMilliseconds, "
+                    "TimeSpan.FromSeconds, or TimeSpan.Zero) instead of a raw integer millisecond literal."
                 ),
             )
         )

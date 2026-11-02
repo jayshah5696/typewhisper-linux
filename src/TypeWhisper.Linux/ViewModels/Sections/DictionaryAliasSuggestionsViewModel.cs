@@ -290,7 +290,7 @@ public partial class DictionaryAliasSuggestionsViewModel : ObservableObject
                 DictionaryAliasSaveStatus.NothingSelected => Loc.Instance["Dictionary.AliasesNothingSelected"],
                 DictionaryAliasSaveStatus.Conflict => Loc.Instance.GetString("Dictionary.AliasesConflict", result.Alias ?? ""),
                 DictionaryAliasSaveStatus.StoreUnavailable => Loc.Instance["Dictionary.AliasesStoreUnavailable"],
-                _ => Loc.Instance["Dictionary.AliasesInvalidSelection"],
+                DictionaryAliasSaveStatus.InvalidAlias or DictionaryAliasSaveStatus.Saved or _ => Loc.Instance["Dictionary.AliasesInvalidSelection"],
             };
             return;
         }

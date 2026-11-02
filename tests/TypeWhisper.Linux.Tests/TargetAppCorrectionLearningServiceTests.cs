@@ -1544,14 +1544,11 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         private static bool? FocusedResult => true;
         private static bool? EditableResult => true;
         private static bool GrabFocusResult => true;
-        private int FocusReadCount { get; set; }
-        private int GrabFocusCount { get; set; }
         // ReSharper disable once UnusedAutoPropertyAccessor.Local -- Keep the configurable focus callback consistent with the other IAtSpiEventClient fakes.
         public Action? OnGrabFocus { get; set; }
 
         public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
         {
-            FocusReadCount++;
             return Task.FromResult(FocusedResult);
         }
 
@@ -1562,7 +1559,6 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         public Task<bool> TryGrabFocusAsync(AtSpiElementRef element)
         {
-            GrabFocusCount++;
             OnGrabFocus?.Invoke();
             return Task.FromResult(GrabFocusResult);
         }

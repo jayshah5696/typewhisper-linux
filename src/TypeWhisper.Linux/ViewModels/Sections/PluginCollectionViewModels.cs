@@ -147,7 +147,12 @@ public partial class PluginCollectionRow : ObservableObject
             {
                 PluginSettingKind.Boolean => "true",
                 PluginSettingKind.Dropdown when field.Options is { Count: > 0 } => field.Options[0].Value,
-                _ => string.Empty,
+                PluginSettingKind.Auto
+                or PluginSettingKind.Text
+                or PluginSettingKind.Secret
+                or PluginSettingKind.Dropdown
+                or PluginSettingKind.Multiline
+                or _ => string.Empty,
             };
         }
 

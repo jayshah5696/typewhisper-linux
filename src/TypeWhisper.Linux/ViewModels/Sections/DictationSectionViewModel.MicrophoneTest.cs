@@ -130,7 +130,7 @@ public partial class DictationSectionViewModel
         {
             MicrophoneTestStartFailure.Busy => "Dictation.MicTestBusy",
             MicrophoneTestStartFailure.NoDevice => "Dictation.MicTestNoDevice",
-            _ => "Dictation.MicTestOpenFailed",
+            MicrophoneTestStartFailure.OpenFailed or MicrophoneTestStartFailure.None or _ => "Dictation.MicTestOpenFailed",
         }];
     }
 
@@ -162,7 +162,6 @@ public partial class DictationSectionViewModel
             return;
         }
 
-        // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault -- every end without its own message (time limit, user stop, page close) reports the plain result.
         switch (snapshot.End)
         {
             case MicrophoneTestEnd.DeviceChanged:
@@ -179,6 +178,9 @@ public partial class DictationSectionViewModel
                 MicrophoneTestStatus = Loc.Instance["Dictation.MicTestClosed"];
                 MicrophoneTestDetail = "";
                 break;
+            case MicrophoneTestEnd.PageClosed
+                or MicrophoneTestEnd.StoppedByUser
+                or MicrophoneTestEnd.TimeLimit:
             default:
                 // A test stopped before any audio arrived has no result to report.
                 MicrophoneTestStatus = snapshot.State == MicrophoneTestState.WaitingForAudio

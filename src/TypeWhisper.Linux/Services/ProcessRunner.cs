@@ -436,7 +436,7 @@ public sealed class ProcessRunner : IProcessRunner
                 string.Empty,
                 string.Empty
             ),
-            _ => new ProcessRunResult(
+            ProcessRunStatus.Exited or ProcessRunStatus.OutputLimitExceeded or _ => new ProcessRunResult(
                 true,
                 false,
                 outcome.ExitCode ?? -1,

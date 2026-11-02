@@ -84,7 +84,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         {
             RecorderState.Recording => Loc.Instance["Recorder.StatusRecording"],
             RecorderState.Paused => Loc.Instance["Recorder.StatusPaused"],
-            _ => StatusText,
+            RecorderState.Ready or RecorderState.Saving or _ => StatusText,
         };
         OnPropertyChanged(nameof(RecordButtonText));
         OnPropertyChanged(nameof(PauseResumeButtonText));
@@ -419,7 +419,7 @@ public partial class RecorderSectionViewModel : ObservableObject
 
     private Timer CreateTimer()
     {
-        var timer = new Timer(100);
+        var timer = new Timer(TimeSpan.FromMilliseconds(100));
         timer.Elapsed += (_, _) => _postToUiThread(() =>
         {
             if (_commandIngressClosed || _recorder.State != RecorderState.Recording)

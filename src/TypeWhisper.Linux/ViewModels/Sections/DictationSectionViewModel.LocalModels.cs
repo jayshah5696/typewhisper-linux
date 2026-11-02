@@ -138,7 +138,7 @@ public partial class DictationSectionViewModel
             _ when selected && downloaded => Loc.Instance["Dictation.ModelCardActive"],
             _ when downloaded => Loc.Instance["Dictation.ModelCardDownloaded"],
             _ when card.IsRecommended => Loc.Instance["Dictation.ModelCardRecommended"],
-            _ => Loc.Instance["Dictation.ModelCardNotDownloaded"],
+            ModelStatusType.NotDownloaded or ModelStatusType.Ready or null or _ => Loc.Instance["Dictation.ModelCardNotDownloaded"],
         };
         card.StateText = status?.Type switch
         {
@@ -147,7 +147,7 @@ public partial class DictationSectionViewModel
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
             _ when selected && downloaded => Loc.Instance["Dictation.ModelCardStateSelected"],
             _ when downloaded => Loc.Instance["Dictation.ModelCardStateDownloaded"],
-            _ => Loc.Instance["Dictation.ModelCardStateNotDownloaded"],
+            ModelStatusType.NotDownloaded or ModelStatusType.Ready or null or _ => Loc.Instance["Dictation.ModelCardStateNotDownloaded"],
         };
 
         card.ShowProgress = busy;

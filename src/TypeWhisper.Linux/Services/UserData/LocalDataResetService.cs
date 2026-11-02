@@ -553,7 +553,11 @@ public sealed partial class LocalDataResetService
                 LocalDataCategory.PluginData => options.DeleteModels ? Decision.Delete : Decision.Partial,
                 LocalDataCategory.Models or LocalDataCategory.Runtimes =>
                     options.DeleteModels ? Decision.Delete : Decision.Keep,
-                _ => Decision.Keep,
+                LocalDataCategory.CommandLineTool
+                    or LocalDataCategory.InstalledPlugins
+                    or LocalDataCategory.ShortcutBackups
+                    or LocalDataCategory.Unrecognized
+                    or _ => Decision.Keep,
             };
         }
 

@@ -846,7 +846,7 @@ public sealed class XaiPlugin
             {
                 ApiKeyCheck.NoTeamAccess => "Settings.ApiKeyNoTeamAccess",
                 ApiKeyCheck.Forbidden => "Settings.ApiKeyForbidden",
-                _ => "Settings.ApiKeyInvalid",
+                ApiKeyCheck.Valid or ApiKeyCheck.Invalid or _ => "Settings.ApiKeyInvalid",
             }));
 
         var models = await FetchLlmModelsAsync(ct);

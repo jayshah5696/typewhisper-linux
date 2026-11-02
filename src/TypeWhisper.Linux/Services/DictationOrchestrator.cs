@@ -1829,7 +1829,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                     );
 
                     // Transcribe intentionally falls through to the normal transcription path below.
-                    // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
                     switch (shortSpeechDecision)
                     {
                         case LinuxShortSpeechDecision.DiscardTooShort:
@@ -1866,6 +1865,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                                 "No speech detected"
                             );
                             return;
+                        case LinuxShortSpeechDecision.Transcribe:
+                            break;
                     }
 
                     // Streaming finalize must run BEFORE pad/save so the EOF grace-window
@@ -3940,7 +3941,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool =>
                 $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-            _ => "Text insertion failed. Command result could not be inserted.",
+            InsertionResult.ActionFailed
+                or InsertionResult.ActionHandled
+                or InsertionResult.ActionUnavailable
+                or InsertionResult.Failed
+                or InsertionResult.NoText
+                or _ => "Text insertion failed. Command result could not be inserted.",
         };
         var isError =
             insertion
@@ -4141,7 +4147,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Localization.Loc.Instance["Dictation.LockedFieldGone"],
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
-            _ => "Copied to clipboard (paste with Ctrl+V).",
+            InsertionFailureReason.None
+                or InsertionFailureReason.PartialTypingFailure
+                or InsertionFailureReason.PasteRetriesExhausted
+                or _ => "Copied to clipboard (paste with Ctrl+V).",
         };
     }
 
@@ -4514,7 +4523,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",
-            _ => null,
+            InsertionResult.ActionHandled
+                or InsertionResult.CopiedToClipboard
+                or InsertionResult.NoText
+                or InsertionResult.Pasted
+                or InsertionResult.Typed
+                or _ => null,
         };
     }
 

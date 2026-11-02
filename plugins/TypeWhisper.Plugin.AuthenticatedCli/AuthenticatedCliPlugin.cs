@@ -1920,7 +1920,10 @@ public sealed partial class AuthenticatedCliPlugin :
             {
                 null => [],
                 { Kind: CliProviderKind.OpenCode } descriptor => CreateOpenCodeModels(descriptor),
-                _ => [new PluginModelInfo("default", owner.GetString("Model.Default"))],
+                { Kind: CliProviderKind.Claude or CliProviderKind.Codex } or _ =>
+                [
+                    new PluginModelInfo("default", owner.GetString("Model.Default")),
+                ],
             };
 
         public Task<string> ProcessAsync(

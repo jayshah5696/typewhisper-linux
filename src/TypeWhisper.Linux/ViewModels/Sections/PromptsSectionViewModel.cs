@@ -637,7 +637,12 @@ public partial class PromptsSectionViewModel : ObservableObject
         {
             HotkeyCandidateValidationStatus.Malformed =>
                 Loc.Instance["Prompts.HotkeyMalformed"],
-            _ => Loc.Instance["Prompts.HotkeyCollision"],
+            HotkeyCandidateValidationStatus.Valid
+            or HotkeyCandidateValidationStatus.MissingEnabledPromptAction
+            or HotkeyCandidateValidationStatus.CollidesWithFixedBinding
+            or HotkeyCandidateValidationStatus.CollidesWithProfile
+            or HotkeyCandidateValidationStatus.CollidesWithPromptAction
+            or _ => Loc.Instance["Prompts.HotkeyCollision"],
         };
     }
 

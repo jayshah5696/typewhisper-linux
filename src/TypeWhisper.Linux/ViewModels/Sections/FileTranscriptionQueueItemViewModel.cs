@@ -90,7 +90,6 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
     {
         // Loading/Transcribing/Error carry transient progress or raw
         // exception text and are intentionally left untouched (see summary).
-        // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault -- only the actionable cases are handled; remaining enum values are deliberate no-ops.
         switch (Status)
         {
             case FileTranscriptionQueueItemStatus.Unsupported:
@@ -109,6 +108,10 @@ public sealed partial class FileTranscriptionQueueItemViewModel : ObservableObje
                     ProcessingTime,
                     AudioDuration
                 );
+                break;
+            case FileTranscriptionQueueItemStatus.Loading:
+            case FileTranscriptionQueueItemStatus.Transcribing:
+            case FileTranscriptionQueueItemStatus.Error:
                 break;
         }
     }

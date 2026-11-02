@@ -32,11 +32,11 @@ Run `just --list` when a command is unclear. The recipes locate the local SDK au
 Prefer simple systems and complete user-visible behavior. Fix root causes and avoid unnecessary abstractions. Inspect current code and all callers before changing a contract.
 
 The build in `Directory.Build.props` and `.editorconfig` and `just lint` in `scripts/verification/code_guidelines_lint.py` enforce these code rules as errors:
-- Name every repository `enum` variant explicitly in `switch` expressions and avoid `if` and `else if` chains over enum values, enforced by `CS8509`, `IDE0066`, and `BAML001`.
-- Pass explicit `TimeSpan` values such as `TimeSpan.FromMilliseconds` or `TimeSpan.FromSeconds` to `Task.Delay`, `Thread.Sleep`, and `CancelAfter` instead of raw integer literals, enforced by `BAML002`.
-- Throw specific exception types such as `InvalidOperationException` or `ArgumentException` and use `ArgumentNullException.ThrowIfNull` instead of generic `Exception`, `ApplicationException`, or `SystemException`, enforced by `CA1510` to `CA1513`, `CA2201`, and `BAML003`.
+- Name every repository `enum` variant explicitly in `switch` expressions and `switch` statements and avoid `if` and `else if` chains over enum values, enforced by `CS8509`, `IDE0066`, and `BAML001`.
+- Pass explicit `TimeSpan` values such as `TimeSpan.FromMilliseconds`, `TimeSpan.FromSeconds`, or `TimeSpan.Zero` to `Task.Delay`, `Thread.Sleep`, `CancelAfter`, `WaitAsync`, `WaitForExit`, `WaitForExitAsync`, `Timer`, `PeriodicTimer`, and `CancellationTokenSource` instead of raw integer literals, enforced by `BAML002`.
+- Throw specific exception types such as `InvalidOperationException` or `ArgumentException`, preserve stack traces with `throw;`, and use `ArgumentNullException.ThrowIfNull` instead of generic `Exception`, `ApplicationException`, or `SystemException`, enforced by `CA1510` to `CA1513`, `CA2200`, `CA2201`, and `BAML003`.
 - Use `[GeneratedRegex]` methods with descriptive names showing what the pattern matches instead of inline constant regex strings, enforced by `SYSLIB1045` and `BAML004`.
-- Prefer C# standard library methods and the `..` range operator over manual indexing or `Substring` and `Slice` arithmetic, enforced by `CA1826`, `CA1859`, `CA1860`, `CA1865` to `CA1867`, `IDE0057`, and `BAML005`.
+- Prefer C# standard library methods, `readonly` fields, `TryGetValue`, forwarded `CancellationToken` parameters, proper `ValueTask` consumption, and the `..` range operator while removing unused or unread private members and dead value assignments, enforced by `IDE0044`, `IDE0051`, `IDE0052`, `IDE0057`, `IDE0059`, `CA1825` to `CA1829`, `CA1845`, `CA1854`, `CA1859`, `CA1860`, `CA1865` to `CA1867`, `CA2012` to `CA2016`, and `BAML005`.
 
 Write unit tests before production code. Keep tests focused on failure cases and real behavior. Do not remove failing tests or replace errors with dummy success results. Run `just pre-push` before pushing or reporting completion. Read complete failure logs and distinguish existing failures from new ones.
 

@@ -52,7 +52,7 @@ Evaluation suites in [[evals/dictation]] and benchmarking recipes measure transc
 
 Compile-time Roslyn analyzers in [[Directory.Build.props]] and [[.editorconfig]] combine with [[scripts/verification/code_guidelines_lint.py#lint_repository]] to enforce repository coding rules before every push.
 
-- [[scripts/verification/code_guidelines_lint.py#main]] runs via `just lint` and checks exhaustive enum switches with `BAML001`, explicit `TimeSpan` units with `BAML002`, specific exception types with `BAML003`, named `[GeneratedRegex]` methods with `BAML004`, and required analyzer error severities with `BAML005`.
+- [[scripts/verification/code_guidelines_lint.py#main]] runs via `just lint` and checks exhaustive enum `switch` expressions and `switch` statements with `BAML001`, explicit `TimeSpan` durations on delays, timers, and waits with `BAML002`, specific exception types with `BAML003`, named `[GeneratedRegex]` methods with `BAML004`, and 30 required compiler and Roslyn analyzer error codes with `BAML005`.
 - [[tests/verification/test_code_guidelines_lint.py#CodeGuidelinesLintTests]] verifies each rule against synthetic violations and confirms the repository tree has zero findings.
 - [[.githooks/pre-push]] runs `just pre-push` so `just lint`, `just eval-tests`, `just build-release`, and the fast unit test suites pass before code is pushed.
 

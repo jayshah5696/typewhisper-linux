@@ -268,7 +268,7 @@ public sealed class TextInsertionService
 
     public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
-        var queued = !await _insertionGate.WaitAsync(0);
+        var queued = !await _insertionGate.WaitAsync(TimeSpan.Zero);
         if (queued)
         {
             await _insertionGate.WaitAsync();
@@ -346,7 +346,7 @@ public sealed class TextInsertionService
             {
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
-                _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+                TextInsertionStrategy.Auto or TextInsertionStrategy.CopyOnly or _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
                      // On Wayland without xdotool, process/title are null; defaulting to paste
                      // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
                      // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
@@ -604,7 +604,7 @@ public sealed class TextInsertionService
         // would interrupt whatever is running there.
         // Not queued behind another insertion: the caller's focus snapshot (and with it
         // the terminal-safe copy chord) would be stale by the time the probe ran.
-        if (!await _insertionGate.WaitAsync(0))
+        if (!await _insertionGate.WaitAsync(TimeSpan.Zero))
         {
             LogInsertionFallback("Selection capture skipped: another insertion is in progress.");
             return "";
@@ -1299,9 +1299,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         StringComparer.OrdinalIgnoreCase
     );
 
-    // kept injected as a DI/test seam; not consumed in-tree
-    // ReSharper disable once NotAccessedField.Local
-    private readonly SystemCommandAvailabilityService? _commands;
     private readonly IProcessRunner _ioRunner;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
@@ -1324,7 +1321,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     )
         : this(commands.GetSnapshot(), processRunner ?? new ProcessRunner())
     {
-        _commands = commands;
         // Rebuild chain in place whenever the snapshot refreshes (e.g. after ydotool setup).
         commands.SnapshotChanged += OnSnapshotChanged;
     }
@@ -1340,7 +1336,6 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     )
         : this(commands.GetSnapshot(), processRunner, processRunnerWithStderr)
     {
-        _commands = commands;
         // Rebuild chain in place whenever the snapshot refreshes (e.g. after ydotool setup).
         commands.SnapshotChanged += OnSnapshotChanged;
     }

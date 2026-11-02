@@ -58,7 +58,7 @@ public sealed class TransformSelectionService
 
     public async Task ToggleAsync()
     {
-        if (!await _gate.WaitAsync(0))
+        if (!await _gate.WaitAsync(TimeSpan.Zero))
         {
             return;
         }
@@ -445,9 +445,14 @@ public sealed class TransformSelectionService
                 case InsertionResult.MissingPasteTool:
                     await ShowWarningAsync(_commands.GetSnapshot().PasteToolInstallHint);
                     break;
-                case not InsertionResult.Pasted and not InsertionResult.Typed:
+                case InsertionResult.ActionFailed
+                    or InsertionResult.ActionHandled
+                    or InsertionResult.ActionUnavailable
+                    or InsertionResult.Failed
+                    or InsertionResult.NoText:
                     await ShowWarningAsync("Could not insert transformed text.");
                     break;
+                case InsertionResult.Pasted or InsertionResult.Typed:
                 default:
                     ShowFeedback("Selection transformed.", false);
                     break;
@@ -481,7 +486,15 @@ public sealed class TransformSelectionService
                 "Focus or the selection changed while transforming — the original selection was left alone. "
                 + "Transformed text copied; paste manually to replace it.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-            _ =>
+            InsertionResult.ActionFailed
+                or InsertionResult.ActionHandled
+                or InsertionResult.ActionUnavailable
+                or InsertionResult.Failed
+                or InsertionResult.MissingPasteTool
+                or InsertionResult.NoText
+                or InsertionResult.Pasted
+                or InsertionResult.Typed
+                or _ =>
                 "Focus or the selection changed while transforming, and the transformed text could not be copied. "
                 + "The original selection was left alone.",
         };

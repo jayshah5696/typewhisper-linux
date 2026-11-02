@@ -162,7 +162,7 @@ public sealed class RecentTranscriptionsService
         Func<bool> isBusy
     )
     {
-        if (!await _pasteLastGate.WaitAsync(0))
+        if (!await _pasteLastGate.WaitAsync(TimeSpan.Zero))
         {
             return LastTranscriptionPasteOutcome.Ignored;
         }
@@ -570,7 +570,10 @@ public sealed class RecentTranscriptionsService
                 Localization.Loc.Instance[PasteToolInstallHintKey(_pasteToolHintProvider())],
             InsertionResult.Failed =>
                 Localization.Loc.Instance["RecentTranscriptions.InsertionFailed"],
-            _ => Localization.Loc.Instance["Recorder.StatusDone"],
+            InsertionResult.ActionFailed
+                or InsertionResult.ActionHandled
+                or InsertionResult.ActionUnavailable
+                or _ => Localization.Loc.Instance["Recorder.StatusDone"],
         };
     }
 
