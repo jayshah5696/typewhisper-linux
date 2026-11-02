@@ -10,7 +10,7 @@ TypeWhisper supports both traditional X11 sessions and modern Wayland compositor
 
 Differences across display environments:
 - **X11**: Full support for global shortcut grabbing via X11 hotkey hooks, window focus queries, and clipboard synchronization with `xclip` or native X11 atoms.
-- **Wayland**: Integrates via desktop portal protocols (e.g. `org.freedesktop.portal.Desktop`), Mutter remote desktop streams, or compositor-specific shortcut extensions.
+- **Wayland**: Global shortcuts use available desktop integration or the Linux evdev backend. Input delivery depends on compositor support and installed tools. Mutter RemoteDesktop input belongs to the isolated verification harness, not the production input backend.
 
 ## Global Hotkeys and Short Cuts
 
@@ -26,8 +26,8 @@ Hotkeys are registered at application launch. Key requirements include:
 A lightweight, non-stealing overlay window provides immediate visual feedback on dictation state, audio levels, and live transcription drafts.
 
 The floating widget maintains the following behavioral guarantees:
-- Window focus is never stolen from the active application being typed into.
-- The control can dock to any display edge or float freely according to user preference.
+- The control is designed to preserve the target application's focus.
+- The quiet control snaps to a display edge; the recording overlay has its own placement settings.
 - Mouse clicks beside the collapsed control or through transparent margins pass directly to underlying windows.
 
 ## Native Dependencies and Packaging
@@ -36,5 +36,5 @@ The Linux application packages required platform runtimes and desktop utilities 
 
 Scripts in `scripts/` provide installation, packaging, and upgrade orchestration:
 - `scripts/install-linux-app.sh` installs binaries to user or system prefixes.
-- `scripts/upgrade-local-app.sh` handles zero-downtime upgrades while preserving user profiles, models, and history.
+- `scripts/upgrade-local-app.sh` builds and verifies the payload, then installs and restarts the app while preserving user profiles, models, and history.
 - Packaging bundles shared dependencies, desktop launcher files, and icon assets.

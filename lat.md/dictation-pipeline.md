@@ -35,6 +35,6 @@ On Linux desktops, input delivery interacts with the active display server:
 
 ## Dictation Recovery and History
 
-All dictation sessions persist to the local History database to ensure speech transcripts are never lost even if target application delivery fails.
+History and recovery retain completed transcripts when delivery fails, subject to the user's retention and recording settings. They do not guarantee recovery of every interrupted capture or failed recognition.
 
 If an application rejects simulated keypresses or loses focus during paste, the user can open the History window or click the recovery overlay to copy or re-insert the recognized speech. The recovery mechanism is verified end-to-end via [[verification#Virtual Audio and Needle Smoke]].

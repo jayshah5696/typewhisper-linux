@@ -57,6 +57,12 @@ It manages native windowing, floating control overlays, system tray integration,
 
 ## CLI Interface
 
-The [[src/TypeWhisper.Cli]] executable provides headless command execution, batch processing, daemon lifecycle management, and diagnostic inspection.
+The [[src/TypeWhisper.Cli]] executable provides file transcription, control commands, and diagnostic inspection.
 
-It enables automation, scripting, and headless testing without launching the full Avalonia graphical user interface, while sharing the same underlying [[src/TypeWhisper.Core]] engines.
+File transcription can run headlessly. Control commands communicate with the running desktop host; they do not replace that host's dictation lifecycle.
+
+## Dashboard and settings
+
+The desktop Dashboard shows model and shortcut readiness, setup actions, and recent activity before expandable usage statistics.
+
+Readiness is based on runtime services and required setup checks. Failed required checks prevent a ready indication, and stale asynchronous refreshes cannot replace newer state. History, Profiles, and Plugins distinguish empty states, while Shortcuts and Dictionary put frequent controls first. Render tests cover six languages, two window sizes, and Light and Dark themes.
