@@ -75,8 +75,8 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
                         .Single(row => row.IsSelected);
                     // The rounded tile owns selection paint. A theme fill on its presenter
                     // leaks into the square corners and the gap beneath the tile.
-                    var presenter = Assert.Single(selectedRow.GetVisualDescendants().OfType<ContentPresenter>()
-                        .Where(presenter => presenter.TemplatedParent == selectedRow));
+                    var presenter = Assert.Single(selectedRow.GetVisualDescendants().OfType<ContentPresenter>(),
+                        presenter => presenter.TemplatedParent == selectedRow);
                     Assert.True(presenter.Background is null
                                 || presenter.Background is ISolidColorBrush { Color.A: 0 },
                         $"Selected profile presenter {presenter.Name} paints {presenter.Background} outside its tile");
