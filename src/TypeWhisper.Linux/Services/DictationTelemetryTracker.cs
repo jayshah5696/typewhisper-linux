@@ -139,7 +139,7 @@ internal sealed class DictationTelemetryTracker(IDiagnosticsReporter? reporter)
             DiagnosticsOutcome.Ok => "ok",
             DiagnosticsOutcome.Cancelled => "canceled",
             DiagnosticsOutcome.Failed => "failed",
-            _ => "aborted",
+            DiagnosticsOutcome.Aborted or _ => "aborted",
         });
     }
 

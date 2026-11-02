@@ -1430,7 +1430,7 @@ public sealed partial class HttpApiService : IDisposable
             TranscriptionAccelerationBackend.Vulkan => "vulkan",
             TranscriptionAccelerationBackend.AmdMigraphx => "amd-migraphx",
             TranscriptionAccelerationBackend.WebGpu => "webgpu",
-            _ => "cpu",
+            TranscriptionAccelerationBackend.Cpu or _ => "cpu",
         };
     }
 
@@ -1581,7 +1581,7 @@ public sealed partial class HttpApiService : IDisposable
                 new { engine = requestedPlugin?.ProviderId, model = (string?)null, status = "unloaded" })),
             ModelUnloadOutcome.OtherEngine => (409, Serialize(new { error = "That engine has no loaded model" })),
             ModelUnloadOutcome.Failed => (409, Serialize(new { error = "This engine cannot unload the model" })),
-            _ => (200, Serialize(new
+            ModelUnloadOutcome.Unloaded or _ => (200, Serialize(new
             {
                 engine = _models.GetTranscriptionPlugin(id)?.ProviderId,
                 model = ModelManagerService.ParsePluginModelId(id!).ModelId,
@@ -1623,7 +1623,7 @@ public sealed partial class HttpApiService : IDisposable
             ModelDeleteOutcome.Busy => (409, Serialize(new { error = ModelOperationBusy })),
             ModelDeleteOutcome.Loaded => (409, Serialize(new { error = "Unload the model first" })),
             ModelDeleteOutcome.Failed => (500, Serialize(new { error = "Model files could not be deleted" })),
-            _ => (200, Serialize(new
+            ModelDeleteOutcome.Deleted or _ => (200, Serialize(new
             {
                 engine = plugin.ProviderId,
                 model = ModelManagerService.ParsePluginModelId(id).ModelId,
@@ -2445,7 +2445,7 @@ public sealed partial class HttpApiService : IDisposable
                     "Profile hotkey cannot be enabled because it conflicts with an enabled shortcut."
                 ),
             // A future non-collision status must not masquerade as a collision.
-            _ =>
+            HotkeyCandidateValidationStatus.Valid or _ =>
                 (
                     "hotkey-invalid",
                     "Profile hotkey cannot be enabled."
@@ -2530,7 +2530,7 @@ public sealed partial class HttpApiService : IDisposable
                 RecorderState.Recording => "recording",
                 RecorderState.Paused => "paused",
                 RecorderState.Saving => "saving",
-                _ => "idle",
+                RecorderState.Ready or _ => "idle",
             },
             id = _recorder.ActiveSessionId,
             durationSeconds = _recorder.ActiveDuration.TotalSeconds,

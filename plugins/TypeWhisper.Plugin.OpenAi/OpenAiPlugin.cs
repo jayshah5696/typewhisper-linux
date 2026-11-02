@@ -404,7 +404,7 @@ public sealed class OpenAiPlugin
     public bool IsAvailable => AuthMode switch
     {
         OpenAiAuthMode.ChatGpt => HasChatGptCredentials && HasChatGptPlanPermission,
-        _ => IsConfigured,
+        OpenAiAuthMode.ApiKey or _ => IsConfigured,
     };
 
     public IReadOnlyList<PluginModelInfo> SupportedModels =>

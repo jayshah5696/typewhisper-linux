@@ -651,7 +651,7 @@ public sealed class WebhookService : IDisposable
             DeliveryOutcome.TimedOut => "timed out",
             DeliveryOutcome.ConnectionFailed => "connection failed",
             DeliveryOutcome.HeaderSecretUnavailable => "header secret unavailable",
-            _ => "request failed",
+            DeliveryOutcome.Failed or _ => "request failed",
         };
 
     private void AddLogEntry(DeliveryLogEntry entry)
@@ -1358,7 +1358,7 @@ public sealed class WebhookPlugin
             DeliveryOutcome.TimedOut => Loc.L("Outcome.TimedOut"),
             DeliveryOutcome.ConnectionFailed => Loc.L("Outcome.ConnectionFailed"),
             DeliveryOutcome.HeaderSecretUnavailable => Loc.L("Outcome.HeaderSecretUnavailable"),
-            _ => Loc.L("Outcome.Failed"),
+            DeliveryOutcome.Failed or _ => Loc.L("Outcome.Failed"),
         };
 
     private sealed record ParsedWebhookItem(

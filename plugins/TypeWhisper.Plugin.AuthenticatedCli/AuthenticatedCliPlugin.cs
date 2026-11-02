@@ -1683,7 +1683,7 @@ public sealed partial class AuthenticatedCliPlugin :
                 {
                     if (attempt < 2)
                     {
-                        await Task.Delay(50).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(50)).ConfigureAwait(false);
                     }
                 }
             }

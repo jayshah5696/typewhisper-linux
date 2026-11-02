@@ -783,7 +783,7 @@ public partial class DictationSectionViewModel : ObservableObject
             SpokenFormattingVerificationState.VendorHint => "Dictation.SpokenFormattingStatusVendorHint",
             SpokenFormattingVerificationState.UserVerifiedGood => "Dictation.SpokenFormattingStatusVerifiedGood",
             SpokenFormattingVerificationState.UserVerifiedBad => "Dictation.SpokenFormattingStatusVerifiedBad",
-            _ => "Dictation.SpokenFormattingStatusUnknown",
+            SpokenFormattingVerificationState.Unknown or _ => "Dictation.SpokenFormattingStatusUnknown",
         }];
 
     public string SpokenFormattingProfileContext => ResolveSpokenFormattingVerification()?.Profile is { } profile
@@ -1609,7 +1609,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 status.Progress.ToString("P0")
             ),
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
-            _ => Loc.Instance["Dictation.StatusNotReady"],
+            ModelStatusType.NotDownloaded or _ => Loc.Instance["Dictation.StatusNotReady"],
         };
         RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));

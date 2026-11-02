@@ -152,7 +152,7 @@ public partial class DictationSectionViewModel
             MicrophoneTestState.NoAudio => ("Dictation.MicTestNoAudio", "Dictation.MicTestNoAudioDetail"),
             MicrophoneTestState.ZeroSamples => ("Dictation.MicTestZeroSamples", "Dictation.MicTestZeroSamplesDetail"),
             MicrophoneTestState.Quiet => ("Dictation.MicTestQuiet", "Dictation.MicTestQuietDetail"),
-            _ => ("Dictation.MicTestSignal", "Dictation.MicTestSignalDetail"),
+            MicrophoneTestState.Signal or _ => ("Dictation.MicTestSignal", "Dictation.MicTestSignalDetail"),
         };
 
         if (snapshot.Running)

@@ -693,7 +693,7 @@ internal static class PrivilegedManagedFileTransaction
         {
             PrivilegedEquivalentProbe.YdotoolModulesLoad => "ydotool-modules",
             PrivilegedEquivalentProbe.YdotoolUdevRule => "ydotool-udev",
-            _ => "none",
+            PrivilegedEquivalentProbe.None or _ => "none",
         };
     }
 

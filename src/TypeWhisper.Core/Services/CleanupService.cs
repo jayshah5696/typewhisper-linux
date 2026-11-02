@@ -69,7 +69,7 @@ public sealed partial class CleanupService
             CleanupLevel.Light => CleanLight(text, sourceLanguage, stylePreset),
             // The Linux service adds the provider-backed pass after these local rules.
             CleanupLevel.Medium or CleanupLevel.High => CleanLight(text, sourceLanguage, stylePreset),
-            _ => text,
+            CleanupLevel.None or _ => text,
         };
     }
 

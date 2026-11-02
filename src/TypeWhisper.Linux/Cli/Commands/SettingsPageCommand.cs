@@ -69,7 +69,7 @@ internal static class SettingsPageCommand
                 return 1;
             }
 
-            Thread.Sleep(100);
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
         }
     }
 

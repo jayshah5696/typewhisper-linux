@@ -338,7 +338,7 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
                 cachedStart = start;
                 cachedEnd = Math.Min(request.Audio.Length, start + 16000 * 30);
                 emission = _model!.Evaluate(
-                    request.Audio.Slice(cachedStart, cachedEnd - cachedStart),
+                    request.Audio[cachedStart..cachedEnd],
                     cancellation
                 );
             }

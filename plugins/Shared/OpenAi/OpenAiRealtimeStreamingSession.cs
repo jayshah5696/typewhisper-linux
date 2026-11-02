@@ -276,7 +276,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 
             try
             {
-                await Task.Delay(50, linked.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(50), linked.Token);
             }
             catch (OperationCanceledException)
             {

@@ -114,7 +114,7 @@ public sealed partial class RecordingNotificationService : IDisposable
         {
             RecordingMode.Toggle => Loc.Instance["Notify.BodyToggle"],
             RecordingMode.PushToTalk => Loc.Instance["Notify.BodyPushToTalk"],
-            _ => Loc.Instance["Notify.BodyHybrid"],
+            RecordingMode.Hybrid or _ => Loc.Instance["Notify.BodyHybrid"],
         };
     }
 

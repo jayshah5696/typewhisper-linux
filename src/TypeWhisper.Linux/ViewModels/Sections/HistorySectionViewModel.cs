@@ -928,7 +928,7 @@ public partial class HistoryRecordRow : ObservableObject
     {
         TranscriptionRecordStatus.TranscriptionFailed => Loc.Instance["History.StatusTranscriptionFailed"],
         TranscriptionRecordStatus.ProcessingFailed => Loc.Instance["History.StatusProcessingFailed"],
-        _ => "",
+        TranscriptionRecordStatus.Succeeded or _ => "",
     };
     public bool ShowRetry => _owner.CanRetry && HasSessionAudio && (HasFailure || Record.InsertionStatus is
         TextInsertionStatus.Failed or TextInsertionStatus.ActionFailed or TextInsertionStatus.ActionUnavailable

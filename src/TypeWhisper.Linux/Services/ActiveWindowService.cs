@@ -499,14 +499,14 @@ public sealed class ActiveWindowService : IActiveWindowService
             return false;
         }
 
-        Thread.Sleep(60);
+        Thread.Sleep(TimeSpan.FromMilliseconds(60));
 
         if (!RunXdotoolKey(windowId, ["key", "--clearmodifiers", "ctrl+c"]))
         {
             return false;
         }
 
-        Thread.Sleep(80);
+        Thread.Sleep(TimeSpan.FromMilliseconds(80));
 
         RunXdotoolKey(windowId, ["key", "Escape"]);
         return true;

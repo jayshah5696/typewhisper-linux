@@ -28,7 +28,7 @@ public sealed class InterfaceThemeService(ISettingsService settings)
         {
             InterfaceTheme.System => ThemeVariant.Default,
             InterfaceTheme.Light => ThemeVariant.Light,
-            _ => ThemeVariant.Dark,
+            InterfaceTheme.Dark or _ => ThemeVariant.Dark,
         };
     }
 

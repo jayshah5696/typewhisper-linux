@@ -738,7 +738,7 @@ public sealed class OpenAiCompatiblePlugin
     {
         ThinkingMode.Off => "off",
         ThinkingMode.On => "on",
-        _ => "default",
+        ThinkingMode.ProviderDefault or _ => "default",
     };
 
     private async Task<T> RunNonLlmRequestAsync<T>(Func<CancellationToken, Task<T>> request, CancellationToken ct)

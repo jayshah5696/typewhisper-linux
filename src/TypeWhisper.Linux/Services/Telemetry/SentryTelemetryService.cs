@@ -263,7 +263,7 @@ public sealed class SentryTelemetryService(
                     DiagnosticsOutcome.Ok => SpanStatus.Ok,
                     DiagnosticsOutcome.Cancelled => SpanStatus.Cancelled,
                     DiagnosticsOutcome.Failed => SpanStatus.InternalError,
-                    _ => SpanStatus.Aborted,
+                    DiagnosticsOutcome.Aborted or _ => SpanStatus.Aborted,
                 });
             });
         }

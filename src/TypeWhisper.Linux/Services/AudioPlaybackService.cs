@@ -215,7 +215,7 @@ public sealed class AudioPlaybackService : IDisposable
     {
         while (true)
         {
-            await Task.Delay(100).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
 
             PaStream? finished;
             lock (_gate)

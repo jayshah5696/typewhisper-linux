@@ -345,7 +345,7 @@ internal static class HttpApiRequestParser
             }
 
             var headers = Encoding.UTF8.GetString(
-                bodySpan.Slice(partHeaderStart, headerEnd - partHeaderStart)
+                bodySpan[partHeaderStart..headerEnd]
             );
             var parsedHeaders = ParsePartHeaders(headers);
             if (!string.IsNullOrEmpty(parsedHeaders.Name))
@@ -355,7 +355,7 @@ internal static class HttpApiRequestParser
                         parsedHeaders.Name,
                         parsedHeaders.FileName,
                         parsedHeaders.ContentType,
-                        body.Slice(partBodyStart, partBodyEnd - partBodyStart)
+                        body[partBodyStart..partBodyEnd]
                     )
                 );
             }

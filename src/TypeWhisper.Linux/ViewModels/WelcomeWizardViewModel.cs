@@ -1321,7 +1321,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "ok",
         SetupTaskStatusKind.Failed => "error",
         SetupTaskStatusKind.Working => "busy",
-        _ => "missing",
+        SetupTaskStatusKind.NeedsAction or _ => "missing",
     };
 
     public string StatusGlyph => Kind switch
@@ -1329,7 +1329,7 @@ public sealed partial class SetupTaskRow : ObservableObject
         SetupTaskStatusKind.Satisfied => "✓",
         SetupTaskStatusKind.Failed => "!",
         SetupTaskStatusKind.Working => "…",
-        _ => "•",
+        SetupTaskStatusKind.NeedsAction or _ => "•",
     };
 
     public void Apply(SetupTaskState state)

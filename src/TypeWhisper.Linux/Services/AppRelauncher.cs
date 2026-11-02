@@ -66,7 +66,7 @@ internal static class AppRelauncher
         var deadline = Stopwatch.StartNew();
         while (Directory.Exists($"/proc/{pid}") && deadline.Elapsed < s_waitBudget)
         {
-            Thread.Sleep(100);
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
         }
     }
 

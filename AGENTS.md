@@ -19,7 +19,9 @@ TypeWhisper Linux is a .NET 10 and Avalonia desktop app. Use the existing `justf
 - `just verify-upgrade` upgrades a scratch copy of the installed program, checks user-data preservation and launcher paths, and runs the Needle check. It expects the Release linux-x64 publish output. See `scripts/verification/README.md` for preparation and prerequisites.
 - `just verify-recovery` verifies public audio through dictation, History, the recovery UI, and clipboard read-back in a private X11 desktop. Build Release first. See `scripts/verification/README.md` for prerequisites.
 - `just test-linux`, `just test-core`, `just test-plugins`, `just test-cli`, and `just test-integration` run the corresponding Release test projects. Build Release before these commands.
-- `just ci` restores, builds Release, and runs the full test set.
+- `just lint` runs the static code guideline and compiler analyzer configuration check in `scripts/verification/code_guidelines_lint.py`.
+- `just pre-push` runs `just lint`, `just eval-tests`, `just build-release`, `just test-core`, `just test-plugins`, and `just test-cli`. Enable the tracked hook with `git config core.hooksPath .githooks` or run `just pre-push` before every push.
+- `just ci` runs `just lint`, restores, builds Release, and runs the full test set.
 - `just benchmark` runs the public audio benchmark. Read `scripts/verification/README.md` for measurement boundaries and comparisons.
 - `just eval-tests` checks the quality-eval tools without model calls. Use `just eval-template`, `just eval-review`, and `just eval-score` for manual before/after review. Read `evals/dictation/README.md` before optional `just eval-judge` calls.
 
@@ -29,7 +31,14 @@ Run `just --list` when a command is unclear. The recipes locate the local SDK au
 
 Prefer simple systems and complete user-visible behavior. Fix root causes and avoid unnecessary abstractions. Inspect current code and all callers before changing a contract.
 
-Write unit tests before production code. Keep tests focused on failure cases and real behavior. Do not remove failing tests or replace errors with dummy success results. Run the build and relevant tests before reporting completion. Read complete failure logs and distinguish existing failures from new ones.
+The build in `Directory.Build.props` and `.editorconfig` and `just lint` in `scripts/verification/code_guidelines_lint.py` enforce these code rules as errors:
+- Name every repository `enum` variant explicitly in `switch` expressions and avoid `if` and `else if` chains over enum values, enforced by `CS8509`, `IDE0066`, and `BAML001`.
+- Pass explicit `TimeSpan` values such as `TimeSpan.FromMilliseconds` or `TimeSpan.FromSeconds` to `Task.Delay`, `Thread.Sleep`, and `CancelAfter` instead of raw integer literals, enforced by `BAML002`.
+- Throw specific exception types such as `InvalidOperationException` or `ArgumentException` and use `ArgumentNullException.ThrowIfNull` instead of generic `Exception`, `ApplicationException`, or `SystemException`, enforced by `CA1510` to `CA1513`, `CA2201`, and `BAML003`.
+- Use `[GeneratedRegex]` methods with descriptive names showing what the pattern matches instead of inline constant regex strings, enforced by `SYSLIB1045` and `BAML004`.
+- Prefer C# standard library methods and the `..` range operator over manual indexing or `Substring` and `Slice` arithmetic, enforced by `CA1826`, `CA1859`, `CA1860`, `CA1865` to `CA1867`, `IDE0057`, and `BAML005`.
+
+Write unit tests before production code. Keep tests focused on failure cases and real behavior. Do not remove failing tests or replace errors with dummy success results. Run `just pre-push` before pushing or reporting completion. Read complete failure logs and distinguish existing failures from new ones.
 
 Use `rg` for searches and `apply_patch` for source edits. Use `uv` for Python tools. Do not create phased plans unless requested.
 

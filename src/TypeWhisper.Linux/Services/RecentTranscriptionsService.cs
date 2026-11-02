@@ -608,7 +608,7 @@ public sealed class RecentTranscriptionsService
                 "RecentTranscriptions.PasteToolInstallHintWayland",
             RecentTranscriptionPasteToolHint.WaylandYdotool =>
                 "RecentTranscriptions.PasteToolInstallHintWaylandYdotool",
-            _ => "RecentTranscriptions.PasteToolInstallHintX11",
+            RecentTranscriptionPasteToolHint.X11 or _ => "RecentTranscriptions.PasteToolInstallHintX11",
         };
     }
 }

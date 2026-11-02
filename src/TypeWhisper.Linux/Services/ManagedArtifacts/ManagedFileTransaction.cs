@@ -1079,7 +1079,7 @@ public sealed partial class ManagedFileTransaction
                 }
                 catch (IOException)
                 {
-                    await Task.Delay(25, ct).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(25), ct).ConfigureAwait(false);
                 }
             }
         }

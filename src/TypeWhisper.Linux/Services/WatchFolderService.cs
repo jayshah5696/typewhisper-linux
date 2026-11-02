@@ -551,7 +551,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
             {
                 try
                 {
-                    await Task.Delay(500, ct);
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1169,7 +1169,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
                 stableReads = 0;
             }
 
-            await Task.Delay(250, ct);
+            await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
         }
 
         throw new IOException("Watch folder file is still being written.");

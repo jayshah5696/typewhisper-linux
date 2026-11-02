@@ -1731,7 +1731,7 @@ public sealed partial class SherpaOnnxPlugin
         {
             SherpaModelFamily.Canary => CreateCanaryRecognizer(modelDir, "en", "en", provider),
             SherpaModelFamily.Qwen3Asr => _qwenRecognizerFactory(modelDir, provider),
-            _ => _parakeetRecognizerFactory(modelDir, provider),
+            SherpaModelFamily.Transducer or _ => _parakeetRecognizerFactory(modelDir, provider),
         };
 
     private static OfflineRecognizer CreateQwenRecognizer(string modelDir, string provider)

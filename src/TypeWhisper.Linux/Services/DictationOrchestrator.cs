@@ -484,7 +484,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         {
             ToggleGateCloseOutcome.Idle => true,
             ToggleGateCloseOutcome.TimedOut => false,
-            _ => closeWhenUnrecorded(),
+            ToggleGateCloseOutcome.Unknown or _ => closeWhenUnrecorded(),
         };
     }
 
@@ -3010,7 +3010,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>
                         "Dictation canceled.",
-                    _ => "Done.",
+                    InsertionResult.NoText or _ => "Done.",
                 };
                 var isError =
                     insertion
@@ -4548,7 +4548,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     // there's no need to hide it for the paste to land correctly.
     private static Task YieldFocusForInsertionAsync()
     {
-        return Task.Delay(90);
+        return Task.Delay(TimeSpan.FromMilliseconds(90));
     }
 
     private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)

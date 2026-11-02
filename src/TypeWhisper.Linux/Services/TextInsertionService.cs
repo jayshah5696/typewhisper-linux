@@ -1611,7 +1611,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         ? YdotoolBackend.TerminalPasteArgs()
                         : YdotoolBackend.PasteArgs()
                 ),
-                _ => false,
+                InputBackend.None or _ => false,
             }
         );
     }
@@ -1704,7 +1704,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.TypeArgs(segment)),
-            _ => false,
+            InputBackend.None or _ => false,
         };
     }
 
@@ -1719,7 +1719,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 null
             ) == 0,
             InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.ShiftEnterArgs()),
-            _ => false,
+            InputBackend.None or _ => false,
         };
     }
 
@@ -1737,7 +1737,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 InputBackend.Ydotool => await RunYdotoolAsync(
                     useTerminalShortcut ? YdotoolBackend.TerminalCopyArgs() : YdotoolBackend.CopyArgs()
                 ),
-                _ => false,
+                InputBackend.None or _ => false,
             }
         );
     }
@@ -1754,7 +1754,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                     null
                 ) == 0,
                 InputBackend.Ydotool => await RunYdotoolAsync(YdotoolBackend.EnterArgs()),
-                _ => false,
+                InputBackend.None or _ => false,
             }
         );
     }

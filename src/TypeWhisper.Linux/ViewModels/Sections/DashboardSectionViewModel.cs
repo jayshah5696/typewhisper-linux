@@ -448,7 +448,7 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
         {
             TimeRange.Weekly => now.AddDays(-7),
             TimeRange.Month => now.AddDays(-30),
-            _ => DateTime.MinValue,
+            TimeRange.AllTime or _ => DateTime.MinValue,
         };
 
         var records = _history.Records.Where(r => r.Timestamp >= cutoff && r.Status == TranscriptionRecordStatus.Succeeded).ToList();

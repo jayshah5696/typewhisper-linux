@@ -316,7 +316,7 @@ public sealed partial class LocalDataResetService
                 return false;
             }
 
-            Thread.Sleep(100);
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
         }
 
         return true;
@@ -640,8 +640,8 @@ public sealed partial class LocalDataResetService
             {
                 Decision.Delete => static (_, _) => Decision.Delete,
                 Decision.Keep => static (_, _) => Decision.Keep,
-                _ when !relativePath.Contains('/') => PluginDataDecision,
-                _ => decide,
+                Decision.Partial when !relativePath.Contains('/') => PluginDataDecision,
+                Decision.Partial or _ => decide,
             };
             if (overridden == Decision.Partial || decision == Decision.Partial)
             {

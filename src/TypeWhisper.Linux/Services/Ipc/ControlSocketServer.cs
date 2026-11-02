@@ -409,7 +409,7 @@ internal sealed class ControlSocketServer : IDisposable
                 // Brief back-off so a persistent error doesn't pin a core.
                 try
                 {
-                    await Task.Delay(100, ct).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

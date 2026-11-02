@@ -710,12 +710,12 @@ public sealed class ScriptPlugin
                 false,
                 Loc.L("Settings.TestOutputLimit", ScriptService.TestOutputLimitBytes / 1024)
             ),
-            _ when outcome.ExitCode != 0 => new PluginCollectionItemTestResult(
+            ProcessRunStatus.Exited when outcome.ExitCode != 0 => new PluginCollectionItemTestResult(
                 false,
                 Loc.L("Settings.TestExitCode", outcome.ExitCode ?? -1),
                 NullIfEmpty(stderr)
             ),
-            _ => new PluginCollectionItemTestResult(
+            ProcessRunStatus.Exited or _ => new PluginCollectionItemTestResult(
                 true,
                 Loc.L("Settings.TestSucceeded"),
                 Preview(outcome.StandardOutputText)

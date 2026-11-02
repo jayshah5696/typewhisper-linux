@@ -80,7 +80,7 @@ public static class WatchFolderOutputFormats
             WatchFolderOutputFormat.PlainText => "txt",
             WatchFolderOutputFormat.Srt => "srt",
             WatchFolderOutputFormat.Vtt => "vtt",
-            _ => "md",
+            WatchFolderOutputFormat.Markdown or _ => "md",
         };
     }
 }

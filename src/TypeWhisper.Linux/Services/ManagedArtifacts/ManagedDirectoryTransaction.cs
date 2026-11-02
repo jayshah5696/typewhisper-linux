@@ -351,7 +351,7 @@ public sealed class ManagedDirectoryTransaction
                     );
                 }
 
-                await Task.Delay(25, ct).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(25), ct).ConfigureAwait(false);
             }
         }
         catch
