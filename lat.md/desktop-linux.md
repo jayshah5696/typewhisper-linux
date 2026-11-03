@@ -30,6 +30,10 @@ The floating widget maintains the following behavioral guarantees:
 - The quiet control snaps to a display edge; the recording overlay has its own placement settings.
 - Mouse clicks beside the collapsed control or through transparent margins pass directly to underlying windows.
 
+[[src/TypeWhisper.Linux/Services/Hotkey/DeSetup/DesktopDetector.cs|Desktop detection]] selects notification-only mode on known tiling desktops or when `TYPEWHISPER_DISABLE_OVERLAYS=1`. This startup override suppresses overlays even when the saved floating-control setting is enabled. [[src/TypeWhisper.Linux/ViewModels/Sections/AppearanceSectionViewModel.cs|Appearance settings]] also hides overlay controls in that mode. Removing the override requires a restart.
+
+[[src/TypeWhisper.Linux/Services/RecordingNotificationService.cs|Recording notifications]] report recording, processing, and terminal feedback only in notification mode. Overlay mode uses the floating controls instead; it does not also send recording notifications.
+
 ## Native Dependencies and Packaging
 
 The Linux application packages required platform runtimes and desktop utilities for standard distributions.
