@@ -25,10 +25,10 @@ Hotkeys are registered at application launch. Key requirements include:
 
 A lightweight, non-stealing overlay window provides immediate visual feedback on dictation state, audio levels, and live transcription drafts.
 
-The floating widget maintains the following behavioral guarantees:
+The floating widget in [[src/TypeWhisper.Linux/Views/DictationOverlayWindow.axaml.cs|DictationOverlayWindow]] maintains the following behavioral guarantees:
 - The control is designed to preserve the target application's focus.
-- The quiet control snaps to a display edge; the recording overlay has its own placement settings.
-- Mouse clicks beside the collapsed control or through transparent margins pass directly to underlying windows.
+- The quiet control snaps to a display edge via [[src/TypeWhisper.Linux/Services/OverlayDocking.cs|OverlayDocking]]; when floating control docking is disabled, [[src/TypeWhisper.Linux/Views/DictationOverlayWindow.axaml.cs|DictationOverlayWindow]] tracks window-manager moves and persists settled custom coordinates.
+- Mouse clicks beside the collapsed control or through transparent margins pass directly to underlying windows via [[src/TypeWhisper.Linux/Services/X11InputPassthrough.cs]].
 
 [[src/TypeWhisper.Linux/Services/Hotkey/DeSetup/DesktopDetector.cs|Desktop detection]] selects notification-only mode on known tiling desktops or when `TYPEWHISPER_DISABLE_OVERLAYS=1`. This startup override suppresses overlays even when the saved floating-control setting is enabled. [[src/TypeWhisper.Linux/ViewModels/Sections/AppearanceSectionViewModel.cs|Appearance settings]] also hides overlay controls in that mode. Removing the override requires a restart.
 

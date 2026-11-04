@@ -40,7 +40,18 @@ internal sealed record RecordingContext(
     CancellationToken CancelToken
 )
 {
+    public string? ScreenContext { get; init; }
+    public string? ClipboardContext { get; init; }
     public LockedFocusTarget? LockedFocusField { get; init; }
+
+    /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
+    public ActiveWindowSnapshot? TargetWindow { get; init; }
+
+    /// <summary>Wayland can't activate an XWayland <see cref="WindowId" />, so focus is checked through <see cref="TargetWindow" /> there.</summary>
+    public bool IsWaylandSession { get; init; }
+
+    /// <summary>The AT-SPI field focused at recording start, used to catch a focus move to another field of the same window.</summary>
+    public AtSpiElementRef? TargetField { get; init; }
 
     public OverlayPresentationToken? OverlayToken { get; init; }
     public string? TranscriptionTaskUsed { get; init; }
@@ -79,6 +90,14 @@ public sealed partial class DictationOrchestrator : IDisposable
     // Bound the wait for the toggle gate during session-loss teardown so a stuck start/stop can't
     // hang the lock handler; long enough to outlast a normal StartAsync's synchronous setup.
     private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
+
+    // Hard cap on each captured reference-context source (screen / clipboard). Keeps token
+    // cost small; the injection-safe framing re-caps at the same size in PromptProcessingService.
+    private const int ReferenceContextMaxChars = 2500;
+
+    // Budget for the clipboard read so a slow/hung clipboard owner can't stall the capture
+    // (the read is killed on timeout). Mirrors the screen harvest's ~1 s wall-clock budget.
+    private static readonly TimeSpan s_clipboardContextBudget = TimeSpan.FromMilliseconds(1000);
 
     private readonly ActiveWindowService _activeWindow;
     private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
@@ -164,6 +183,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     private string? _recordingAppProcess;
     private string? _recordingAppTitle;
     private string? _recordingAppUrl;
+    private string? _recordingClipboardContext;
+    private string? _recordingScreenContext;
     private Profile? _recordingProfile;
     private int _recordingCleanupTimeoutSeconds = 5;
 
@@ -191,6 +212,8 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private readonly IAtSpiEventClient? _atSpiClient;
     private LockedFocusTarget? _recordingLockedField;
+    private ActiveWindowSnapshot? _recordingTargetWindow;
+    private AtSpiElementRef? _recordingTargetField;
 
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
@@ -968,13 +991,16 @@ public sealed partial class DictationOrchestrator : IDisposable
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
-            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true, TargetAppCorrectionLearningEnabled: true }
-                && _atSpiClient?.IsRunning == true;
+            // AT-SPI only runs with correction-learning consent; the focused field also guards delivery
+            // against a focus move within the same window.
+            var trackFocusedField = startupSettings.TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
+            var captureLockedField = trackFocusedField
+                && startupSettings is { AutoPaste: true, LockPasteToFocusedField: true };
             AtSpiElementRef? initialFocusedElement;
             lock (_recordingSessionLock)
             {
                 _recordingWindowId = _activeWindow.GetActiveWindowId();
-                initialFocusedElement = captureLockedField ? _atSpiClient!.CurrentFocusedElement : null;
+                initialFocusedElement = trackFocusedField ? _atSpiClient!.CurrentFocusedElement : null;
                 _recordingLockedField = captureLockedField ? new LockedFocusTarget(null) : null;
             }
 
@@ -1113,6 +1139,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingTargetWindow = null;
+                _recordingTargetField = null;
+                _recordingScreenContext = null;
+                _recordingClipboardContext = null;
                 _recordingProfile = null;
             }
 
@@ -1201,6 +1231,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                         _recordingAppProcess = appProcess;
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
+                        _recordingTargetWindow = initialSnap;
+                        _recordingTargetField = initialFocusedElement;
                         _recordingProfile = matchedProfile;
                     }
                 }
@@ -1210,7 +1242,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     Trace.WriteLine(
                         $"[Dictation] Snapshot for session {sessionId} discarded — session no longer active."
                     );
-                    return (InitialSnap: (ActiveWindowSnapshot?)null, AppProcess: (string?)null, InitialMatch: MatchResult.NoMatch, MatchedProfile: (Profile?)null, SessionValid: false);
+                    return (InitialSnap: (ActiveWindowSnapshot?)null, AppProcess: (string?)null, AppTitle: (string?)null, InitialMatch: MatchResult.NoMatch, MatchedProfile: (Profile?)null, IsBrowserWindow: false, SessionValid: false);
                 }
 
                 _audio.TrySetWhisperMode(
@@ -1225,15 +1257,34 @@ public sealed partial class DictationOrchestrator : IDisposable
                     new RecordingStartedEvent { AppName = appTitle, AppProcessName = appProcess }
                 );
 
-                return (InitialSnap: initialSnap, AppProcess: appProcess, InitialMatch: initialMatch, MatchedProfile: matchedProfile, SessionValid: true);
+                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(initialSnap);
+                if (!isBrowserWindow || !hasUrlProfiles)
+                {
+                    var needs = EvaluateReferenceCaptureNeeds(matchedProfile);
+                    if (needs.Screen || needs.Clipboard)
+                    {
+                        await AwaitContextCaptureAsync(
+                            CaptureReferenceContextAsync(
+                                sessionId,
+                                needs.Screen,
+                                needs.Clipboard,
+                                appProcess,
+                                appTitle
+                            )
+                        ).ConfigureAwait(false);
+                    }
+                }
+
+                return (InitialSnap: initialSnap, AppProcess: appProcess, AppTitle: appTitle, InitialMatch: initialMatch, MatchedProfile: matchedProfile, IsBrowserWindow: isBrowserWindow, SessionValid: true);
             });
             _recordingSnapshotTask = recordingSnapshotTask;
 
             var recordingUrlRematchTask = hasUrlProfiles ? Task.Run(async () =>
             {
+                (ActiveWindowSnapshot? InitialSnap, string? AppProcess, string? AppTitle, MatchResult InitialMatch, Profile? MatchedProfile, bool IsBrowserWindow, bool SessionValid) snapshotResult = default;
                 try
                 {
-                    var snapshotResult = await recordingSnapshotTask.ConfigureAwait(false);
+                    snapshotResult = await recordingSnapshotTask.ConfigureAwait(false);
                     if (!snapshotResult.SessionValid)
                     {
                         return;
@@ -1250,17 +1301,19 @@ public sealed partial class DictationOrchestrator : IDisposable
                     using var deferredCts = new CancellationTokenSource(
                         TimeSpan.FromMilliseconds(4000)
                     );
-                    var deferredUrl = await Task.Run(
-                            () => _activeWindow.GetBrowserUrl(false),
-                            deferredCts.Token
-                        )
-                        .ConfigureAwait(false);
+                    // Bound to the recording-start snapshot so the title fallback can't
+                    // come from a window focused later.
+                    var deferredUrl = initialSnap is null
+                        ? null
+                        : await Task.Run(
+                                () => _activeWindow.GetBrowserUrlForSnapshot(initialSnap),
+                                deferredCts.Token
+                            )
+                            .ConfigureAwait(false);
 
                     if (!string.IsNullOrWhiteSpace(deferredUrl))
                     {
-                        // The URL comes from the currently focused window, which may
-                        // have changed. Re-snapshot and only commit if we're on the
-                        // same window, to avoid binding to an unrelated tab/window.
+                        // The walk reads the live address bar: commit only if the recording-start tab is still in front.
                         ActiveWindowSnapshot? verifySnap = null;
                         try
                         {
@@ -1278,15 +1331,15 @@ public sealed partial class DictationOrchestrator : IDisposable
                             // Verification snapshot is best-effort; fall through to the initial snapshot.
                         }
 
-                        if (
-                            initialSnap is null
-                            || verifySnap is null
-                            || !IsSameWindow(initialSnap, verifySnap)
-                        )
+                        if (!IsSameWindowAndTab(initialSnap, verifySnap))
                         {
                             Trace.WriteLine(
-                                "[Dictation] Deferred URL discarded — focused window changed mid-capture."
+                                "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
                             );
+                            if (initialSnap is not null)
+                            {
+                                _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
+                            }
                         }
                         else
                         {
@@ -1342,6 +1395,36 @@ public sealed partial class DictationOrchestrator : IDisposable
                 catch (Exception ex)
                 {
                     Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+                }
+
+                // Browser windows deferred their capture to here so the URL rematch's final
+                // profile (which may enable OR disable a source) is honored before any read.
+                if (snapshotResult is { SessionValid: true, IsBrowserWindow: true })
+                {
+                    Profile? finalCaptureProfile;
+                    lock (_recordingSessionLock)
+                    {
+                        if (_recordingSession != sessionId)
+                        {
+                            return;
+                        }
+
+                        finalCaptureProfile = _recordingProfile;
+                    }
+
+                    var needs = EvaluateReferenceCaptureNeeds(finalCaptureProfile);
+                    if (needs.Screen || needs.Clipboard)
+                    {
+                        await AwaitContextCaptureAsync(
+                            CaptureReferenceContextAsync(
+                                sessionId,
+                                needs.Screen,
+                                needs.Clipboard,
+                                snapshotResult.AppProcess,
+                                snapshotResult.AppTitle
+                            )
+                        ).ConfigureAwait(false);
+                    }
                 }
             }) : Task.CompletedTask;
             _recordingUrlRematchTask = recordingUrlRematchTask;
@@ -1615,10 +1698,17 @@ public sealed partial class DictationOrchestrator : IDisposable
             _cancelRequested = false;
 
             byte[] wav;
+            Exception? captureStopFault = null;
             try
             {
                 // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
                 wav = await _audio.StopRecordingAsync(captureSession!);
+            }
+            catch (Exception ex)
+            {
+                // Finish the normal teardown first; the post-stop pipeline then fails the session.
+                wav = [];
+                captureStopFault = ex;
             }
             finally
             {
@@ -1638,10 +1728,15 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _liveCleanupDraft = null;
                 stoppedLiveCleanup?.StopScheduling();
             }
-            await AwaitRecordingSnapshotAsync();
+
+            // Restore ducking/media BEFORE awaiting the background snapshot: that wait can now
+            // run up to 5 s (browser URL + deferred reference-context capture), and the user has
+            // already stopped speaking — leaving their audio ducked / media paused for that whole
+            // window is a jarring regression. The snapshot wait doesn't depend on audio state.
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
             earlyCleanupDone = true;
+            await AwaitRecordingSnapshotAsync();
             if (_settings.Current.SoundFeedbackEnabled)
             {
                 _soundFeedback.PlayRecordingStopped();
@@ -1692,6 +1787,15 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _streamingLanguageSelection = LanguageSelection.Automatic;
                 _streamingLanguageHints = [];
 
+                // Re-gate the captured context on the final (possibly URL-rematched) profile's
+                // toggles so a rematch to a profile that disables a source drops that source.
+                var finalScreenContext = ResolveScreenContextEnabled(_recordingProfile)
+                    ? _recordingScreenContext
+                    : null;
+                var finalClipboardContext = ResolveClipboardContextEnabled(_recordingProfile)
+                    ? _recordingClipboardContext
+                    : null;
+
                 recordingContext = new RecordingContext(
                     stoppedSessionId,
                     _recordingStart,
@@ -1710,6 +1814,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     snapshotCts?.Token ?? CancellationToken.None
                 )
                 {
+                    ScreenContext = finalScreenContext,
+                    ClipboardContext = finalClipboardContext,
                     // Read WITHOUT _overlayStateLock on purpose: this runs under
                     // _recordingSessionLock, and taking _overlayStateLock here would invert
                     // the _overlayStateLock -> _recordingSessionLock order the transient
@@ -1722,13 +1828,20 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // Consent withdrawn mid-recording means the captured element must not be touched again.
                     // TextInsertionService re-checks consent right before it touches the element.
                     LockedFocusField = learningConsent ? _recordingLockedField : null,
+                    TargetWindow = _recordingTargetWindow,
+                    IsWaylandSession = _commands.IsWaylandSession,
+                    TargetField = learningConsent ? _recordingTargetField : null,
                 };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingScreenContext = null;
+                _recordingClipboardContext = null;
                 _recordingWindowId = null;
                 _recordingLockedField = null;
+                _recordingTargetWindow = null;
+                _recordingTargetField = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
@@ -1799,6 +1912,20 @@ public sealed partial class DictationOrchestrator : IDisposable
                         );
                         FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
                         return;
+                    }
+
+                    if (captureStopFault is not null)
+                    {
+                        _models.PluginManager.EventBus.Publish(
+                            new RecordingStoppedEvent { DurationSeconds = 0 }
+                        );
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                        ExceptionDispatchInfo.Throw(captureStopFault);
                     }
 
                     SetOverlayState(recordingContext, state =>
@@ -1941,9 +2068,9 @@ public sealed partial class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 // Reached only for a step BEFORE TranscribeAndInsertAsync's own
-                // try/catch chain (streaming teardown, WAV padding, capture
-                // persistence, the RecordingCaptured event), or a rethrow from
-                // its `await using` lease disposal. Either way the session must
+                // try/catch chain (a failed capture stop, streaming teardown, WAV
+                // padding, capture persistence, the RecordingCaptured event), or a
+                // rethrow from its `await using` lease disposal. Either way the session must
                 // not stay "in_progress" forever (audit §2 H1).
                 CaptureDiagnostic(ex, "dictation.post-stop",
                     recordingContext.StreamingProviderId, recordingContext.StreamingModelId);
@@ -2869,6 +2996,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionResult insertion;
             ActionPluginExecutionResult? actionExecutionResult = null;
             var insertionThrew = false;
+            var enterSuppressed = false;
             try
             {
                 // Final lock check before synthesizing any keystroke, re-evaluated
@@ -2912,14 +3040,27 @@ public sealed partial class DictationOrchestrator : IDisposable
                 }
                 else
                 {
+                    var autoPaste = _settings.Current.AutoPaste;
+                    var autoEnter = commandResult.AutoEnter;
+                    // A prompt's LLM round trip gives the user time to click into another field,
+                    // so its result needs a verified field, not just the same window.
+                    var promptRan = pipelineResult.Steps.Any(step =>
+                        string.Equals(step.Name, PostProcessingStepNames.Llm, StringComparison.OrdinalIgnoreCase));
+                    if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context, promptRan))
+                    {
+                        enterSuppressed = autoEnter;
+                        autoPaste = false;
+                        autoEnter = false;
+                    }
+
                     insertion = await _textInsertion.InsertTextAsync(
                         new TextInsertionRequest(
                             insertionText,
-                            _settings.Current.AutoPaste,
+                            autoPaste,
                             context.WindowId,
                             context.AppProcess,
                             context.AppTitle,
-                            commandResult.AutoEnter,
+                            autoEnter,
                             insertionStrategy,
                             context.LockedFocusField
                         )
@@ -3011,6 +3152,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>
                         "Dictation canceled.",
+                    InsertionResult.NoText when enterSuppressed =>
+                        "Enter not sent: focus moved off the dictation's field.",
                     InsertionResult.NoText or _ => "Done.",
                 };
                 var isError =
@@ -3080,14 +3223,15 @@ public sealed partial class DictationOrchestrator : IDisposable
             // active, run it (awaited) before writing history so its request is
             // recorded on the entry; otherwise keep it fire-and-forget so the
             // common path isn't delayed by the extraction round-trip.
-            if (_settings.Current.MemoryEnabled && !insertionThrew)
+            if (_settings.Current.MemoryEnabled && !insertionThrew
+                && _promptProcessing.TryResolveDefaultProvider() is var (memoryLlm, memoryModel))
             {
                 if (context.Capture is not null)
                 {
                     try
                     {
                         // ReSharper disable once MethodSupportsCancellation -- best-effort memory extraction; awaited only to record its provenance before history, deliberately not tied to the recording's cancellation token (mirrors the fire-and-forget sibling below).
-                        await _memory.ExtractAndStoreAsync(finalText, context.Capture);
+                        await _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel, context.Capture);
                     }
                     catch (Exception ex)
                     {
@@ -3098,7 +3242,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 else
                 {
                     // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
-                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
+                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel), "memory extraction");
                 }
             }
 
@@ -3434,6 +3578,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             PromptAction action;
             string input;
             bool wrapInput;
+            Func<Task<bool>>? selectionStillTargeted = null;
             if (wantsSelection)
             {
                 // Only an edit/transform needs the selection. Capturing it synthesizes a copy, so
@@ -3441,6 +3586,18 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // at the focused app. Terminals map plain Ctrl+C to SIGINT, so the probe uses
                 // Ctrl+Shift+C there (and still can't read a TUI editor's internal selection).
                 var targetIsTerminal = TextInsertionService.IsTerminalApp(context.AppProcess);
+                // Focus may have moved during transcription: a copy chord sent now would read another
+                // app's selection and hand it to the provider. Unverifiable targets keep the old probe;
+                // their result still only reaches the clipboard.
+                if (CanVerifyTargetWindow(context) && !await IsVerifiedTargetFocusedAsync(context))
+                {
+                    var moved = Localization.Loc.Instance["Command.FocusMoved"];
+                    ReportStatus(context, moved);
+                    ShowFeedback(context, moved, false);
+                    PublishSessionTerminal(context.SessionId, "discarded", moved);
+                    return null;
+                }
+
                 var selectedText = await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal);
                 if (string.IsNullOrWhiteSpace(selectedText))
                 {
@@ -3466,6 +3623,16 @@ public sealed partial class DictationOrchestrator : IDisposable
                          );
                 input = selectedText;
                 wrapInput = true;
+                // Re-probe before replacing: another field no longer copies the same text. Only probe
+                // a confirmed window — the copy chord would interrupt a terminal.
+                selectionStillTargeted = async () =>
+                    CanVerifyTargetWindow(context)
+                    && await IsVerifiedTargetFocusedAsync(context).ConfigureAwait(false)
+                    && string.Equals(
+                        await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal).ConfigureAwait(false),
+                        selectedText,
+                        StringComparison.Ordinal
+                    );
             }
             else
             {
@@ -3496,7 +3663,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             // can introduce a newline; the one-shot insertion can then safely paste multiline text
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
-            // through that one-shot insert. Locked fields also need its exact-focus gate.
+            // through that one-shot insert. Locked fields also need its exact-focus gate. Auto
+            // also needs a chain that types non-ASCII; ydotool drops it, while the one-shot pastes.
             failureInput = input;
             failurePrompt = action.SystemPrompt;
             var strategy = ResolveInsertionStrategy(context.AppProcess);
@@ -3505,7 +3673,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 && !TextInsertionService.IsTerminalApp(context.AppProcess)
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
-                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)
+                        && _textInsertion.CanTypeNonAscii));
 
             if (!canStreamDirectly)
             {
@@ -3523,7 +3692,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     return null;
                 }
 
-                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot);
+                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot, selectionStillTargeted);
                 return SpokenCommandOutcomeFor(input, oneShot, oneShotInsertion);
             }
 
@@ -3557,7 +3726,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // into whatever app is now active. Mirrors the one-shot insert's focus step and
                     // covers the pre-type yield too (it delays as well). A false result means focus
                     // couldn't be confirmed, so streaming aborts to the safe one-shot fallback.
-                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false);
+                    if (selectionStillTargeted is not null)
+                    {
+                        return await selectionStillTargeted().ConfigureAwait(false);
+                    }
+
+                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+                           && await IsDeliveryTargetStillFocusedAsync(context, false).ConfigureAwait(false);
                 },
                 commandToken
             );
@@ -3590,7 +3765,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 // No chunk ever landed (e.g. no working injection backend): fall back to a single
                 // paste/insert of the whole result and report that outcome instead of a false success.
-                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result);
+                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result, selectionStillTargeted);
                 return SpokenCommandOutcomeFor(input, result, fallbackInsertion);
             }
 
@@ -3916,18 +4091,25 @@ public sealed partial class DictationOrchestrator : IDisposable
     // normal insertion path uses, so a genuine failure is never reported as success.
     private async Task<InsertionResult> CompleteViaOneShotInsertionAsync(
         RecordingContext context,
-        string result
+        string result,
+        Func<Task<bool>>? selectionStillTargeted
     )
     {
+        var strategy = ResolveInsertionStrategy(context.AppProcess);
+        var autoPaste = _settings.Current.AutoPaste
+                        && strategy is not TextInsertionStrategy.CopyOnly
+                        && (selectionStillTargeted is null
+                            ? await IsDeliveryTargetStillFocusedAsync(context, false)
+                            : await selectionStillTargeted());
         var insertion = await _textInsertion.InsertTextAsync(
             new TextInsertionRequest(
                 result,
-                _settings.Current.AutoPaste,
+                autoPaste,
                 context.WindowId,
                 context.AppProcess,
                 context.AppTitle,
                 false,
-                ResolveInsertionStrategy(context.AppProcess),
+                strategy,
                 context.LockedFocusField
             )
         );
@@ -4012,19 +4194,253 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private CleanupLevel ResolveCleanupLevel(RecordingContext context, PromptAction? promptAction)
     {
-        if (context.Profile is null)
-        {
-            return _settings.Current.CleanupLevel;
-        }
-
-        var style = ProfileStylePresetService.Resolve(context.Profile.StylePreset);
-        var cleanupLevel = context.Profile.CleanupLevelOverride ?? style.CleanupLevel;
+        var cleanupLevel = ResolveBaseCleanupLevel(context.Profile);
 
         // Profile prompt actions are LLM transforms; don't run a separate cleanup
         // pass first — the action should receive the raw dictated text.
         return promptAction is not null && cleanupLevel > CleanupLevel.Light
             ? CleanupLevel.Light
             : cleanupLevel;
+    }
+
+    // Cleanup level before the prompt-action downgrade — the profile/style-preset choice
+    // on its own. Shared by ResolveCleanupLevel and the capture-time gate.
+    private CleanupLevel ResolveBaseCleanupLevel(Profile? profile)
+    {
+        if (profile is null)
+        {
+            return _settings.Current.CleanupLevel;
+        }
+
+        var style = ProfileStylePresetService.Resolve(profile.StylePreset);
+        return profile.CleanupLevelOverride ?? style.CleanupLevel;
+    }
+
+    private bool ResolveScreenContextEnabled(Profile? profile)
+    {
+        return profile?.ScreenContextOverride ?? _settings.Current.ScreenContextEnabled;
+    }
+
+    private bool ResolveClipboardContextEnabled(Profile? profile)
+    {
+        return profile?.ClipboardContextOverride ?? _settings.Current.ClipboardContextEnabled;
+    }
+
+    /// <summary>
+    ///     True when a Medium/High LLM cleanup pass will actually run for this profile, i.e.
+    ///     the only consumer of reference context. A profile prompt action forces cleanup down
+    ///     to Light (the action receives raw text), so it is excluded. Used to gate capture so
+    ///     no screen/clipboard read happens when the context could never be used.
+    /// </summary>
+    private bool WillLlmCleanupRun(Profile? profile)
+    {
+        if (profile is not null && !string.IsNullOrWhiteSpace(profile.PromptActionId))
+        {
+            return false;
+        }
+
+        if (ResolveBaseCleanupLevel(profile) is not (CleanupLevel.Medium or CleanupLevel.High))
+        {
+            return false;
+        }
+
+        try
+        {
+            return _promptProcessing.GetCleanupProviderSelection() is not null;
+        }
+        catch (PluginRequestException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Which reference-context sources to capture for a profile: each enabled toggle,
+    ///     but only when a Medium/High LLM cleanup will consume them. Evaluated once for the
+    ///     initial match and again for any URL-rematched profile so per-URL opt-ins still fire.
+    /// </summary>
+    private (bool Screen, bool Clipboard) EvaluateReferenceCaptureNeeds(Profile? profile)
+    {
+        return !_sessionActivityMonitor.IsInputAllowed || !WillLlmCleanupRun(profile)
+            ? (false, false)
+            : (ResolveScreenContextEnabled(profile), ResolveClipboardContextEnabled(profile));
+    }
+
+    /// <summary>
+    ///     Captures the opt-in reference context (clipboard read + focused-element harvest),
+    ///     each source independently gated, and commits it under the session-id guard so a late
+    ///     write can't corrupt the next dictation. Runs in the background snapshot task.
+    /// </summary>
+    private async Task CaptureReferenceContextAsync(
+        int sessionId,
+        bool screenEnabled,
+        bool clipboardEnabled,
+        string? windowProcess,
+        string? windowTitle
+    )
+    {
+        if (!_sessionActivityMonitor.IsInputAllowed)
+        {
+            return;
+        }
+
+        // Run the two reads concurrently (independent subprocesses) so the capture is bounded by
+        // max(clipboard, screen) ≈ 1 s, not their sum — keeps a post-URL supplementary capture
+        // inside the stop wait budget.
+        var clipboardTask = clipboardEnabled
+            ? CaptureClipboardContextAsync()
+            : Task.FromResult<string?>(null);
+        var screenTask = screenEnabled
+            ? CaptureScreenContextAsync(windowProcess, windowTitle)
+            : Task.FromResult<string?>(null);
+
+        var clipboard = await clipboardTask.ConfigureAwait(false);
+        var screen = await screenTask.ConfigureAwait(false);
+
+        lock (_recordingSessionLock)
+        {
+            if (_recordingSession != sessionId)
+            {
+                return;
+            }
+
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                return;
+            }
+
+            // Only write the sources this pass actually captured, so a supplementary (delta)
+            // capture can't clobber a source an earlier pass already committed.
+            if (screenEnabled)
+            {
+                _recordingScreenContext = screen;
+            }
+
+            if (clipboardEnabled)
+            {
+                _recordingClipboardContext = clipboard;
+            }
+        }
+    }
+
+    private async Task<string?> CaptureClipboardContextAsync()
+    {
+        try
+        {
+            using var clipboardCts = new CancellationTokenSource(s_clipboardContextBudget);
+            return TruncateReferenceContext(
+                await _textInsertion
+                    .TryGetClipboardTextAsync(ReferenceContextMaxChars, clipboardCts.Token)
+                    .ConfigureAwait(false)
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Clipboard context capture failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task<string?> CaptureScreenContextAsync(string? windowProcess, string? windowTitle)
+    {
+        try
+        {
+            return TruncateReferenceContext(
+                await Task.Run(
+                        () => _sessionActivityMonitor.IsInputAllowed
+                            ? _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                            : null
+                    )
+                    .ConfigureAwait(false)
+            );
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Screen context capture failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static async Task AwaitContextCaptureAsync(Task? captureTask)
+    {
+        if (captureTask is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await captureTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Reference-context capture failed: {ex.Message}");
+        }
+    }
+
+    private static string? TruncateReferenceContext(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var trimmed = text.Trim();
+        return trimmed.Length > ReferenceContextMaxChars
+            ? trimmed[..ReferenceContextMaxChars]
+            : trimmed;
+    }
+
+    /// <summary>
+    ///     Builds the labelled reference string threaded into cleanup, or null when both
+    ///     sources are empty. Untrusted content — the injection-safe framing lives in
+    ///     <see cref="PromptProcessingService.AppendReferenceContext" />.
+    /// </summary>
+    private static string? BuildReferenceContext(RecordingContext context)
+    {
+        return BuildReferenceContext(context.ScreenContext, context.ClipboardContext);
+    }
+
+    internal static string? BuildReferenceContext(string? screenContext, string? clipboardContext)
+    {
+        var screen = string.IsNullOrWhiteSpace(screenContext) ? null : screenContext.Trim();
+        var clipboard = string.IsNullOrWhiteSpace(clipboardContext) ? null : clipboardContext.Trim();
+        if (screen is null && clipboard is null)
+        {
+            return null;
+        }
+
+        // Split the shared budget when both sources are present so a long on-screen snippet
+        // can't push the clipboard section past the downstream cap (and vice-versa) — otherwise
+        // one enabled source silently never reaches the cleanup prompt.
+        var perSourceBudget = screen is not null && clipboard is not null
+            ? ReferenceContextMaxChars / 2
+            : ReferenceContextMaxChars;
+
+        var sections = new List<string>(2);
+        if (screen is not null)
+        {
+            sections.Add(FormatReferenceSection("On-screen text:", screen, perSourceBudget));
+        }
+
+        if (clipboard is not null)
+        {
+            sections.Add(FormatReferenceSection("Clipboard text:", clipboard, perSourceBudget));
+        }
+
+        return string.Join("\n\n", sections);
+    }
+
+    private static string FormatReferenceSection(string label, string text, int budget)
+    {
+        // budget covers the whole section (label + newline + text).
+        var room = budget - label.Length - 1;
+        if (room > 0 && text.Length > room)
+        {
+            text = text[..room];
+        }
+
+        return $"{label}\n{text}";
     }
 
     private string ApplyProfileStyleFormatting(RecordingContext context, string text)
@@ -4419,6 +4835,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         try
         {
+            var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
+
             var record =
                 BuildHistoryRecord(
                     context,
@@ -4457,6 +4875,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
+                    ScreenContextApplied = referenceContextConsumed
+                        && !string.IsNullOrWhiteSpace(context.ScreenContext),
+                    ClipboardContextApplied = referenceContextConsumed
+                        && !string.IsNullOrWhiteSpace(context.ClipboardContext),
                     LlmCalls = context.Capture?.Calls ?? [],
                 };
             // Statistics before history: RecordTranscription may still be catching up from history, and a
@@ -4565,8 +4987,124 @@ public sealed partial class DictationOrchestrator : IDisposable
         return Task.Delay(TimeSpan.FromMilliseconds(90));
     }
 
-    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    // Without an xdotool window id, TextInsertionService can't re-activate the recording's window,
+    // so a paste would land in whatever is focused now. Compare compositor snapshots instead.
+    internal static bool HasTargetWindowChanged(ActiveWindowSnapshot? captured, ActiveWindowSnapshot? current)
     {
+        // Nothing to compare against: deliver to the focused window as before.
+        if (string.IsNullOrWhiteSpace(captured?.WindowId))
+        {
+            return false;
+        }
+
+        return current is null
+               || !string.Equals(captured.Source, current.Source, StringComparison.Ordinal)
+               || !string.Equals(captured.WindowId, current.WindowId, StringComparison.Ordinal);
+    }
+
+    internal static bool CanVerifyTargetWindow(RecordingContext context)
+    {
+        if (!context.IsWaylandSession)
+        {
+            return !string.IsNullOrEmpty(context.WindowId) || !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId);
+        }
+
+        // xdotool only sees XWayland windows and keeps reporting the last one after focus moves
+        // to a native window, so only a compositor snapshot can vouch for focus here.
+        return !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId)
+               && !string.Equals(context.TargetWindow.Source, "xdotool", StringComparison.Ordinal);
+    }
+
+    // requireFieldIdentity: without an AT-SPI field to check, a same-window field move can't be seen,
+    // so the caller would rather copy than paste.
+    private async Task<bool> IsDeliveryTargetStillFocusedAsync(RecordingContext context, bool requireFieldIdentity)
+    {
+        // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
+        // the clipboard itself (with its own reason) when it can't be or none was captured.
+        if (context.LockedFocusField is not null)
+        {
+            return true;
+        }
+
+        return await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
+               && IsTargetFieldStillFocused(context, requireFieldIdentity);
+    }
+
+    // Compares the client's tracked focus rather than querying the element: an app without an
+    // accessibility tree leaves the last focus event in place, which still matches while it stays focused.
+    private bool IsTargetFieldStillFocused(RecordingContext context, bool requireFieldIdentity)
+    {
+        if (context.TargetField is not { } field
+            || _atSpiClient?.IsRunning != true
+            || !_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            if (requireFieldIdentity)
+            {
+                Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: the dictation's field can't be verified.");
+            }
+
+            return !requireFieldIdentity;
+        }
+
+        if (_atSpiClient.CurrentFocusedElement == field)
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the dictation's field.");
+        return false;
+    }
+
+    // Re-activates the recording's window where xdotool can, then confirms it holds focus.
+    private async Task<bool> IsVerifiedTargetFocusedAsync(RecordingContext context)
+    {
+        return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+               && await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsCapturedWindowFocusedAsync(RecordingContext context)
+    {
+        // On X11 TextInsertionService re-activates an xdotool id instead.
+        if ((!context.IsWaylandSession && !string.IsNullOrEmpty(context.WindowId)) || context.TargetWindow is null)
+        {
+            return true;
+        }
+
+        ActiveWindowSnapshot? current = null;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            current = await _activeWindow.GetActiveWindowSnapshotAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Target window re-check failed: {ex.GetType().Name}");
+        }
+
+        if (!HasTargetWindowChanged(context.TargetWindow, current))
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the recording's window.");
+        return false;
+    }
+
+    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has;
+    // a missing title can't prove the tab stayed the same.
+    internal static bool IsSameWindowAndTab(ActiveWindowSnapshot? a, ActiveWindowSnapshot? b)
+    {
+        if (
+            a is null
+            || b is null
+            || string.IsNullOrWhiteSpace(a.Title)
+            || string.IsNullOrWhiteSpace(b.Title)
+            || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+
         if (a.WindowId is not null && b.WindowId is not null)
         {
             return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);

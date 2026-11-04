@@ -346,7 +346,9 @@ public sealed class TextInsertionService
             {
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
-                TextInsertionStrategy.Auto or TextInsertionStrategy.CopyOnly or _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+                // ydotool drops non-ASCII characters yet exits 0, so such text is pasted instead.
+                TextInsertionStrategy.Auto or TextInsertionStrategy.CopyOnly or _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+                      && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
                      // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
                      // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
@@ -362,7 +364,15 @@ public sealed class TextInsertionService
 
         if (shouldTypeDirectly)
         {
-            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter, request.LockedFocusTarget);
+            // Auto must not let non-ASCII text fall through to ydotool; paste instead if the others fail.
+            var unicodeBackendsOnly = strategy is not TextInsertionStrategy.DirectTyping && !IsAsciiSafe(text);
+            var directResult = await TypeTextAsync(
+                text,
+                targetWindowId,
+                autoEnter,
+                request.LockedFocusTarget,
+                unicodeBackendsOnly
+            );
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
@@ -549,6 +559,39 @@ public sealed class TextInsertionService
     }
 
     /// <summary>
+    ///     Reads clipboard reference text after the caller has obtained consent. The session
+    ///     must remain input-eligible, and an active insertion must not supply its temporary text.
+    /// </summary>
+    public async Task<string?> TryGetClipboardTextAsync(
+        int maxChars = int.MaxValue,
+        CancellationToken ct = default
+    )
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxChars);
+        ct.ThrowIfCancellationRequested();
+        if (!_inputAllowed() || !await _insertionGate.WaitAsync(TimeSpan.Zero, ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!_inputAllowed())
+            {
+                return null;
+            }
+
+            var text = await _platform.TryGetClipboardTextAsync(maxChars, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            return _inputAllowed() ? text : null;
+        }
+        finally
+        {
+            _insertionGate.Release();
+        }
+    }
+
+    /// <summary>
     ///     Types a chunk of streamed text directly via the platform typing backend — no clipboard,
     ///     no per-chunk focus delay — for streaming a spoken-command result onto the page. The caller
     ///     ensures the target holds focus. Terminal multiline chunks are rejected defensively; the
@@ -579,6 +622,9 @@ public sealed class TextInsertionService
     {
         return FocusTargetWindowAsync(targetWindowId);
     }
+
+    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
+    public bool CanTypeNonAscii => _platform.CanTypeNonAscii;
 
     /// <summary>
     ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
@@ -1000,7 +1046,8 @@ public sealed class TextInsertionService
         string text,
         string? targetWindowId,
         bool autoEnter,
-        LockedFocusTarget? lockedTarget
+        LockedFocusTarget? lockedTarget,
+        bool unicodeBackendsOnly = false
     )
     {
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -1026,7 +1073,7 @@ public sealed class TextInsertionService
                 : InsertionResult.Failed;
         }
 
-        if (!await _platform.TypeTextAsync(text))
+        if (!await _platform.TypeTextAsync(text, unicodeBackendsOnly))
         {
             if (_platform.LastFailureReason != InsertionFailureReason.None)
             {
@@ -1220,6 +1267,9 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool PrefersDirectTypingForUnknownTarget { get; }
 
+    /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
+    bool CanTypeNonAscii => true;
+
     InsertionFailureReason LastFailureReason { get; }
 
     /// <summary>
@@ -1230,7 +1280,15 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool LastTypingDeliveredPartialText { get; }
 
-    Task<string?> TryGetClipboardTextAsync();
+    Task<string?> TryGetClipboardTextAsync() =>
+        TryGetClipboardTextAsync(int.MaxValue, CancellationToken.None);
+
+    /// <summary>Older platforms do not expose opt-in reference reads.</summary>
+    Task<string?> TryGetClipboardTextAsync(int maxChars, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<string?>(null);
+    }
     Task<bool> SetClipboardTextAsync(string text);
 
     /// <summary>
@@ -1254,6 +1312,12 @@ internal interface ITextInsertionPlatform
     Task<bool> TypeTextAsync(string text);
 
     /// <summary>
+    ///     Types <paramref name="text" />; when <paramref name="unicodeBackendsOnly" /> is true,
+    ///     skips backends that cannot type non-ASCII text.
+    /// </summary>
+    Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly) => TypeTextAsync(text);
+
+    /// <summary>
     ///     Synthesizes a copy. When <paramref name="useTerminalShortcut" /> is true,
     ///     sends Ctrl+Shift+C (terminals map plain Ctrl+C to SIGINT); otherwise Ctrl+C.
     /// </summary>
@@ -1273,13 +1337,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
 
-    // GTK owners also advertise the legacy COMPOUND_TEXT encoding for plain-text copies.
-    private static readonly HashSet<string> s_waylandTextSafeTargets =
-        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT", "COMPOUND_TEXT" };
-
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.
-    private static readonly HashSet<string> s_x11TextSafeTargets = new(
+    // wl-paste listings need the same set: Xwayland bridges an X11 owner's target names to
+    // Wayland verbatim, and GTK owners advertise COMPOUND_TEXT and SAVE_TARGETS there too.
+    private static readonly HashSet<string> s_textSafeTargets = new(
         [
             "TARGETS",
             "MULTIPLE",
@@ -1407,6 +1469,16 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
 
+    // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
+    // wtype counts only where the compositor accepts its virtual keyboard.
+    public bool CanTypeNonAscii =>
+        _chain.Exists(backend => backend switch
+        {
+            InputBackend.Xdotool => true,
+            InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
+            InputBackend.Ydotool or InputBackend.None or _ => false,
+        });
+
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
     public bool LastTypingDeliveredPartialText { get; private set; }
@@ -1414,8 +1486,18 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private bool UsesWaylandClipboard =>
         _snapshot.ClipboardToolName == LinuxCapabilitySnapshot.WlClipboardToolName;
 
-    public async Task<string?> TryGetClipboardTextAsync()
+    public Task<string?> TryGetClipboardTextAsync() =>
+        TryGetClipboardTextAsync(int.MaxValue, CancellationToken.None);
+
+    public async Task<string?> TryGetClipboardTextAsync(int maxChars, CancellationToken ct = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxChars);
+        ct.ThrowIfCancellationRequested();
+        if (maxChars == 0)
+        {
+            return string.Empty;
+        }
+
         var useWaylandClipboard = UsesWaylandClipboard;
         var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
         IReadOnlyList<string> args = useWaylandClipboard
@@ -1424,10 +1506,39 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         try
         {
+            if (maxChars != int.MaxValue)
+            {
+                var bounded = await _ioRunner.RunOneShotAsync(
+                    new ProcessCommand(fileName, args),
+                    new ProcessOneShotOptions(
+                        Timeout: s_clipboardOperationTimeout,
+                        StandardError: ProcessCaptureMode.Discard
+                    )
+                    {
+                        MaximumStandardOutputBytes = (int)Math.Min((long)maxChars * 4, int.MaxValue),
+                    },
+                    ct
+                ).ConfigureAwait(false);
+                if (!bounded.Succeeded && bounded.Status != ProcessRunStatus.OutputLimitExceeded)
+                {
+                    return null;
+                }
+
+                var text = bounded.StandardOutputText;
+                var length = Math.Min(text.Length, maxChars);
+                if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
+                {
+                    length--;
+                }
+
+                return text[..length];
+            }
+
             var result = await _ioRunner.RunAsync(
                 fileName,
                 args,
-                timeout: s_clipboardOperationTimeout
+                timeout: s_clipboardOperationTimeout,
+                ct: ct
             ).ConfigureAwait(false);
             if (result.TimedOut)
             {
@@ -1488,7 +1599,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
 
             return result.Succeeded
-                   && ListingHasNonTextFormats(result.StandardOutput, useWaylandClipboard);
+                   && ListingHasNonTextFormats(result.StandardOutput);
         }
         catch (Exception ex)
         {
@@ -1499,14 +1610,13 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal static bool ListingHasNonTextFormats(string listing, bool isWayland)
+    internal static bool ListingHasNonTextFormats(string listing)
     {
-        var textSafe = isWayland ? s_waylandTextSafeTargets : s_x11TextSafeTargets;
         return listing.Split('\n').Any(rawLine =>
         {
             var target = rawLine.Trim();
             return target.Length != 0
-                   && !textSafe.Contains(target)
+                   && !s_textSafeTargets.Contains(target)
                    && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
         });
     }
@@ -1613,6 +1723,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public Task<bool> TypeTextAsync(string text)
     {
+        return TypeTextAsync(text, unicodeBackendsOnly: false);
+    }
+
+    public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
+    {
         // Map newlines to Shift+Enter rather than a bare Return so that
         // dictated paragraph breaks insert a newline instead of submitting
         // in chat boxes (Slack / Discord / web chat / Claude's box), where
@@ -1620,7 +1735,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // out of this method: terminal protocols still deliver Shift+Return
         // as Return, which can submit partial shell commands. The clipboard-
         // paste path is unaffected (pasted multiline text does not submit).
-        return WalkChainAsync(backend => TypeWithNewlinesAsync(backend, text));
+        return WalkChainAsync(
+            backend => TypeWithNewlinesAsync(backend, text),
+            unicodeBackendsOnly ? InputBackend.Ydotool : null
+        );
     }
 
     private async Task<bool> TypeWithNewlinesAsync(InputBackend backend, string text)
@@ -1775,7 +1893,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         ApplyRefreshedSnapshot(snapshot);
     }
 
-    private async Task<bool> WalkChainAsync(Func<InputBackend, Task<bool>> attempt)
+    private async Task<bool> WalkChainAsync(
+        Func<InputBackend, Task<bool>> attempt,
+        InputBackend? skip = null
+    )
     {
         var chain = _chain;
         var disabled = _disabled;
@@ -1792,7 +1913,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
-            if (disabled.Contains(backend))
+            if (disabled.Contains(backend) || backend == skip)
             {
                 continue;
             }

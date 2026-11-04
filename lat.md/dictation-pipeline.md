@@ -23,7 +23,7 @@ Providers defined in [[plugin-system#ASR and Transcription Providers]] process t
 Live text refinement runs speculatively during speech, while final cleanup applies authoritative prompt templates and LLM formatting on dictation end.
 
 - **Speculative live cleanup**: Produces real-time draft suggestions for responsive visual feedback in the floating overlay. Discarded live drafts never record snippet statistics, increment dictionary counters, or pollute error logs.
-- **Final cleanup**: When the user releases the dictation hotkey, final cleanup passes the authoritative transcript to the configured processing provider. It applies punctuation restoration, custom vocabulary substitutions, and LLM formatting rules before delivery.
+- **Final cleanup**: When the user releases the dictation hotkey, [[src/TypeWhisper.Linux/Services/DictationOrchestrator.Recovery.cs]] passes the authoritative transcript and any opt-in screen or clipboard reference context to [[src/TypeWhisper.Linux/Services/LlmCleanupService.cs]], applying punctuation restoration, custom vocabulary substitutions, and LLM formatting rules before delivery.
 
 ## Text Delivery and Clipboard Handling
 
@@ -31,6 +31,7 @@ Completed text is delivered to target applications using synthetic keypress simu
 
 On Linux desktops, input delivery interacts with the active display server:
 - On X11, the app places text onto the system clipboard and dispatches paste shortcuts via tools such as `xdotool` or `xclip`.
+- In [[src/TypeWhisper.Linux/Services/TextInsertionService.cs]], non-ASCII text falls back to clipboard paste when no Unicode-capable typing backend (`xdotool` or `wtype`) is available, avoiding dropped glyphs in `ydotool`.
 - Destination applications receive text without corrupting existing clipboard contents by restoring the prior clipboard payload after paste completion.
 
 ## Dictation Recovery and History

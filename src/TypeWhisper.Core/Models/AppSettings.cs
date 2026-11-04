@@ -44,7 +44,7 @@ public record AppSettings
     public const int DefaultLiveTextWindowHeight = 220;
     public const int MaxLiveTextWindowHeight = 4096;
 
-    public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
+    public string ToggleHotkey { get; init; } = "Ctrl+Shift+Space";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string ReadLastTranscriptionHotkey { get; init; } = "";
@@ -239,6 +239,12 @@ public record AppSettings
 
     // Memory extraction
     public bool MemoryEnabled { get; init; }
+
+    // Reference context for LLM cleanup (opt-in, local-first, both default off).
+    // When enabled, a bounded snippet of the focused element's text / the clipboard
+    // is passed to Medium/High cleanup as read-only spelling reference.
+    public bool ScreenContextEnabled { get; init; }
+    public bool ClipboardContextEnabled { get; init; }
 
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }

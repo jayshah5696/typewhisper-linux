@@ -20,6 +20,10 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const int AtSpiStateEditable = 18;
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
+
+    // Our own AT-SPI app Name, so the focused-context harvest never reads TypeWhisper's
+    // own window (the overlay/settings) instead of the app the user is dictating into.
+    private const string SelfAtSpiAppName = "TypeWhisper";
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
@@ -109,16 +113,30 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public string? GetBrowserUrlForSnapshot(
         ActiveWindowSnapshot? snapshot,
-        bool honorMissBackoff = false
+        bool isPolling = false
     )
     {
         var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
             snapshot?.ProcessName,
             snapshot?.AppId,
             snapshot?.Title,
-            honorMissBackoff
+            isPolling
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
+    }
+
+    public string? GetFocusedScreenContext(string? processName, string? title)
+    {
+        return _atSpiUrlExtractor.TryHarvestFocusedContext(processName, title, SelfAtSpiAppName);
+    }
+
+    /// <summary>
+    ///     Forgets <paramref name="url" /> if a dictation read cached it for <paramref name="snapshot" />
+    ///     and the caller then rejected it, so polling can't reuse it.
+    /// </summary>
+    public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
+    {
+        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -186,6 +204,44 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Re-activates the window in <paramref name="snapshot" /> through the provider that
+    ///     captured it. False when that provider can't activate windows (only KWin can today).
+    /// </summary>
+    public async Task<bool> TryActivateSnapshotWindowAsync(
+        ActiveWindowSnapshot snapshot,
+        CancellationToken ct
+    )
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.WindowId))
+        {
+            return false;
+        }
+
+        var activator = _providers
+            .OfType<IActiveWindowActivator>()
+            .FirstOrDefault(candidate =>
+                candidate is IActiveWindowProvider provider
+                && string.Equals(provider.Name, snapshot.Source, StringComparison.OrdinalIgnoreCase)
+                && provider.IsApplicable()
+            );
+        if (activator is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await activator
+                .TryActivateWindowAsync(snapshot.WindowId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     // kept instance: injected as a DI/test seam by callers

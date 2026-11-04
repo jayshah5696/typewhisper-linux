@@ -15,7 +15,8 @@ public sealed partial class DictationOrchestrator
         string text, CleanupLevel level, LlmCallCapture? capture,
         Func<string, Task>? status, CancellationToken token,
         TimeSpan? timeout = null, string? sourceLanguage = null,
-        ProfileStylePreset? stylePreset = null, Action<CleanupOutcome>? outcome = null)
+        ProfileStylePreset? stylePreset = null, Action<CleanupOutcome>? outcome = null,
+        string? referenceContext = null)
     {
         var started = Stopwatch.GetTimestamp();
         var hasFinalLimit = timeout is { } limit && limit > TimeSpan.Zero;
@@ -27,7 +28,7 @@ public sealed partial class DictationOrchestrator
                 string? provider = null;
                 try { provider = prompts.GetCleanupProviderSelection(); }
                 catch (PluginRequestException) { /* Final cleanup reports configuration errors. */ }
-                if (draft.MatchesFinal(level, provider, stylePreset))
+                if (string.IsNullOrWhiteSpace(referenceContext) && draft.MatchesFinal(level, provider, stylePreset))
                 {
                     // Bound waiting for speculative work separately. A miss gets final
                     // cleanup with its own user-selected limit and no shared provider gate.
@@ -61,7 +62,8 @@ public sealed partial class DictationOrchestrator
             }
         }
         var result = await cleanup.CleanWithResultAsync(text, level, status, capture,
-            timeout: timeout, ct: token, sourceLanguage: sourceLanguage, stylePreset: stylePreset);
+            timeout: timeout, ct: token, sourceLanguage: sourceLanguage, stylePreset: stylePreset,
+            referenceContext: referenceContext);
         outcome?.Invoke(result.Outcome);
         return result.Text;
     }
@@ -109,6 +111,7 @@ public sealed partial class DictationOrchestrator
         var translationTarget =
             context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
         var cleanupLevel = ResolveCleanupLevel(context, promptAction);
+        var referenceContext = BuildReferenceContext(context);
 
         var pluginProcessors = _models
             .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
@@ -141,7 +144,8 @@ public sealed partial class DictationOrchestrator
                             timeout: TimeSpan.FromSeconds(context.CleanupTimeoutSeconds),
                             sourceLanguage: postProcessingLanguage,
                             stylePreset: context.Profile?.StylePreset,
-                            outcome: result => context.CleanupOutcome = result),
+                            outcome: result => context.CleanupOutcome = result,
+                            referenceContext: referenceContext),
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null

@@ -85,7 +85,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         _pluginManager.PluginStateChanged += (_, _) => _postToUi(Refresh);
         // Cards, the summary and plugin settings come from catalogs; a card with unsaved edits
         // is kept as is so its draft survives.
-        Loc.Instance.LanguageChanged += (_, _) => _postToUi(Refresh);
+        Loc.Instance.LanguageChanged += (_, _) => _postToUi(RefreshForLanguage);
         RebuildPluginRows(PluginListRefreshKind.Initial);
     }
 
@@ -127,10 +127,16 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private void Refresh()
     {
-        RebuildPluginRows(PluginListRefreshKind.Ambient);
+        RebuildPluginRows(PluginListRefreshKind.Ambient, keepStatus: true);
     }
 
-    private void RebuildPluginRows(PluginListRefreshKind refreshKind)
+    // A status line written in the previous language is replaced by the new language's default.
+    private void RefreshForLanguage()
+    {
+        RebuildPluginRows(PluginListRefreshKind.Ambient, keepStatus: false);
+    }
+
+    private void RebuildPluginRows(PluginListRefreshKind refreshKind, bool keepStatus = false)
     {
         // Preserve expanded state across rebuilds so the user doesn't lose their open settings panel.
         var existingRows = AllRows.ToDictionary(plugin => plugin.Id, StringComparer.Ordinal);
@@ -153,6 +159,14 @@ public partial class PluginsSectionViewModel : ObservableObject
             )
             {
                 existingRow.IsEnabled = _pluginManager.IsEnabled(plugin.Manifest.Id);
+                if (!keepStatus)
+                {
+                    // The draft stays, so only the status line is re-localized.
+                    existingRow.Status = IsRefreshingModels(plugin.Manifest.Id, plugin)
+                        ? Loc.Instance["Plugins.RefreshingModels"]
+                        : DefaultSettingsStatus(existingRow);
+                }
+
                 plugins.Add(existingRow);
                 continue;
             }
@@ -220,6 +234,19 @@ public partial class PluginsSectionViewModel : ObservableObject
                 if (settingsDefinitionFailed)
                 {
                     MarkSettingsLoadFailed(row);
+                }
+                // Validation can change capabilities; the rebuild that follows must keep its result.
+                else if (
+                    keepStatus
+                    && existingRows.TryGetValue(plugin.Manifest.Id, out var previousRow)
+                    && ReferenceEquals(previousRow.LoadedPlugin, plugin)
+                    && !string.IsNullOrEmpty(previousRow.Status)
+                    // A failed load clears the fields and is retried; a failed validation is kept.
+                    && (previousRow.CanValidateSettings
+                        || previousRow.Status != Loc.Instance["Plugins.UnableToLoadSettings"])
+                )
+                {
+                    row.Status = previousRow.Status;
                 }
 
                 plugins.Add(row);
@@ -325,7 +352,8 @@ public partial class PluginsSectionViewModel : ObservableObject
             expandedPlugin,
             refreshKind == PluginListRefreshKind.Ambient
                 ? SettingsReloadKind.PreserveDraft
-                : SettingsReloadKind.ResetBaseline
+                : SettingsReloadKind.ResetBaseline,
+            preserveStatus: keepStatus && !string.IsNullOrEmpty(expandedPlugin.Status)
         );
     }
 
@@ -430,7 +458,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         // A plugin-state refresh may still be queued behind this continuation.
-        RebuildPluginRows(PluginListRefreshKind.Ambient);
+        RebuildPluginRows(PluginListRefreshKind.Ambient, keepStatus: true);
         return FindRow(pluginId);
     }
 
@@ -601,6 +629,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         if (!validation.IsSuccess)
         {
             row.Status = Loc.Instance["Plugins.UnableToLoadSettings"];
+            // A refresh during validation may have replaced the row; its own reload is already running.
+            var currentRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
+            if (currentRow is not null && !ReferenceEquals(currentRow, row))
+            {
+                currentRow.Status = row.Status;
+            }
+
             return;
         }
 
@@ -829,7 +864,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             // Fields stay editable during a long action; keep edits made since it started.
             currentRow.Status = status;
-            await LoadSettingsActionsAsync(currentRow, loaded, provider);
+            await LoadSettingsActionsAsync(currentRow, loaded, provider, currentRow.CurrentSettingsLoad);
             return;
         }
 
@@ -1031,9 +1066,11 @@ public partial class PluginsSectionViewModel : ObservableObject
     private async Task LoadPluginSettingsAsync(
         PluginRow row,
         SettingsReloadKind reloadKind,
-        bool preserveStatus = false
+        bool preserveStatus = false,
+        bool? preserveStatusOnFailure = null
     )
     {
+        var keepStatusOnFailure = preserveStatusOnFailure ?? preserveStatus;
         if (
             reloadKind == SettingsReloadKind.PreserveDraft
             && row.HasUnsavedSettings
@@ -1042,6 +1079,9 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
+        // A reload that starts while this one awaits (Validate's completion reload after the
+        // rebuild its catalog commit triggered) takes the row over; this one stops at its next await.
+        var load = row.BeginSettingsLoad();
         row.SettingFields.Clear();
         row.CancelItemTests();
         row.Collections.Clear();
@@ -1075,9 +1115,14 @@ public partial class PluginsSectionViewModel : ObservableObject
                 "read setting definitions",
                 _ => Task.FromResult(flatProvider.GetSettingDefinitions().ToList())
             );
+            if (!row.IsCurrentSettingsLoad(load))
+            {
+                return;
+            }
+
             if (!definitions.IsSuccess)
             {
-                MarkSettingsLoadFailed(row, preserveStatus);
+                MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
 
@@ -1090,9 +1135,14 @@ public partial class PluginsSectionViewModel : ObservableObject
                         $"read setting '{definition.Key}'",
                         ct => flatProvider.GetSettingValueAsync(definition.Key, ct)
                     );
+                    if (!row.IsCurrentSettingsLoad(load))
+                    {
+                        return;
+                    }
+
                     if (!settingValue.IsSuccess)
                     {
-                        MarkSettingsLoadFailed(row, preserveStatus);
+                        MarkSettingsLoadFailed(row, keepStatusOnFailure);
                         return;
                     }
 
@@ -1113,7 +1163,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             catch (Exception ex)
             {
                 ReportPluginBoundaryFailure(loaded, "read setting definitions", ex);
-                MarkSettingsLoadFailed(row, preserveStatus);
+                MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
         }
@@ -1125,9 +1175,14 @@ public partial class PluginsSectionViewModel : ObservableObject
                 "read collection definitions",
                 _ => Task.FromResult(collectionProvider.GetCollectionDefinitions().ToList())
             );
+            if (!row.IsCurrentSettingsLoad(load))
+            {
+                return;
+            }
+
             if (!definitions.IsSuccess)
             {
-                MarkSettingsLoadFailed(row, preserveStatus);
+                MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
 
@@ -1145,9 +1200,14 @@ public partial class PluginsSectionViewModel : ObservableObject
                                     .ConfigureAwait(false)
                             ).ToList()
                     );
+                    if (!row.IsCurrentSettingsLoad(load))
+                    {
+                        return;
+                    }
+
                     if (!collectionItems.IsSuccess)
                     {
-                        MarkSettingsLoadFailed(row, preserveStatus);
+                        MarkSettingsLoadFailed(row, keepStatusOnFailure);
                         return;
                     }
 
@@ -1159,18 +1219,24 @@ public partial class PluginsSectionViewModel : ObservableObject
             catch (Exception ex)
             {
                 ReportPluginBoundaryFailure(loaded, "read collection settings", ex);
-                MarkSettingsLoadFailed(row, preserveStatus);
+                MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
         }
 
-        if (
-            actionsProvider is not null
-            && !await LoadSettingsActionsAsync(row, loaded, actionsProvider)
-        )
+        if (actionsProvider is not null)
         {
-            MarkSettingsLoadFailed(row, preserveStatus);
-            return;
+            var actionsLoaded = await LoadSettingsActionsAsync(row, loaded, actionsProvider, load);
+            if (!row.IsCurrentSettingsLoad(load))
+            {
+                return;
+            }
+
+            if (!actionsLoaded)
+            {
+                MarkSettingsLoadFailed(row, keepStatusOnFailure);
+                return;
+            }
         }
 
         var hasFlatFields = row.SettingFields.Count > 0;
@@ -1180,20 +1246,27 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.CanValidateSettings = flatProvider is not null;
         if (!preserveStatus)
         {
-            row.Status =
-                hasFlatFields || hasCollections
-                    ? Loc.Instance["Plugins.EditValuesHint"]
-                    : row.HasActions
-                        ? string.Empty
-                        : Loc.Instance["Plugins.NoEditableFields"];
+            row.Status = DefaultSettingsStatus(row);
         }
 
         row.CaptureSettingsBaseline();
     }
 
-    private void BeginObservedSettingsLoad(PluginRow row, SettingsReloadKind reloadKind)
+    private static string DefaultSettingsStatus(PluginRow row) =>
+        row.SettingFields.Count > 0 || row.Collections.Count > 0
+            ? Loc.Instance["Plugins.EditValuesHint"]
+            : row.HasActions
+                ? string.Empty
+                : Loc.Instance["Plugins.NoEditableFields"];
+
+    private void BeginObservedSettingsLoad(
+        PluginRow row,
+        SettingsReloadKind reloadKind,
+        bool preserveStatus = false
+    )
     {
-        var loadTask = ObserveSettingsLoadAsync(row, reloadKind);
+        var loadTask = ObserveSettingsLoadAsync(row, reloadKind, preserveStatus);
+        row.ObservedSettingsLoad = loadTask;
         _ = loadTask.ContinueWith(
             completedTask =>
                 Trace.WriteLine(
@@ -1209,12 +1282,14 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private async Task ObserveSettingsLoadAsync(
         PluginRow row,
-        SettingsReloadKind reloadKind
+        SettingsReloadKind reloadKind,
+        bool preserveStatus
     )
     {
         try
         {
-            await LoadPluginSettingsAsync(row, reloadKind);
+            // A failed reload still reports itself instead of keeping the earlier message.
+            await LoadPluginSettingsAsync(row, reloadKind, preserveStatus, preserveStatusOnFailure: false);
         }
         catch (Exception ex)
         {
@@ -1237,7 +1312,8 @@ public partial class PluginsSectionViewModel : ObservableObject
     private async Task<bool> LoadSettingsActionsAsync(
         PluginRow row,
         LoadedPlugin loaded,
-        IPluginSettingsActions actionsProvider
+        IPluginSettingsActions actionsProvider,
+        int load
     )
     {
         var actions = await TryInvokePluginBoundaryAsync(
@@ -1245,7 +1321,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             "read settings actions",
             _ => Task.FromResult(actionsProvider.GetSettingsActions().ToList())
         );
-        if (!actions.IsSuccess)
+        if (!actions.IsSuccess || !row.IsCurrentSettingsLoad(load))
         {
             return false;
         }
@@ -1592,6 +1668,17 @@ public partial class PluginRow : ObservableObject
     {
         _settingsBaseline = CaptureSettingsDraft();
     }
+
+    internal int CurrentSettingsLoad { get; private set; }
+
+    /// <summary>The latest fire-and-forget settings load started for this row.</summary>
+    internal Task ObservedSettingsLoad { get; set; } = Task.CompletedTask;
+
+    /// <summary>Claims the row for a new settings load; see <see cref="IsCurrentSettingsLoad" />.</summary>
+    internal int BeginSettingsLoad() => ++CurrentSettingsLoad;
+
+    /// <summary>False once a later load has claimed the row, so the older one must stop appending.</summary>
+    internal bool IsCurrentSettingsLoad(int load) => CurrentSettingsLoad == load;
 
     internal void SetSettingsBaseline(PluginSettingsDraftEntry[] draft)
     {
