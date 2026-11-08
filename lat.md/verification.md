@@ -41,6 +41,8 @@ The `just ui-check` recipe launches the Avalonia desktop interface against headl
 - Flags unlocalized raw resource keys or clipped text labels.
 - Saves rendered screenshot artifacts to `artifacts/ui-snapshots/`.
 
+[[scripts/verification/flow_control_smoke.py#run]] operates the floating controls and verifies the result in a private GTK text field. [[scripts/verification/quiet_dock_smoke.py#run]] verifies all four dock edges, persistence after restart, finishing cancellation, and clipboard recovery. [[scripts/verification/overlay_click_through.py]] checks that neighboring clicks reach the underlying window.
+
 ## Quality Evals and Benchmarks
 
 Evaluation suites in [[evals/dictation]] and benchmarking recipes measure transcription speed, latency distribution, and text quality.

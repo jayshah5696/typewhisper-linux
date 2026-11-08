@@ -41,6 +41,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly Dictionary<string, HistoryRecordRow> _rows = [];
     private readonly HashSet<string> _selectedIds = new(StringComparer.Ordinal);
     private readonly SessionAudioFileService _sessionAudioFiles;
+    private readonly Action<Action> _postToUi;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
     private readonly Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? _cleanAgain;
@@ -111,12 +112,14 @@ public partial class HistorySectionViewModel : ObservableObject
         Func<DateTime> utcNow,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
         SpeechFeedbackService? speech = null,
-        Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? cleanAgain = null
+        Func<TranscriptionRecord, CancellationToken, Task<CleanupResult>>? cleanAgain = null,
+        Action<Action>? postToUi = null
     )
     {
         _history = history;
         _speech = speech;
         _cleanAgain = cleanAgain;
+        _postToUi = postToUi ?? (action => Dispatcher.UIThread.Post(action));
         _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
@@ -158,6 +161,10 @@ public partial class HistorySectionViewModel : ObservableObject
     public int TotalRecordsCount => _history.Records.Count;
     public bool IsFilteredEmpty => ShowEmptyState && TotalRecordsCount > 0;
     public bool IsCompletelyEmpty => ShowEmptyState && TotalRecordsCount == 0;
+
+    // The search or app filter can hide every record, which is not the same as having none.
+    public string EmptyStateText =>
+        Loc.Instance[_history.Records.Count > 0 ? "History.NoMatches" : "History.EmptyState"];
 
     // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
     // "capture is off" (and point at the setting) rather than implying the LLM simply
@@ -581,7 +588,10 @@ public partial class HistorySectionViewModel : ObservableObject
             return;
         }
 
-        var handle = _speech?.StartReadBack(row.Record.FinalText, row.Record.Language);
+        row.ReadAloudError = "";
+        // The row's record can be replaced mid-readback; redact the text that was actually sent.
+        var record = row.Record;
+        var handle = _speech?.StartReadBack(record.FinalText, record.Language);
         if (handle is null)
         {
             return;
@@ -590,7 +600,7 @@ public partial class HistorySectionViewModel : ObservableObject
         _readingRow = row;
         _readback = handle;
         RefreshReadAloudState();
-        _ = ObserveReadbackCompletionAsync(handle);
+        _ = ObserveReadbackCompletionAsync(handle, row, record.RawText, record.FinalText);
     }
 
     internal void StopReadAloud(HistoryRecordRow row)
@@ -606,15 +616,29 @@ public partial class HistorySectionViewModel : ObservableObject
         RefreshReadAloudState();
     }
 
-    private async Task ObserveReadbackCompletionAsync(IManualReadback handle)
+    private async Task ObserveReadbackCompletionAsync(
+        IManualReadback handle,
+        HistoryRecordRow row,
+        string rawText,
+        string finalText
+    )
     {
         await handle.Completion.ConfigureAwait(false);
-        Dispatcher.UIThread.Post(() =>
+        _postToUi(() =>
         {
+            // A stopped readback is detached first, so only the row's own live request reports.
             if (ReferenceEquals(_readback, handle))
             {
                 _readback = null;
                 _readingRow = null;
+                if (handle.FailureMessage is { } failure)
+                {
+                    row.ReadAloudError = Loc.Instance.GetString(
+                        "History.ReadAloudFailed",
+                        FailureMessageSanitizer.Sanitize(failure, rawText, finalText)
+                        ?? Loc.Instance["Common.UnknownError"]
+                    );
+                }
             }
 
             RefreshReadAloudState();
@@ -704,6 +728,7 @@ public partial class HistorySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(IsFilteredEmpty));
         OnPropertyChanged(nameof(IsCompletelyEmpty));
+        OnPropertyChanged(nameof(EmptyStateText));
         OnPropertyChanged(nameof(HasMore));
     }
 
@@ -913,6 +938,11 @@ public partial class HistoryRecordRow : ObservableObject
     [ObservableProperty]
     private string _retryResult = "";
 
+    [ObservableProperty]
+    private string _readAloudError = "";
+
+    public bool ShowReadAloudError => ShowExpandedActions && !string.IsNullOrEmpty(ReadAloudError);
+
     public bool HasRetryResult => !string.IsNullOrEmpty(RetryResult);
     public bool HasFailure => Record.Status != TranscriptionRecordStatus.Succeeded;
 
@@ -944,6 +974,8 @@ public partial class HistoryRecordRow : ObservableObject
     }
 
     partial void OnIsRetryingChanged(bool value) => OnPropertyChanged(nameof(ShowRetryPanel));
+
+    partial void OnReadAloudErrorChanged(string value) => OnPropertyChanged(nameof(ShowReadAloudError));
 
     [RelayCommand]
     private async Task RetryAsync()
@@ -1107,6 +1139,7 @@ public partial class HistoryRecordRow : ObservableObject
         {
             DismissRecovery();
             _owner.StopReadAloud(this);
+            ReadAloudError = "";
             IsEditing = false;
             IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
@@ -1224,6 +1257,7 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowEditPanel));
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
+        OnPropertyChanged(nameof(ShowReadAloudError));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
         OnPropertyChanged(nameof(ShowInspectorToggle));
         OnPropertyChanged(nameof(ShowInspector));

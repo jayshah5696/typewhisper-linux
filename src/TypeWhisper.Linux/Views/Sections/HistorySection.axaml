@@ -540,6 +540,12 @@
                                                                     </StackPanel>
                                                                 </Border>
                                                             </StackPanel>
+                                                            <TextBlock Text="{Binding ReadAloudError}"
+                                                                       IsVisible="{Binding ShowReadAloudError}"
+                                                                       Foreground="{DynamicResource TwErrorTextBrush}"
+                                                                       FontSize="11.5"
+                                                                       Margin="0,2,0,0"
+                                                                       TextWrapping="Wrap" />
 
                                                             <Border Classes="suggestion-panel"
                                                                     IsVisible="{Binding ShowInspector}">

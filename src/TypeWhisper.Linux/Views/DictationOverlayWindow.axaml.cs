@@ -237,11 +237,6 @@ public partial class DictationOverlayWindow : Window
                     }
 
                     PositionOverlay();
-                    if (!_placementState.IsShown)
-                    {
-                        return;
-                    }
-
                     SetClickThrough(false);
                     Opacity = 1.0;
                     IsHitTestVisible = true;
@@ -716,11 +711,13 @@ internal sealed class DictationOverlayDragSession
 
     public void RecordMove(PixelPoint position)
     {
-        if (IsActive)
+        if (!IsActive)
         {
-            IsMoving = true;
-            _lastPosition = position;
+            return;
         }
+
+        IsMoving = true;
+        _lastPosition = position;
     }
 
     /// <summary>

@@ -904,7 +904,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         else
         {
             StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", RecentTranscriptionsHotkeyText);
+                RejectedHotkeyMessage("Shortcuts.HotkeyParseOrCollide", RecentTranscriptionsHotkeyText);
         }
     }
 
@@ -932,7 +932,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         else
         {
             StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", CopyLastTranscriptionHotkeyText);
+                RejectedHotkeyMessage("Shortcuts.HotkeyParseOrCollide", CopyLastTranscriptionHotkeyText);
         }
     }
 
@@ -960,7 +960,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         else
         {
             StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", ReadLastTranscriptionHotkeyText);
+                RejectedHotkeyMessage("Shortcuts.HotkeyParseOrCollide", ReadLastTranscriptionHotkeyText);
         }
     }
 
@@ -988,7 +988,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         else
         {
             StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", PasteLastTranscriptionHotkeyText);
+                RejectedHotkeyMessage("Shortcuts.HotkeyParseOrCollide", PasteLastTranscriptionHotkeyText);
         }
     }
 
@@ -1011,7 +1011,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         else
         {
             StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", TransformSelectionHotkeyText);
+                RejectedHotkeyMessage("Shortcuts.HotkeyParseOrCollide", TransformSelectionHotkeyText);
         }
     }
 
@@ -1246,7 +1246,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage = Loc.Instance.GetString(
+            StatusMessage = RejectedHotkeyMessage(
                 HotkeyService.IsParsableHotkey(HotkeyText)
                     ? "Shortcuts.HotkeyCollides"
                     : "Shortcuts.HotkeyParseFailed",
@@ -1254,6 +1254,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             );
         }
     }
+
+    private static string RejectedHotkeyMessage(string fallbackKey, string? hotkeyText) =>
+        HotkeyService.IsReservedSystemHotkey(hotkeyText)
+            ? Loc.Instance["Shortcuts.HotkeyReservedBySystem"]
+            : Loc.Instance.GetString(fallbackKey, hotkeyText);
 
     [RelayCommand]
     private void ApplyPromptPaletteHotkey()
@@ -1273,8 +1278,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage =
-                Loc.Instance.GetString("Shortcuts.PromptPaletteHotkeyParseFailed", PromptPaletteHotkeyText);
+            StatusMessage = RejectedHotkeyMessage(
+                HotkeyService.IsParsableHotkey(PromptPaletteHotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.PromptPaletteHotkeyParseFailed",
+                PromptPaletteHotkeyText
+            );
         }
     }
 

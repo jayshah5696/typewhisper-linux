@@ -543,11 +543,12 @@ public sealed class PromptPaletteService
         );
     }
 
-    private static async Task ShowWarningAsync(string title, string message, string? correction = null)
+    internal static async Task ShowWarningAsync(string title, string message, string? correction = null)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            var dialog = new MessageDialogWindow();
+            // Keep prompt errors visible while another application has focus.
+            var dialog = new MessageDialogWindow { Topmost = true };
             await dialog.ShowMessageAsync(title, message, correction);
         });
     }

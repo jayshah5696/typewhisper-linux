@@ -21,6 +21,8 @@ Hotkeys are registered at application launch. Key requirements include:
 - Resolving shortcut collisions gracefully with clear warning messages.
 - Supporting push-to-talk (hold to record, release to transcribe) and toggle modes.
 
+[[src/TypeWhisper.Linux/Services/Hotkey/DeSetup/DictationShortcutSpecFactory.cs|Shortcut validation]] rejects Ctrl+Alt+F1 through F12 because Linux reserves those chords for virtual-terminal switching. Dynamic prompt and profile bindings use the same restriction in [[src/TypeWhisper.Linux/Services/HotkeyService.cs|HotkeyService]].
+
 ## Overlay and Floating Controls
 
 A lightweight, non-stealing overlay window provides immediate visual feedback on dictation state, audio levels, and live transcription drafts.
@@ -33,6 +35,12 @@ The floating widget in [[src/TypeWhisper.Linux/Views/DictationOverlayWindow.axam
 [[src/TypeWhisper.Linux/Services/Hotkey/DeSetup/DesktopDetector.cs|Desktop detection]] selects notification-only mode on known tiling desktops or when `TYPEWHISPER_DISABLE_OVERLAYS=1`. This startup override suppresses overlays even when the saved floating-control setting is enabled. [[src/TypeWhisper.Linux/ViewModels/Sections/AppearanceSectionViewModel.cs|Appearance settings]] also hides overlay controls in that mode. Removing the override requires a restart.
 
 [[src/TypeWhisper.Linux/Services/RecordingNotificationService.cs|Recording notifications]] report recording, processing, and terminal feedback only in notification mode. Overlay mode uses the floating controls instead; it does not also send recording notifications.
+
+## Audio device changes
+
+The microphone preview follows changes to the system default input without restarting the app or interrupting a recording.
+
+[[src/TypeWhisper.Linux/Services/AudioRecordingService.cs|AudioRecordingService]] releases a preview stream before refreshing PortAudio's device table and then reopens it on the current default. Changes during recording wait until capture ends. [[src/TypeWhisper.Linux/Services/AudioPlaybackService.cs|AudioPlaybackService]] holds its native audio reference only while a stream exists, so idle playback does not prevent device discovery.
 
 ## Native Dependencies and Packaging
 

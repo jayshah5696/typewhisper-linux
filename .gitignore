@@ -23,7 +23,6 @@ docs/*
 !docs/releases/
 !docs/prompts/
 publish/
-artifacts/
 .agents/
 !.agents/
 !.agents/skills/

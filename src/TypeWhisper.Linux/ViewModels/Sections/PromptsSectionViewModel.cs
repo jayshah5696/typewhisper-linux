@@ -667,6 +667,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         {
             HotkeyCandidateValidationStatus.Malformed =>
                 Loc.Instance["Prompts.HotkeyMalformed"],
+            HotkeyCandidateValidationStatus.ReservedBySystem =>
+                Loc.Instance["Shortcuts.HotkeyReservedBySystem"],
             HotkeyCandidateValidationStatus.Valid
             or HotkeyCandidateValidationStatus.MissingEnabledPromptAction
             or HotkeyCandidateValidationStatus.CollidesWithFixedBinding
