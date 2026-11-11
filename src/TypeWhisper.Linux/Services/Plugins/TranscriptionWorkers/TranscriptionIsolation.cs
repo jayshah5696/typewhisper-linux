@@ -87,8 +87,7 @@ internal sealed class TranscriptionIsolation
         Func<string>? settings = null
     )
     {
-        // Streaming sessions are callback objects that cannot cross the process boundary.
-        if (_executable is not { } executable || !_pluginIds.Contains(pluginId) || engine.SupportsStreaming)
+        if (_executable is not { } executable || !_pluginIds.Contains(pluginId))
         {
             return null;
         }

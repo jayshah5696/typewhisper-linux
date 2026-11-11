@@ -21,6 +21,9 @@ internal interface ITranscribeNativeModel : IDisposable
 internal interface ITranscribeNativeSession : IDisposable
 {
     long MaxAudioMs { get; }
+    void Begin(string? language, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct);
+    NativeTranscript Feed(float[] samples, CancellationToken ct);
+    NativeTranscript Finish(CancellationToken ct);
     NativeTranscript Run(float[] samples, string? language, bool translate, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct);
 }
 
@@ -46,6 +49,8 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
         VerifyLayout<LoadParams>(0);
         VerifyLayout<RunParams>(2);
         VerifyLayout<Capabilities>(4);
+        VerifyLayout<StreamParams>(3);
+        VerifyLayout<StreamUpdate>(9);
         VerifyLayout<SessionLimits>(11);
         VerifyLayout<DeviceInfo>(13);
         VerifyLayout<BackendParams>(15);
@@ -224,9 +229,38 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
             MaxAudioMs = limits.MaxAudioMs > 0 ? limits.MaxAudioMs : capabilities.MaxAudioMs;
         }
 
-        public NativeTranscript Run(float[] samples, string? language, bool translate, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct)
+        private string? _language;
+
+        public NativeTranscript Run(float[] samples, string? language, bool translate, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct) =>
+            WithParameters(language, translate, context, vocabulary,
+                parameters => transcribe_run(_session, samples, samples.Length, parameters), ct);
+
+        public void Begin(string? language, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct)
+        {
+            if (_capabilities.Streaming == 0) throw new NotSupportedException("This model does not support native streaming.");
+            transcribe_stream_params_init(out var stream);
+            stream.CommitPolicy = 1; // ON_FINALIZE: native commitment must not freeze an incorrect preview.
+            _ = WithParameters(language, false, context, vocabulary,
+                parameters => transcribe_stream_begin(_session, parameters, stream), ct);
+        }
+
+        public NativeTranscript Feed(float[] samples, CancellationToken ct)
+        {
+            transcribe_stream_update_init(out var update);
+            return Invoke(() => transcribe_stream_feed(_session, samples, samples.Length, ref update), ct);
+        }
+
+        public NativeTranscript Finish(CancellationToken ct)
+        {
+            transcribe_stream_update_init(out var update);
+            return Invoke(() => transcribe_stream_finalize(_session, ref update), ct);
+        }
+
+        private NativeTranscript WithParameters(string? language, bool translate, string? context,
+            IReadOnlyList<string> vocabulary, Func<RunParams, int> operation, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            _language = language;
             if (translate && _capabilities.Translation == 0) throw new NotSupportedException("This model does not support translation.");
             using var languageText = new Utf8Value(language);
             using var targetText = new Utf8Value(translate ? "en" : null);
@@ -239,15 +273,21 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
             using var terms = new Utf8Vocabulary(transcribe_model_supports(_model, 7) ? vocabulary : []);
             parameters.Vocabulary = terms.Pointer;
             parameters.VocabularyCount = terms.Count;
+            return Invoke(() => operation(parameters), ct);
+        }
+
+        private NativeTranscript Invoke(Func<int> operation, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
             AbortCallback abort = _ => ct.IsCancellationRequested;
             transcribe_set_abort_callback(_session, abort, IntPtr.Zero);
             try
             {
-                var status = transcribe_run(_session, samples, samples.Length, parameters);
+                var status = operation();
                 CheckCompletion(status, transcribe_was_truncated(_session), transcribe_was_aborted(_session), ct);
                 // All result strings are borrowed; copy them before the next run or session free.
                 var detected = Text(transcribe_detected_language(_session));
-                return new(Text(transcribe_full_text(_session)), detected.Length == 0 ? language : detected);
+                return new(Text(transcribe_full_text(_session)), detected.Length == 0 ? _language : detected);
             }
             finally
             {

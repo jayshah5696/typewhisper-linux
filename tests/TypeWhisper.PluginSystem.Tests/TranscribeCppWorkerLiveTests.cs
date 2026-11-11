@@ -60,7 +60,7 @@ public sealed class TranscribeCppWorkerLiveTests(ITestOutputHelper output)
                 {
                     var request = TranscriptionHardwareSelector.Resolve(TranscriptionHardwareSelector.ToPreference(backend), devices);
                     engine.SetAccelerationPreference(TranscriptionHardwareSelector.ToPreference(backend));
-                    engine.HardwareSelection.ConfigureHardware(request);
+                    engine.HardwareSelection!.ConfigureHardware(request);
                     await engine.LoadModelAsync(definition.Id, CancellationToken.None);
                     Assert.True(engine.AccelerationStatus.IsModelLoaded);
                     Assert.Equal(backend, engine.AccelerationStatus.ActiveBackend);
@@ -90,6 +90,21 @@ public sealed class TranscribeCppWorkerLiveTests(ITestOutputHelper output)
                     var longResult = await engine.TranscribeAsync(TranscribeCppNativeTests.Wave(longSamples), "en", false, null, CancellationToken.None);
                     output.WriteLine($"{backend} 95-second recording: {longResult.Text}");
                     Assert.Equal(2, longResult.Text.Split("He bent", StringSplitOptions.None).Length - 1);
+                    Assert.True(engine.SupportsStreaming);
+                    var streamGpuBefore = ReadComputeCounters(engine.WorkerProcessId!.Value);
+                    var shortUpdates = await StreamAsync(engine, phrase);
+                    var shortFinal = Assert.Single(shortUpdates, update => update.IsFinal);
+                    Assert.Contains("bent his face over her hair", shortFinal.Text, StringComparison.OrdinalIgnoreCase);
+                    Assert.Contains(shortUpdates, update => !update.IsFinal && !string.IsNullOrWhiteSpace(update.Text));
+                    var streamGpuAfter = ReadComputeCounters(engine.WorkerProcessId!.Value);
+                    if (backend == TranscriptionAccelerationBackend.Vulkan && streamGpuAfter > 0)
+                        Assert.True(streamGpuAfter > streamGpuBefore, "Streaming must perform GPU compute, not only load weights.");
+                    output.WriteLine($"{backend} streaming: {shortFinal.Text}; previews={shortUpdates.Count(update => !update.IsFinal)}; compute before={streamGpuBefore}; after={streamGpuAfter}");
+                    var longUpdates = await StreamAsync(engine, longSamples);
+                    var longFinal = string.Join("\n", longUpdates.Where(update => update.IsFinal).Select(update => update.Text));
+                    output.WriteLine($"{backend} 95-second streaming: {longFinal}; windows={longUpdates.Count(update => update.IsFinal)}");
+                    Assert.True(longUpdates.Count(update => update.IsFinal) >= 2);
+                    Assert.Equal(2, longFinal.Split("He bent", StringSplitOptions.None).Length - 1);
                     await engine.UnloadModelAsync();
                     Assert.False(engine.AccelerationStatus.IsModelLoaded);
                     Assert.Null(engine.AccelerationStatus.ActiveDevice);
@@ -103,6 +118,20 @@ public sealed class TranscribeCppWorkerLiveTests(ITestOutputHelper output)
             foreach (var line in logs) output.WriteLine(line);
         }
         finally { Directory.Delete(scratch, recursive: true); }
+    }
+
+    private static async Task<List<StreamingTranscriptEvent>> StreamAsync(ITranscriptionEngineRole engine, short[] samples)
+    {
+        await using var stream = await engine.StartStreamingAsync("en", CancellationToken.None);
+        var updates = new List<StreamingTranscriptEvent>();
+        stream.TranscriptReceived += updates.Add;
+        var pcm = new byte[samples.Length * 2];
+        for (var index = 0; index < samples.Length; index++)
+            System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(index * 2), samples[index]);
+        for (var offset = 0; offset < pcm.Length; offset += 6400)
+            await stream.SendAudioAsync(pcm.AsMemory(offset, Math.Min(6400, pcm.Length - offset)), CancellationToken.None);
+        await stream.FinalizeAsync(CancellationToken.None);
+        return updates;
     }
 
     private static long ReadComputeCounters(int pid)

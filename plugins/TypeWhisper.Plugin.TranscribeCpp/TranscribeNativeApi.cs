@@ -48,6 +48,18 @@ internal static class TranscribeNativeApi
     [StructLayout(LayoutKind.Sequential)]
     internal struct SessionLimits { internal ulong Size; internal int Context; internal long MaxAudioMs, MaxKvBytes; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct StreamParams { internal ulong Size; internal IntPtr Family; internal int CommitPolicy; internal uint AgreementCount; }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct StreamUpdate
+    {
+        internal ulong Size;
+        internal byte Changed, Final;
+        internal int Revision;
+        internal long ReceivedMs, CommittedMs, BufferedMs;
+        internal byte CommittedChanged, TentativeChanged;
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     internal delegate bool AbortCallback(IntPtr state);
@@ -82,6 +94,12 @@ internal static class TranscribeNativeApi
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.I1)] internal static extern bool transcribe_was_truncated(NativeSessionHandle session);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr transcribe_full_text(NativeSessionHandle session);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr transcribe_detected_language(NativeSessionHandle session);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern void transcribe_stream_params_init(out StreamParams parameters);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern void transcribe_stream_update_init(out StreamUpdate update);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int transcribe_stream_begin(NativeSessionHandle session, in RunParams run, in StreamParams stream);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int transcribe_stream_feed(NativeSessionHandle session, float[] samples, int count, ref StreamUpdate update);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] internal static extern int transcribe_stream_finalize(NativeSessionHandle session, ref StreamUpdate update);
 
     internal static string Text(IntPtr pointer) => Marshal.PtrToStringUTF8(pointer) ?? "";
 }

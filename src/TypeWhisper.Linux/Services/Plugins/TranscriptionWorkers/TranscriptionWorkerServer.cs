@@ -126,9 +126,11 @@ internal static partial class TranscriptionWorkerServer
             Token = token,
             State = session.State(),
             HeartbeatInterval = options.HeartbeatInterval,
-            Capabilities = engine.HardwareSelection is not null
-                ? [TranscriptionWorkerCapabilities.HardwareSelection]
-                : [],
+            Capabilities = [
+                .. engine.HardwareSelection is not null ? new[] { TranscriptionWorkerCapabilities.HardwareSelection } : [],
+                // This negotiates the transport, not the model selected after hello.
+                TranscriptionWorkerCapabilities.Streaming,
+            ],
         }).ConfigureAwait(false);
         return await session.RunAsync().ConfigureAwait(false);
     }
@@ -151,11 +153,6 @@ internal static partial class TranscriptionWorkerServer
                      ?? throw new NotSupportedException(
                          "The plugin does not provide this local transcription engine."
                      );
-        if (engine.SupportsStreaming)
-        {
-            throw new NotSupportedException("Streaming engines cannot run in a transcription worker.");
-        }
-
         if (engine.AccelerationPreference != options.Acceleration)
         {
             engine.SetAccelerationPreference(options.Acceleration);
@@ -281,15 +278,15 @@ internal static partial class TranscriptionWorkerServer
         }
     }
 
-    private sealed class Session(
+    private sealed partial class Session(
         ITranscriptionEngineRole engine,
         Connection connection,
         TimeSpan? heartbeatInterval
     )
     {
         private readonly Channel<TranscriptionWorkerFrame> _requests =
-            Channel.CreateUnbounded<TranscriptionWorkerFrame>(
-                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true }
+            Channel.CreateBounded<TranscriptionWorkerFrame>(
+                new BoundedChannelOptions(4) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait }
             );
 
         private readonly Lock _sync = new();
@@ -446,6 +443,7 @@ internal static partial class TranscriptionWorkerServer
                                 // Request ids only grow, so a late cancellation of a finished request is ignored.
                                 else if (message.Id > _lastStarted)
                                 {
+                                    if (_canceledBeforeStart.Count >= 8) ExitImmediately(ExitHostDisconnected);
                                     _canceledBeforeStart.Add(message.Id);
                                 }
                             }
@@ -453,7 +451,9 @@ internal static partial class TranscriptionWorkerServer
                             break;
                         case TranscriptionWorkerMessageTypes.Request:
                             shutdownRequested |= message.Command == TranscriptionWorkerCommands.Shutdown;
-                            _requests.Writer.TryWrite(frame);
+                            // Never block the control reader behind native decoding. Overflow is a
+                            // protocol fault, not permission to drop audio and return partial success.
+                            if (!_requests.Writer.TryWrite(frame)) ExitImmediately(ExitHostDisconnected);
                             break;
                     }
                 }
@@ -478,6 +478,10 @@ internal static partial class TranscriptionWorkerServer
             CancellationToken ct
         )
         {
+            if (TranscriptionWorkerCommands.IsStreaming(message.Command))
+                return await ExecuteStreamAsync(message, payload, ct).ConfigureAwait(false);
+            if (_stream is not null)
+                throw new InvalidOperationException("Finish or dispose the active stream before replacing its model or transcribing a file.");
             switch (message.Command)
             {
                 case TranscriptionWorkerCommands.DiscoverDevices:

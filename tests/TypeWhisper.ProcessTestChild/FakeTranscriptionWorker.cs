@@ -33,10 +33,12 @@ internal static class FakeTranscriptionWorker
             ["protocolVersion"] = 1,
             ["processId"] = Environment.ProcessId,
             ["token"] = behavior == "wrong-token" ? "not-the-token" : token,
+            ["capabilities"] = behavior == "stale-stream-update" ? new JsonArray("streaming-v1") : null,
         });
 
-        while (await ReadIdAsync(stream) is { } id)
+        while (await ReadRequestAsync(stream) is { } request)
         {
+            var id = request.GetProperty("id").GetInt64();
             switch (behavior)
             {
                 case "oversized-header":
@@ -49,6 +51,16 @@ internal static class FakeTranscriptionWorker
                     var garbage = "not json"u8.ToArray();
                     await WritePrefixAsync(stream, garbage.Length, 0);
                     await stream.WriteAsync(garbage);
+                    break;
+                case "stale-stream-update":
+                    var response = Response(id);
+                    if (request.TryGetProperty("sessionId", out var sessionId))
+                    {
+                        response["sessionId"] = request.GetProperty("command").GetString() == "stream-feed" ? "stale" : sessionId.GetString();
+                        response["sequence"] = request.GetProperty("sequence").GetInt64();
+                        response["updates"] = new JsonArray(new JsonObject { ["text"] = "stale final", ["isFinal"] = true });
+                    }
+                    await WriteAsync(stream, response);
                     break;
                 case "stale-then-answer":
                     await WriteAsync(stream, Response(id + 1000, "stale"));
@@ -74,7 +86,7 @@ internal static class FakeTranscriptionWorker
         };
     }
 
-    private static async Task<long?> ReadIdAsync(Stream stream)
+    private static async Task<JsonElement?> ReadRequestAsync(Stream stream)
     {
         var prefix = new byte[8];
         if (await stream.ReadAtLeastAsync(prefix, prefix.Length, throwOnEndOfStream: false) < prefix.Length)
@@ -87,7 +99,7 @@ internal static class FakeTranscriptionWorker
         var payload = new byte[BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(4))];
         await stream.ReadExactlyAsync(payload);
         using var document = JsonDocument.Parse(header);
-        return document.RootElement.GetProperty("id").GetInt64();
+        return document.RootElement.Clone();
     }
 
     private static async Task WriteAsync(Stream stream, JsonObject message, byte[]? payload = null)

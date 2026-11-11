@@ -380,6 +380,13 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
             throw new NotSupportedException("This transcription worker does not support native device selection.");
         }
 
+        if (TranscriptionWorkerCommands.IsStreaming(request.Command)
+            && !Capabilities.Contains(TranscriptionWorkerCapabilities.Streaming))
+            throw new NotSupportedException("This transcription worker does not support isolated streaming.");
+        if (request.Command == TranscriptionWorkerCommands.StreamFeed
+            && (payload.Length is <= 0 or > TranscriptionWorkerProtocol.MaximumStreamChunkBytes || payload.Length % 2 != 0))
+            throw new ArgumentException("Invalid streaming PCM16 chunk length.", nameof(payload));
+
         if (payload.Length > TranscriptionWorkerProtocol.MaximumAudioBytes)
         {
             throw new ArgumentException("The audio is too large for the local transcription engine.", nameof(payload));

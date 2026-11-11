@@ -10,6 +10,12 @@ The C# binding checks the runtime version and each used struct's native size and
 
 Every GPU request resolves a stable identity to a new process-local handle and requests that exact handle. A missing identity, software device, or mismatched loaded device is an error, not automatic native fallback. The host owns Auto retry policy.
 
+## Streaming behavior
+
+The worker negotiates streaming transport separately from the selected model's capability. Session identity and sequence checks reject stale or reordered audio. Each bounded audio request waits for its reply before the sender continues, while the worker's control reader can still accept cancellation. A live inference failure does not retry only the failed chunk on CPU. The existing dictation flow must retry the retained complete recording instead.
+
+Native sessions collect at most 500 ms before decoding and flush the remaining samples at EOF. Previews use the current raw hypothesis, including corrections. Each completed window produces one final result. Sessions rotate near their audio limit after at least 160 ms of quiet input. If uninterrupted speech reaches the hard boundary, the stream fails before native truncation and asks for complete-recording batch retry. It does not cut a live word and claim that the partial result is complete.
+
 ## Verification
 
 Build with `just build-release` and run `just verify-plugins`. Ordinary tests use synthetic weights and do not download the model catalog.
@@ -26,6 +32,6 @@ dotnet test tests/TypeWhisper.PluginSystem.Tests -c Release --no-build \
   --logger 'console;verbosity=detailed'
 ```
 
-Without the Vulkan flag, the test uses CPU only. With it, the test requires a discovered hardware Vulkan device and refuses CPU fallback. It prints the loaded device and, where available, the worker's Linux DRM compute counter before and after inference. It also checks a 95-second recording with an utterance after Moonshine's native input limit. This checks audio-window coverage, not continuous-speech boundary accuracy.
+Without the Vulkan flag, the test uses CPU only. With it, the test requires a discovered hardware Vulkan device and refuses CPU fallback. It prints the loaded device and, where available, the worker's Linux DRM compute counter before and after inference. It checks batch and streaming results for the public fixture and a 95-second recording with an utterance after Moonshine's native input limit. Streaming must produce a nonempty preview, exactly one short-recording final, and two long-recording windows. This checks audio-window coverage, not continuous-speech boundary accuracy.
 
 This artifact does not establish compatibility with ARM64 or every GPU. Other model architectures, long uninterrupted speech, distribution baselines, and GPU families need their own checks before making those claims.

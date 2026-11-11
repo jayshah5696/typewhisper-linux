@@ -124,6 +124,102 @@ public sealed class TranscribeCppPluginTests
         Assert.Equal(0, fixture.Runtime.Model.Session.Calls);
     }
 
+    [Fact]
+    public async Task StreamingUsesReplaceableRawPreviewsAndOnlyOneFinalPerWindow()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        ITranscriptionEngineRole engine = fixture.Plugin;
+        Assert.True(engine.SupportsStreaming);
+        await using var stream = await engine.StartStreamingWithLanguageHintsAndPromptAsync(["en"],
+            PluginTranscriptionPrompt.Encode("context", ["TypeWhisper"]), CancellationToken.None);
+        var events = new List<StreamingTranscriptEvent>();
+        stream.TranscriptReceived += events.Add;
+        await stream.SendAudioAsync(new byte[16000], CancellationToken.None);
+        await stream.SendAudioAsync(new byte[16000], CancellationToken.None);
+        await stream.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(["very bad", "very very good", "very very good"], events.Select(value => value.Text));
+        Assert.Single(events, value => value.IsFinal);
+        Assert.Equal("context", fixture.Runtime.Model.Session.Context);
+        Assert.Equal(["TypeWhisper"], fixture.Runtime.Model.Session.Terms);
+        Assert.True(fixture.Runtime.Model.Session.Disposed);
+        Assert.True(fixture.Plugin.AccelerationStatus.IsModelLoaded);
+        fixture.Host.Verify(value => value.SetSetting(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CaptureFramesAccumulateInABoundedHalfSecondBufferAndFinalizeFlushesTheTail()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await using var stream = await ((ITranscriptionEngineRole)fixture.Plugin).StartStreamingAsync("en", CancellationToken.None);
+        for (var index = 0; index < 79; index++)
+            await stream.SendAudioAsync(new byte[320], CancellationToken.None);
+        Assert.Equal(8000, fixture.Runtime.Model.Session.Samples);
+        await stream.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(79 * 160, fixture.Runtime.Model.Session.Samples);
+    }
+
+    [Fact]
+    public async Task StreamingRotatesAtSilenceBeforeNativeAudioLimitsWithoutLosingSamples()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Runtime.Model.Session.MaxAudioMs = 1000;
+        await using var stream = await ((ITranscriptionEngineRole)fixture.Plugin).StartStreamingAsync("en", CancellationToken.None);
+        var finals = 0;
+        stream.TranscriptReceived += update => { if (update.IsFinal) finals++; };
+        await stream.SendAudioAsync(new byte[3 * 16000 * 2], CancellationToken.None);
+        await stream.FinalizeAsync(CancellationToken.None);
+        Assert.True(finals > 1);
+        Assert.Equal(3 * 16000, fixture.Runtime.Model.Session.Samples);
+        Assert.True(fixture.Runtime.Model.Session.MaximumWindowSamples <= 16000);
+    }
+
+    [Fact]
+    public async Task UninterruptedSpeechAtTheHardLimitFaultsInsteadOfReturningAnIncompleteFinal()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Runtime.Model.Session.MaxAudioMs = 1000;
+        await using var stream = await ((ITranscriptionEngineRole)fixture.Plugin).StartStreamingAsync("en", CancellationToken.None);
+        var finals = 0;
+        stream.TranscriptReceived += update => { if (update.IsFinal) finals++; };
+        var pcm = Enumerable.Repeat((byte)64, 2 * 16000 * 2).ToArray();
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => stream.SendAudioAsync(pcm, CancellationToken.None));
+        Assert.Contains("recording", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, finals);
+        Assert.True(fixture.Runtime.Model.Session.MaximumWindowSamples <= 16000);
+        Assert.True(fixture.Runtime.Model.Session.Disposed);
+    }
+
+    [Fact]
+    public async Task StreamingCancellationSettlesNativeFeedBeforeFreeingSessionOrModel()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await using var stream = await ((ITranscriptionEngineRole)fixture.Plugin).StartStreamingAsync("en", CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var settle = new ManualResetEventSlim();
+        fixture.Runtime.Model.Session.Work = token =>
+        {
+            entered.SetResult();
+            settle.Wait(CancellationToken.None);
+            token.ThrowIfCancellationRequested();
+        };
+        using var cancel = new CancellationTokenSource();
+        var feeding = stream.SendAudioAsync(new byte[16000], cancel.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancel.Cancel();
+        var unloading = fixture.Plugin.UnloadModelAsync();
+        try
+        {
+            Assert.False(feeding.IsCompleted);
+            Assert.False(unloading.IsCompleted);
+            Assert.False(fixture.Runtime.Model.Session.Disposed);
+        }
+        finally { settle.Set(); }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => feeding);
+        await unloading;
+        Assert.True(fixture.Runtime.Model.Session.Disposed);
+        Assert.True(fixture.Runtime.Model.Disposed);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "tw-gguf-plugin-" + Guid.NewGuid().ToString("N"));
@@ -194,6 +290,24 @@ public sealed class TranscribeCppPluginTests
         internal bool Disposed { get; private set; }
         internal int Calls { get; private set; }
         internal int Samples { get; private set; }
+        internal int MaximumWindowSamples { get; private set; }
+        private int _windowSamples;
+        private int _feeds;
+        public void Begin(string? language, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct)
+        {
+            _windowSamples = 0;
+            Context = context;
+            Terms = vocabulary;
+        }
+        public NativeTranscript Feed(float[] samples, CancellationToken ct)
+        {
+            Work?.Invoke(ct);
+            Samples += samples.Length;
+            _windowSamples += samples.Length;
+            MaximumWindowSamples = Math.Max(MaximumWindowSamples, _windowSamples);
+            return new(++_feeds == 1 ? "very bad" : "very very good", "en");
+        }
+        public NativeTranscript Finish(CancellationToken ct) => new("very very good", "en");
         internal string? Context { get; private set; }
         internal IReadOnlyList<string>? Terms { get; private set; }
         public NativeTranscript Run(float[] samples, string? language, bool translate, string? context, IReadOnlyList<string> vocabulary, CancellationToken ct)

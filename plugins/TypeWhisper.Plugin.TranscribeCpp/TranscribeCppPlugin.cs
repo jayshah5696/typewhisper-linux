@@ -3,7 +3,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.TranscribeCpp;
 
-public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscriptionHardwareSelection,
+public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscriptionHardwareSelection,
     ITranscriptionLanguageSelectionCapabilities
 {
     private readonly TranscribeModelCatalog _catalog;
@@ -38,6 +38,7 @@ public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscrip
     public bool SupportsModelDownload => true;
     public bool SupportsStructuredDictionaryTerms => true;
     public bool SupportsTranslation => SelectedDefinition?.SupportsTranslation == true;
+    public bool SupportsStreaming => SelectedDefinition?.SupportsStreaming == true;
     public IReadOnlyList<string> SupportedLanguages => SelectedDefinition?.Languages ?? [];
     public LanguageSelectionSupport AutomaticDetectionSupport => SelectedDefinition is { SupportsLanguageDetection: true }
         or { Languages.Count: 1 } ? LanguageSelectionSupport.Supported : LanguageSelectionSupport.Unsupported;
@@ -158,6 +159,7 @@ public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscrip
 
     private async Task LoadCoreAsync(string modelId, CancellationToken ct)
     {
+        if (_stream is not null) throw new InvalidOperationException("Finish or dispose the active streaming session first.");
         if (_model is not null && _loadedModelId == modelId) return;
         var definition = _catalog.Get(modelId);
         var request = _hardware ?? throw new InvalidOperationException("Configure exact hardware in an isolated worker before loading a model.");
@@ -192,12 +194,7 @@ public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscrip
         {
             var id = SelectedModelId ?? throw new InvalidOperationException("Select a model first.");
             var definition = _catalog.Get(id);
-            language = string.IsNullOrWhiteSpace(language) || language == "auto" ? null : language;
-            if (language is not null && !definition.Languages.Contains(language, StringComparer.Ordinal))
-                throw new NotSupportedException($"{definition.Name} does not support language '{language}'.");
-            if (language is null && !definition.SupportsLanguageDetection)
-                language = definition.Languages.Count == 1 ? definition.Languages[0]
-                    : throw new NotSupportedException("Select a language for this model; it does not support automatic detection.");
+            language = ResolveLanguage(definition, language);
             if (translate && !definition.SupportsTranslation)
                 throw new NotSupportedException("The selected model does not support translation.");
             await LoadCoreAsync(id, linked.Token).ConfigureAwait(false);
@@ -221,6 +218,17 @@ public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscrip
         finally { _gate.Release(); }
     }
 
+    private static string? ResolveLanguage(TranscribeModel definition, string? language)
+    {
+        language = string.IsNullOrWhiteSpace(language) || language == "auto" ? null : language;
+        if (language is not null && !definition.Languages.Contains(language, StringComparer.Ordinal))
+            throw new NotSupportedException($"{definition.Name} does not support language '{language}'.");
+        if (language is null && !definition.SupportsLanguageDetection)
+            return definition.Languages.Count == 1 ? definition.Languages[0]
+                : throw new NotSupportedException("Select a language for this model; it does not support automatic detection.");
+        return language;
+    }
+
     private InvalidOperationException CancellationFault(OperationCanceledException ex) => new(
         _lifetime.IsCancellationRequested ? "The transcribe.cpp plugin was deactivated."
             : "A transcribe.cpp dependency cancelled without a caller request.", ex);
@@ -233,12 +241,14 @@ public sealed class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscrip
 
     public async Task UnloadModelAsync()
     {
+        _stream?.Cancel();
         await _gate.WaitAsync().ConfigureAwait(false);
         try { await UnloadCoreAsync().ConfigureAwait(false); }
         finally { _gate.Release(); }
     }
     private async Task UnloadCoreAsync()
     {
+        _stream?.DisposeUnderGate();
         _model?.Dispose();
         _model = null;
         _loadedModelId = null;

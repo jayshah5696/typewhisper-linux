@@ -1149,14 +1149,184 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
         Assert.True(launch.TimeoutFor(transcribe, TranscriptionWorkerProtocol.MaximumAudioBytes) > TimeSpan.FromHours(90));
     }
 
-    [Fact]
-    public void StreamingEnginesStayInProcess()
+    private async Task<IsolatedTranscriptionEngine> StreamingEngineAsync(TranscriptionWorkerLaunch? launch = null)
     {
-        var streaming = new Moq.Mock<ITranscriptionEngineRole>();
-        streaming.SetupGet(engine => engine.SupportsStreaming).Returns(true);
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled" }""");
+        return Engine(launch);
+    }
 
-        Assert.Throws<ArgumentException>(() =>
-            IsolatedTranscriptionEngine.Create(streaming.Object, _runner, Launch(), Log));
+    [Fact]
+    public async Task StreamingReplacesCorrectedPreviewsAndPreservesRepeatedWordsInOneFinal()
+    {
+        ITranscriptionEngineRole engine = await StreamingEngineAsync();
+        Assert.True(engine.SupportsStreaming);
+        await using var session = await engine.StartStreamingWithLanguageHintsAndPromptAsync(["en"], "context", CancellationToken.None);
+        var events = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += events.Add;
+        await session.SendAudioAsync(s_audio, CancellationToken.None);
+        await session.SendAudioAsync(s_audio, CancellationToken.None);
+        await session.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(["very bad", "very very good", "very very good"], events.Select(update => update.Text));
+        Assert.Equal([false, false, true], events.Select(update => update.IsFinal));
+        Assert.Equal("en", events[^1].DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task RealCoordinatorAssemblesOnlyTheFinalWindowAndKeepsCorrectedPreviews()
+    {
+        var engine = await StreamingEngineAsync();
+        var previews = new List<string>();
+        await using var coordinator = new StreamingTranscriptionCoordinator(engine, LanguageSelection.Explicit("en"), [],
+            1, (_, text) => previews.Add(text), error => throw new InvalidOperationException("Unexpected stream fault.", error));
+        await coordinator.StartAsync(CancellationToken.None);
+        coordinator.AcceptAudioFrame([0.1f, 0.2f], 16000);
+        coordinator.AcceptAudioFrame([0.3f, 0.4f], 16000);
+        Assert.Equal("very very good", await coordinator.FinalizeAsync(CancellationToken.None));
+        Assert.Equal(["very bad", "very very good", "very very good"], previews);
+        Assert.False(coordinator.Faulted);
+        Assert.False(coordinator.HasDroppedAudio);
+    }
+
+    [Fact]
+    public async Task SlowWorkerMakesLiveResultIneligibleAndAllowsCompleteRecordingBatchFallback()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromMilliseconds(150) });
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled", "probe-stream-behavior": "slow" }""");
+        var coordinator = new StreamingTranscriptionCoordinator(engine, LanguageSelection.Explicit("en"), [],
+            1, (_, _) => { }, _ => { }, finalizeSenderTimeout: TimeSpan.FromMilliseconds(100),
+            finalizeSessionTimeout: TimeSpan.FromMilliseconds(500));
+        await coordinator.StartAsync(CancellationToken.None);
+        coordinator.AcceptAudioFrame([0.1f, 0.2f], 16000);
+        await Assert.ThrowsAsync<TimeoutException>(() => coordinator.FinalizeAsync(CancellationToken.None));
+        await coordinator.DisposeAsync();
+        var result = await engine.TranscribeAsync(new byte[32000], "en", false, null, CancellationToken.None);
+        Assert.Equal("32000", Fields(result)["length"]);
+    }
+
+    [Fact]
+    public async Task StreamingCapabilityIsRequiredBeforeSendingAStartToAnOlderWorker()
+    {
+        var engine = await StreamingEngineAsync(Launch(FakeWorker("normal")));
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StreamingDoesNotAllowBatchOrModelReplacementUntilSessionEnds()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadModelAsync("large", CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
+        await session.FinalizeAsync(CancellationToken.None);
+        await engine.LoadModelAsync("large", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Equal(pid, engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task StaleWorkerUpdatesCannotPublishAFinalOrLeaveTheWorkerReusable()
+    {
+        var engine = await StreamingEngineAsync(Launch(FakeWorker("stale-stream-update")));
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        var updates = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += updates.Add;
+        await Assert.ThrowsAsync<InvalidDataException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Empty(updates);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task StreamPayloadsAreSplitIntoBoundedOrderedRequests()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        var updates = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += updates.Add;
+        await session.SendAudioAsync(new byte[2 * TranscriptionWorkerProtocol.MaximumStreamChunkBytes + 2], CancellationToken.None);
+        Assert.Equal(3, updates.Count);
+        Assert.DoesNotContain(updates, value => value.IsFinal);
+    }
+
+    [Fact]
+    public async Task StreamingCancellationReachesNativeWorkWithoutBlockingTheControlReader()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromMilliseconds(150) });
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("hang", CancellationToken.None);
+        var pid = engine.WorkerProcessId!.Value;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.SendAudioAsync(s_audio, cancel.Token));
+        await session.DisposeAsync();
+        await WaitUntilGoneAsync(pid);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task ConcurrentStreamDisposalWaitsForTheSameInFlightNativeWork()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromSeconds(1) });
+        var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("hang", CancellationToken.None);
+        var feeding = session.SendAudioAsync(s_audio, CancellationToken.None);
+        await WaitForLogAsync("stream feed entered");
+        var first = session.DisposeAsync().AsTask();
+        var second = session.DisposeAsync().AsTask();
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        await Task.WhenAll(first, second);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => feeding);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task UnloadingAnIdleStreamInvalidatesItWithoutWaitingForMoreAudio()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        await engine.UnloadModelAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task WorkerRejectsStaleSessionIdentityAndOutOfOrderAudio()
+    {
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled" }""");
+        await using var worker = await TranscriptionWorkerProcess.StartAsync(_runner, Launch(), TranscriptionAccelerationPreference.Cpu, null, Log, CancellationToken.None);
+        var start = await worker.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = "stream-start", ModelId = "small", SessionId = "first", Sequence = 0,
+        }, default, CancellationToken.None);
+        Assert.Null(start.Error);
+        foreach (var (id, sequence) in new[] { ("stale", 1L), ("first", 2L) })
+        {
+            var rejected = await worker.SendAsync(new TranscriptionWorkerMessage
+            {
+                Command = "stream-feed", SessionId = id, Sequence = sequence,
+            }, s_audio, CancellationToken.None);
+            Assert.NotNull(rejected.Error);
+        }
+        var valid = await worker.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = "stream-feed", SessionId = "first", Sequence = 1,
+        }, s_audio, CancellationToken.None);
+        Assert.Null(valid.Error);
+    }
+
+    [Fact]
+    public async Task AutoNeverRetriesOnlyTheFailedStreamingChunkOnCpu()
+    {
+        var engine = await HardwareEngineAsync();
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled", "probe-hardware": "enabled" }""");
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("fail-on-gpu", CancellationToken.None);
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Null(engine.WorkerProcessId);
+        Assert.DoesNotContain(Logs(), line => line.Contains("retrying once on CPU", StringComparison.Ordinal));
     }
 
     private static ProcessCommand FakeWorker(string behavior)

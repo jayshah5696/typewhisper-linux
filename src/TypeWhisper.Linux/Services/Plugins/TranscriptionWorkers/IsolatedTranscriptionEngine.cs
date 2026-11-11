@@ -68,12 +68,6 @@ internal sealed partial class IsolatedTranscriptionEngine
         Func<string>? settings = null
     )
     {
-        // Streaming sessions are callback objects that cannot cross the process boundary.
-        if (inner.SupportsStreaming)
-        {
-            throw new ArgumentException("Streaming engines cannot run in a transcription worker.", nameof(inner));
-        }
-
         _inner = inner;
         _hardwareSelection = inner.HardwareSelection is null ? null : new HardwareProxy(this);
         _start = start;
@@ -116,6 +110,7 @@ internal sealed partial class IsolatedTranscriptionEngine
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => _inner.TranscriptionModels;
     public string? SelectedModelId => _inner.SelectedModelId;
     public bool SupportsTranslation => _inner.SupportsTranslation;
+    public bool SupportsStreaming => _inner.SupportsStreaming;
     public bool SupportsModelDownload => _inner.SupportsModelDownload;
     public DictionaryTermsBudget? DictionaryTermsBudget => _inner.DictionaryTermsBudget;
     public bool SupportsStructuredDictionaryTerms => _inner.SupportsStructuredDictionaryTerms;
@@ -362,6 +357,8 @@ internal sealed partial class IsolatedTranscriptionEngine
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_activeStream is not null)
+                throw new InvalidOperationException("Finish or dispose the active streaming session first.");
             if (explicitLoad)
             {
                 _pausedUntil = default;
@@ -383,7 +380,7 @@ internal sealed partial class IsolatedTranscriptionEngine
             {
                 try
                 {
-                    return await RunHardwareAsync(request, payload, token).ConfigureAwait(false);
+                    return AcceptStreamStart(await RunHardwareAsync(request, payload, token).ConfigureAwait(false), request, ct, stop);
                 }
                 finally
                 {
@@ -452,7 +449,7 @@ internal sealed partial class IsolatedTranscriptionEngine
                 }
 
                 _consecutiveCrashes = 0;
-                return response;
+                return AcceptStreamStart(response, request, ct, stop);
             }
         }
         catch (OperationCanceledException ex) when (stop.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -461,6 +458,10 @@ internal sealed partial class IsolatedTranscriptionEngine
         }
         finally
         {
+            // A canceled or malformed start may have created a session in the worker without
+            // returning its identity. Never leave that unowned session behind for the next call.
+            if (request.Command == TranscriptionWorkerCommands.StreamStart && _activeStream is null)
+                await DiscardWorkerAsync().ConfigureAwait(false);
             _gate.Release();
             if (statusChanged)
             {
@@ -481,7 +482,7 @@ internal sealed partial class IsolatedTranscriptionEngine
         // starts cold. Loading gets its own budget before the audio deadline starts.
         // ReSharper disable once InvertIf -- inverting would repeat the request send in both branches.
         if (
-            request is { Command: TranscriptionWorkerCommands.Transcribe, ModelId: { } modelId }
+            request is { Command: TranscriptionWorkerCommands.Transcribe or TranscriptionWorkerCommands.StreamStart, ModelId: { } modelId }
             && worker.State?.LoadedModelId != modelId
         )
         {
@@ -632,6 +633,8 @@ internal sealed partial class IsolatedTranscriptionEngine
 
     private async Task DiscardWorkerAsync()
     {
+        _activeStream?.Invalidate();
+        _activeStream = null;
         var worker = _worker;
         _worker = null;
         _workerHardwareRequest = null;

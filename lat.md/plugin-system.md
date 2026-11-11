@@ -75,7 +75,7 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 
 ### Isolated GGUF batch inference
 
-[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The transcribe.cpp plugin]] keeps metadata and file management in the host and restricts native work to transcription workers. Its current execution path provides batch inference on CPU or Vulkan.
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The transcribe.cpp plugin]] keeps metadata and file management in the host and restricts native work to transcription workers. It provides batch inference and model-specific streaming on CPU or Vulkan.
 
 [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeNativeRuntime.cs|The native adapter]] validates ABI layouts before native initializers, resolves exact backend and stable device identities, and checks the loaded device. CPU registration excludes GPU modules. Sessions retain their model handles, and cancellation settles native work before freeing either handle. Borrowed text is copied before session mutation or disposal. Dictionary terms use only the native vocabulary capability, not transcript instructions.
 
@@ -84,6 +84,18 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 [[scripts/prepare-transcribe-native.py|Artifact preparation]] verifies the pinned archive and complete file hashes before publishing libraries and license notices. [[plugins/TypeWhisper.Plugin.TranscribeCpp/Native/runtime.json|The artifact pin]] covers CPU dispatch modules and optional Vulkan dependencies. The plugin requires no Node runtime, inference server, or T3 installation.
 
 [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppNativeTests.cs|Native boundary tests]] cover host probe refusal, device exclusions, input validation, audio coverage, and incomplete results. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppPluginTests.cs|Plugin lifetime tests]] check file leases, failed loads, cancellation before unload, repeated text, and prompt separation. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in real-worker test]] checks packaged CPU and exact Vulkan execution, external-file preservation, CPU module exclusion, and an utterance beyond Moonshine's native audio limit.
+
+### Isolated GGUF streaming
+
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Streaming.cs|The streaming proxy]] forwards ordered, bounded PCM chunks through the authenticated worker. No native session object enters the host.
+
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/TranscriptionWorkerServer.Streaming.cs|Worker sessions]] check session identity and sequence before accepting audio. Replies carry transcript updates for that operation, so the host applies backpressure without a second audio queue. The control reader remains independent of native work. Queue or update overflow is a fault, never dropped audio reported as success. Unload and worker replacement invalidate old proxies and their updates.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.Streaming.cs|Native streaming]] buffers at most half a second before decoding and flushes the tail at EOF. It emits replaceable raw previews and one final per completed window. It does not commit cumulative prefixes as repeated final segments or remove repeated words. Near a model's audio limit it rotates at silence. Uninterrupted speech without a safe boundary faults before the hard limit, preserving full-recording batch retry. Cancellation settles native work before freeing its session or model.
+
+Auto may retry a failed stream start on CPU before audio is sent. A feed or finalize fault ends the worker without replaying only that operation. [[src/TypeWhisper.Linux/Services/StreamingTranscriptionCoordinator.cs|The existing coordinator]] and dictation fallback retain responsibility for complete recordings, dropped capture audio, and slow senders.
+
+[[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Real-worker tests]] cover negotiation, stale identities and updates, ordering, bounded chunks, corrected previews, repeated words, unload, cancellation, coordinator assembly, and slow-sender fallback eligibility. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in packaged test]] checks CPU and exact Vulkan previews and two final windows across a 95-second recording. It does not establish continuous-speech boundary accuracy or other model-family support.
 
 ### Optional model metadata
 

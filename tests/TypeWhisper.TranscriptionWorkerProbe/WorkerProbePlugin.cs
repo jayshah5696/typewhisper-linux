@@ -23,6 +23,8 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
     private string? _computeBackend;
     private TranscriptionHardwareRequest? _hardwareRequest;
 
+    public bool EnableStreaming { get; set; }
+    public bool SupportsStreaming => EnableStreaming || _host?.GetSetting<string>("probe-streaming") == "enabled";
     public bool EnableHardwareSelection { get; set; }
     public ITranscriptionHardwareSelection? HardwareSelection =>
         EnableHardwareSelection || _host?.GetSetting<string>("probe-hardware") == "enabled"
@@ -210,6 +212,31 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
             Segments = [new PluginTranscriptionSegment("probe", 0, 1) { NoSpeechProbability = 0.25f }],
             TokenTimings = [new VocabularyTokenTiming("probe", 0.25, 0.5)],
         };
+    }
+
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        Task.FromResult<IStreamingSession>(new ProbeStream(this, _host?.GetSetting<string>("probe-stream-behavior") ?? language));
+
+    private sealed class ProbeStream(WorkerProbePlugin engine, string? language) : IStreamingSession
+    {
+        private int _feeds;
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+        public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+        {
+            engine._host?.Log(PluginLogLevel.Info, "stream feed entered");
+            if (language == "hang") Thread.Sleep(Timeout.InfiniteTimeSpan);
+            if (language == "slow") await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            if (language == "fail-on-gpu" && engine.AccelerationPreference != TranscriptionAccelerationPreference.Cpu)
+                throw new InvalidOperationException("GPU failed after receiving stream audio.");
+            TranscriptReceived?.Invoke(new(++_feeds == 1 ? "very bad" : "very very good", false));
+        }
+        public Task FinalizeAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            TranscriptReceived?.Invoke(new("very very good", true) { DetectedLanguage = "en" });
+            return Task.CompletedTask;
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class ProbeHardware(WorkerProbePlugin engine) : ITranscriptionHardwareSelection
