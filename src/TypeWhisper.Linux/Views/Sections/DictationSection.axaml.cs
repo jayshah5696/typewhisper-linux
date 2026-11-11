@@ -45,7 +45,8 @@ public partial class DictationSection : UserControl
             return;
         }
 
-        await ConfirmAndDeleteModelAsync(selected.DisplayLabel, viewModel.DeleteSelectedModelAsync);
+        await ConfirmAndDeleteModelAsync(selected.DisplayLabel, viewModel.DeleteSelectedModelAsync,
+            viewModel.IsLocalModelLinked(selected.ModelId));
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
@@ -57,12 +58,12 @@ public partial class DictationSection : UserControl
             return;
         }
 
-        await ConfirmAndDeleteModelAsync(card.DisplayName, () => viewModel.DeleteLocalModelAsync(card));
+        await ConfirmAndDeleteModelAsync(card.DisplayName, () => viewModel.DeleteLocalModelAsync(card), card.HasLink);
     }
 
     // Only the confirmation dialog is uncontained here; the view model catches its own
     // file-system failures, so Window alone is correct.
-    private static Task<bool> ConfirmAndDeleteModelAsync(string label, Func<Task> delete) =>
+    private static Task<bool> ConfirmAndDeleteModelAsync(string label, Func<Task> delete, bool linked) =>
         UiOperations.RunAsync(
             "confirm and delete model",
             Loc.Instance["Common.Delete"],
@@ -71,9 +72,9 @@ public partial class DictationSection : UserControl
             {
                 var dialog = new MessageDialogWindow();
                 var confirmed = await dialog.ShowConfirmationAsync(
-                    Loc.Instance["Dictation.DeleteModelTitle"],
-                    Loc.Instance.GetString("Dictation.DeleteModelMessage", label),
-                    Loc.Instance["Common.Delete"]
+                    Loc.Instance[linked ? "Dictation.ModelUnlinkTitle" : "Dictation.DeleteModelTitle"],
+                    Loc.Instance.GetString(linked ? "Dictation.ModelUnlinkMessage" : "Dictation.DeleteModelMessage", label),
+                    Loc.Instance[linked ? "Dictation.ModelUnlink" : "Common.Delete"]
                 );
 
                 if (confirmed)
@@ -123,6 +124,30 @@ public partial class DictationSection : UserControl
                 return Task.CompletedTask;
             }
         );
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia requires a void event handler.
+    private async void OnLinkLocalModel(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not DictationSectionViewModel viewModel
+            || (sender as Control)?.DataContext is not LocalModelCard { CanLink: true } card) return;
+        await UiOperations.RunAsync("link verified model", Loc.Instance["Dictation.ModelLink"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem, async () =>
+            {
+                if (TopLevel.GetTopLevel(this)?.StorageProvider is not { } storage) return;
+                var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title = Loc.Instance["Dictation.ModelLinkPicker"],
+                    AllowMultiple = false,
+                    FileTypeFilter = [new FilePickerFileType("GGUF") { Patterns = ["*.gguf"] }],
+                });
+                var path = (files.Count > 0 ? files[0] : null)?.TryGetLocalPath();
+                if (!string.IsNullOrWhiteSpace(path)) await viewModel.LinkLocalModelAsync(card, path);
+            }, presenter: message =>
+            {
+                viewModel.StatusText = message;
+                return Task.CompletedTask;
+            });
     }
 
     private static UiOperationGuard UiOperations =>

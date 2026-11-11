@@ -53,6 +53,9 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports downloading and managing local model files.</summary>
     bool SupportsModelDownload => false;
 
+    /// <summary>Optional verified external model linking. Null leaves ordinary download behavior unchanged.</summary>
+    ITranscriptionModelLinking? ModelLinking => null;
+
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 

@@ -21,7 +21,7 @@ public enum ModelUnloadOutcome { Unloaded, NothingLoaded, OtherEngine, Busy, Fai
 public sealed class ModelDownloadCanceledException(Exception? innerException)
     : OperationCanceledException("The model download was canceled.", innerException);
 
-public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
+public sealed partial class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
@@ -1258,31 +1258,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             // Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
             TranscriptionHardwareRequest? hardwareRequest = null;
-            if (plugin.HardwareSelection is { } hardware)
+            if (plugin.HardwareSelection is not null)
             {
-                IReadOnlyList<TranscriptionDevice> devices;
-                if (requestedPreference == TranscriptionAccelerationPreference.Cpu)
-                {
-                    // CPU is a native registration restriction, not just a GPU ranking choice.
-                    devices = [TranscriptionHardwareSelector.CpuDevice];
-                }
-                else
-                {
-                    using var discovery = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    discovery.CancelAfter(TimeSpan.FromSeconds(15));
-                    try
-                    {
-                        devices = await hardware.DiscoverDevicesAsync(pluginModelId, discovery.Token)
-                            .WaitAsync(discovery.Token);
-                    }
-                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && discovery.IsCancellationRequested)
-                    {
-                        throw new TimeoutException("Native device discovery timed out. Select CPU to retry.", ex);
-                    }
-                }
-
-                hardwareRequest = TranscriptionHardwareSelector.Resolve(requestedPreference,
-                    devices.Where(device => plugin.SupportedAccelerationBackends.Contains(device.Backend)).ToArray(), requestedDeviceId);
+                hardwareRequest = await ResolveHardwareRequestAsync(plugin, pluginModelId,
+                    requestedPreference, requestedDeviceId, cancellationToken);
                 resolvedPreference = TranscriptionHardwareSelector.ToPreference(hardwareRequest.Device.Backend);
             }
             else if (pluginSupportsCuda)

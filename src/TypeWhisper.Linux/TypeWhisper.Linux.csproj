@@ -39,6 +39,11 @@
         <!-- Dictation cue sounds (start/stop/success/error), played directly by
              SoundFeedbackService via pw-play/paplay/aplay. -->
         <Content Include="Resources\Sounds\*.wav" CopyToOutputDirectory="PreserveNewest"/>
+        <!-- The raw model test uses public audio, never the user's microphone. -->
+        <EmbeddedResource Include="../../tests/fixtures/librispeech-1462-170145-0012.wav"
+                          LogicalName="TypeWhisper.ModelTest.wav"/>
+        <Content Include="../../tests/fixtures/README.md" Link="Resources/ModelTest/README.md"
+                 CopyToOutputDirectory="PreserveNewest"/>
         <!-- Interface-language translation files, loaded at startup by Loc. -->
         <Content Include="Resources\Localization\*.json" CopyToOutputDirectory="PreserveNewest"/>
     </ItemGroup>

@@ -4,7 +4,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Plugin.TranscribeCpp;
 
 public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, ITranscriptionHardwareSelection,
-    ITranscriptionLanguageSelectionCapabilities
+    ITranscriptionLanguageSelectionCapabilities, ITranscriptionModelLinking
 {
     private readonly TranscribeModelCatalog _catalog;
     private readonly Func<ITranscribeNativeRuntime> _runtimeFactory;
@@ -44,6 +44,7 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         or { Languages.Count: 1 } ? LanguageSelectionSupport.Supported : LanguageSelectionSupport.Unsupported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public ITranscriptionHardwareSelection HardwareSelection => this;
+    public ITranscriptionModelLinking ModelLinking => this;
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan];
     public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Cpu;
@@ -68,6 +69,21 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         _ = _catalog.Get(modelId);
         _host?.SetSetting("selectedModel", modelId);
         SelectedModelId = modelId;
+    }
+
+    public string? GetLinkedModelPath(string modelId) => _store?.GetLinkedPath(_catalog.Get(modelId));
+    public async Task LinkModelAsync(string modelId, string sourcePath, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+        await EnterGateAsync(ct, linked.Token).ConfigureAwait(false);
+        try
+        {
+            if (_loadedModelId == modelId)
+                throw new InvalidOperationException("Unload this model before replacing its files.");
+            await Store.LinkAsync(_catalog.Get(modelId), sourcePath, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested) { throw CancellationFault(ex); }
+        finally { _gate.Release(); }
     }
 
     public bool IsModelDownloaded(string modelId) => _store?.IsReady(_catalog.Get(modelId)) == true;

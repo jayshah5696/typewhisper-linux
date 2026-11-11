@@ -50,6 +50,18 @@ public sealed class LocalModelCardListTests(UiSession ui)
                 MainWindowRenderTests.Settle();
                 Assert.Equal("", search.Text);
 
+                var card = dictation.LocalModelCards[0];
+                card.IsTesting = true;
+                card.IsLinking = true;
+                MainWindowRenderTests.Settle();
+                foreach (var command in new[] { dictation.CancelLocalModelTestCommand, dictation.CancelLocalModelLinkCommand })
+                {
+                    var cancel = window.GetVisualDescendants().OfType<Button>()
+                        .Single(button => ReferenceEquals(button.Command, command) && ReferenceEquals(button.DataContext, card));
+                    Assert.Equal(Linux.Services.Localization.Loc.Instance["Common.Cancel"], cancel.Content);
+                }
+                card.IsTesting = false;
+                card.IsLinking = false;
                 Assert.True(sink.Errors.Count == 0, string.Join("\n", sink.Errors));
             }
             finally

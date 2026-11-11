@@ -132,7 +132,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <Button Grid.Column="2"
-                                    Content="{loc:Str Dictation.DeleteModelFiles}"
+                                    Content="{Binding SelectedModelRemoveText}"
                                     IsEnabled="{Binding CanDeleteSelectedModel}"
                                     Click="OnDeleteSelectedModel" />
                         </Grid>
@@ -407,7 +407,23 @@
                                                 CommandParameter="{Binding}"
                                                 IsVisible="{Binding ShowUse}"
                                                 IsEnabled="{Binding CanUse}" />
-                                        <Button Content="{loc:Str Dictation.ModelCardRemove}"
+                                        <Button Content="{loc:Str Dictation.ModelTest}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).TestLocalModelCommand}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding ShowUse}"
+                                                IsEnabled="{Binding CanTest}"
+                                                ToolTip.Tip="{loc:Str Dictation.ModelTestHelp}" />
+                                        <Button Content="{loc:Str Common.Cancel}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).CancelLocalModelTestCommand}"
+                                                IsVisible="{Binding IsTesting}" />
+                                        <Button Content="{loc:Str Dictation.ModelLink}"
+                                                Click="OnLinkLocalModel"
+                                                IsVisible="{Binding ShowLink}" IsEnabled="{Binding CanLink}"
+                                                ToolTip.Tip="{loc:Str Dictation.ModelLinkHelp}" />
+                                        <Button Content="{loc:Str Common.Cancel}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).CancelLocalModelLinkCommand}"
+                                                IsVisible="{Binding IsLinking}" />
+                                        <Button Content="{Binding RemoveText}"
                                                 Click="OnRemoveLocalModel"
                                                 IsVisible="{Binding ShowRemove}"
                                                 IsEnabled="{Binding CanRemove}" />
@@ -417,6 +433,13 @@
                                                 CommandParameter="{Binding}"
                                                 IsVisible="{Binding ShowCancel}" />
                                     </WrapPanel>
+                                    <TextBlock Text="{Binding LinkStatusText}" TextWrapping="Wrap" FontSize="12" />
+                                    <SelectableTextBlock Text="{Binding LinkedSourceText}" TextWrapping="Wrap"
+                                                         FontSize="12" IsVisible="{Binding HasLink}" />
+                                    <TextBlock Text="{Binding TestStatusText}" TextWrapping="Wrap" FontSize="12" />
+                                    <SelectableTextBlock Text="{Binding TestTranscript}" TextWrapping="Wrap"
+                                                         IsVisible="{Binding HasTestTranscript}"
+                                                         AutomationProperties.Name="{loc:Str Dictation.ModelTestTranscript}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

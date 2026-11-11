@@ -167,6 +167,90 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RawModelTestUsesDisposableExecutionWithoutChangingTheLiveModelOrSettings()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var livePid = engine.WorkerProcessId;
+        var before = await File.ReadAllBytesAsync(SettingsPath);
+        var request = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Cpu,
+            TranscriptionHardwareSelector.CpuDevice);
+
+        var result = await engine.TestModelAsync("large", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, request, CancellationToken.None);
+
+        var fields = Fields(result.Transcription);
+        var testPid = int.Parse(fields["pid"], CultureInfo.InvariantCulture);
+        Assert.Equal("large", fields["model"]);
+        Assert.Equal("large", fields["selected"]);
+        Assert.Equal("False", fields["translate"]);
+        Assert.Equal("", fields["prompt"]);
+        Assert.Equal("cpu", result.Acceleration.ActiveDevice?.StableId);
+        Assert.False(IsRunning(testPid));
+        Assert.Equal(livePid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.NvidiaCuda, engine.AccelerationPreference);
+        Assert.Equal(before, await File.ReadAllBytesAsync(SettingsPath));
+        Assert.Equal("small", Fields(await engine.TranscribeAsync(s_audio, "en", false, null, CancellationToken.None))["model"]);
+    }
+
+    [Fact]
+    public async Task RawModelTestReusesSameLoadedModelWithoutTakingASecondFileLease()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        var hardware = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Auto,
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0", "Same GPU", TranscriptionDeviceKind.DiscreteGpu));
+        var result = await engine.TestModelAsync("small", s_audio, "en",
+            TranscriptionAccelerationPreference.NvidiaCuda, hardware, CancellationToken.None);
+        Assert.Equal(pid, int.Parse(Fields(result.Transcription)["pid"], CultureInfo.InvariantCulture));
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.TestModelAsync("small", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, new(TranscriptionAccelerationPreference.Cpu,
+                TranscriptionHardwareSelector.CpuDevice), CancellationToken.None));
+        Assert.Equal(pid, engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task RawModelTestAutoFallbackIsReportedWithoutChangingTheLiveGpu()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        var request = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Auto,
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0", "GPU", TranscriptionDeviceKind.DiscreteGpu));
+        var result = await engine.TestModelAsync("large", s_audio, "fail-on-gpu",
+            TranscriptionAccelerationPreference.NvidiaCuda, request, CancellationToken.None);
+        Assert.Equal("cpu", result.Acceleration.ActiveDevice?.StableId);
+        Assert.NotNull(result.Acceleration.FallbackReason);
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Equal(TranscriptionAccelerationBackend.NvidiaCuda, engine.AccelerationStatus.ActiveBackend);
+    }
+
+    [Fact]
+    public async Task RawModelTestFailureAndCancellationLeaveLiveExecutionUsable()
+    {
+        var engine = Engine();
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<FileNotFoundException>(() => engine.TestModelAsync("broken", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, null, CancellationToken.None));
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.TestModelAsync("large", s_audio, "slow",
+            TranscriptionAccelerationPreference.Cpu, null, cancel.Token));
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        Assert.Equal("small", Fields(await engine.TranscribeAsync(s_audio, "en", false, null, CancellationToken.None))["model"]);
+    }
+
+    [Fact]
     public async Task HardwareDiscoveryUsesADisposableWorkerWithoutReplacingTheLoadedWorker()
     {
         var engine = await HardwareEngineAsync();

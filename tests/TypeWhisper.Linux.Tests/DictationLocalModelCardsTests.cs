@@ -7,6 +7,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -475,6 +476,216 @@ public sealed class DictationLocalModelCardsTests
         Assert.Equal(1, probe.Calls);
     }
 
+    [Fact]
+    public async Task RawTest_ShowsOnlyRawResultAndConfirmedDeviceWithoutSavingSelection()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.UnionWith(["small", "large"]);
+        var worker = new TestWorker();
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (_, _, _) => Task.FromResult<ITranscriptionWorkerConnection>(worker), (_, _) => { });
+        using var context = new CardsTestContext(AppSettings.Default with
+        {
+            SelectedModelId = "plugin:com.test.local:small", LocalModelAcceleration = "cpu",
+        }, isolated);
+        var card = context.Card("large");
+        Assert.True(card.CanTest);
+        var settings = context.Settings.Object.Current;
+        var selected = context.Sut.SelectedModel;
+        context.Settings.Invocations.Clear();
+
+        await context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+
+        Assert.Equal("He bent his face over her hair.", card.TestTranscript);
+        Assert.Contains("CPU", card.TestStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("large", worker.Request?.ModelId);
+        Assert.Null(worker.Request?.Prompt);
+        Assert.False(worker.Request?.Translate);
+        Assert.Equal("en", worker.Request?.Language);
+        Assert.Equal("RIFF", System.Text.Encoding.ASCII.GetString(worker.Audio![..4]));
+        Assert.True(worker.Disposed);
+        Assert.Equal(settings, context.Settings.Object.Current);
+        Assert.Same(selected, context.Sut.SelectedModel);
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(local.SelectedModelId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RawTest_LegacyAutoCpuProviderDoesNotProbeOrRequestCuda()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.Add("small");
+        TranscriptionAccelerationPreference? started = null;
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (preference, _, _) =>
+            {
+                started = preference;
+                return Task.FromResult<ITranscriptionWorkerConnection>(new TestWorker());
+            }, (_, _) => { });
+        using var context = new CardsTestContext(isolated);
+        context.Models.CudaRuntimePreflight = () => throw new InvalidOperationException("Must not probe CUDA for this provider");
+        var card = context.Card("small");
+        await context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, started);
+        Assert.Equal("He bent his face over her hair.", card.TestTranscript);
+    }
+
+    [Fact]
+    public async Task RawTest_RefusesBusyLeaseAndRecordingAndCancelsWhenRecordingStarts()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.UnionWith(["small", "large"]);
+        var worker = new TestWorker { Wait = new TaskCompletionSource() };
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (_, _, _) => Task.FromResult<ITranscriptionWorkerConnection>(worker), (_, _) => { });
+        using var context = new CardsTestContext(isolated);
+        var card = context.Card("large");
+        var liveModelId = context.Card("small").ModelId;
+        await context.Models.LoadModelAsync(liveModelId);
+        await using (var lease = await context.Models.TryAcquireTranscriptionAsync(liveModelId))
+        {
+            Assert.NotNull(lease);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => context.Models.TestModelAsync(card.ModelId, CancellationToken.None));
+        }
+        context.Sut.IsRecording = true;
+        Assert.False(card.CanTest);
+        context.Sut.IsRecording = false;
+        var task = context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+        await worker.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(card.IsTesting);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.LocalModelSearch = "no match";
+        Assert.True(card.IsListed);
+        context.Sut.IsRecording = true;
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(card.IsTesting);
+        Assert.Empty(card.TestTranscript);
+        Assert.True(worker.Disposed);
+    }
+
+    [Fact]
+    public void RawTest_IsUnavailableForUnisolatedOrNonEnglishModels()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.Add("small");
+        using var context = new CardsTestContext(local);
+        Assert.False(context.Card("small").CanTest);
+        Assert.False(context.Models.SupportsRawModelTest(context.Card("small").ModelId));
+    }
+
+    [Fact]
+    public async Task Link_ShowsExternalOwnershipAndUnlinkWithoutSelectingOrSaving()
+    {
+        var local = new DownloadableEngine();
+        var linking = new ModelLinkProbe(local);
+        local.ModelLinking = linking;
+        using var context = new CardsTestContext(local);
+        var card = context.Card("large");
+        context.Settings.Invocations.Clear();
+        Assert.True(card is { ShowLink: true, CanLink: true });
+        await context.Sut.LinkLocalModelAsync(card, "/public/model.gguf");
+        Assert.Equal("/public/model.gguf", card.LinkedPath);
+        Assert.Equal(Loc.Instance["Dictation.ModelUnlink"], card.RemoveText);
+        Assert.True(card.ShowRemove);
+        Assert.False(card.ShowLink);
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(context.Sut.SelectedModel);
+        Assert.Null(context.Settings.Object.Current.SelectedModelId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        await context.Sut.DeleteLocalModelAsync(card);
+        Assert.Null(card.LinkedPath);
+        Assert.Equal(1, linking.Unlinks);
+    }
+
+    [Fact]
+    public async Task Link_MissingSourceStillShowsUnlinkForANonRecommendedModel()
+    {
+        var local = new DownloadableEngine();
+        local.ModelLinking = new ModelLinkProbe(local);
+        using var context = new CardsTestContext(local);
+        var card = context.Card("medium");
+        await context.Sut.LinkLocalModelAsync(card, "/public/removed.gguf");
+        local.Downloaded.Remove("medium");
+        context.NotifyPluginStateChanged();
+        await context.WaitUntilAsync(() => !context.Card("medium").ShowUse);
+        card = context.Card("medium");
+        Assert.True(card.IsListed);
+        Assert.True(card.ShowRemove);
+        Assert.Equal(Loc.Instance["Dictation.ModelUnlink"], card.RemoveText);
+    }
+
+    [Fact]
+    public async Task Link_FailureAndCancellationNeverMakeAFileReadyOrHideTheBusyCard()
+    {
+        var local = new DownloadableEngine();
+        var linking = new ModelLinkProbe(local) { Wait = new TaskCompletionSource() };
+        local.ModelLinking = linking;
+        using var context = new CardsTestContext(local);
+        var card = context.Card("medium");
+        Assert.False(card.IsListed);
+        var running = context.Sut.LinkLocalModelAsync(card, "/public/model.gguf");
+        await linking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(card.IsLinking);
+        Assert.True(card.IsListed);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.CancelLocalModelLinkCommand.Execute(null);
+        await running;
+        Assert.False(card.IsLinking);
+        Assert.False(card.ShowRemove);
+        Assert.Null(card.LinkedPath);
+        linking.Fault = new InvalidDataException("unexpected file size");
+        await context.Sut.LinkLocalModelAsync(card, "/public/wrong.gguf");
+        Assert.Contains("unexpected file size", card.LinkStatusText, StringComparison.Ordinal);
+        Assert.False(card.ShowRemove);
+        context.Sut.IsRecording = true;
+        Assert.False(card.CanLink);
+    }
+
+    private sealed class ModelLinkProbe(DownloadableEngine engine) : ITranscriptionModelLinking
+    {
+        private readonly Dictionary<string, string> _paths = [];
+        public TaskCompletionSource? Wait { get; init; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Unlinks { get; private set; }
+        public Exception? Fault { get; set; }
+        public string? GetLinkedModelPath(string modelId) => _paths.GetValueOrDefault(modelId);
+        public async Task LinkModelAsync(string modelId, string sourcePath, CancellationToken ct)
+        {
+            if (Fault is not null) throw Fault;
+            Entered.TrySetResult();
+            if (Wait is not null) await Wait.Task.WaitAsync(ct);
+            _paths[modelId] = sourcePath;
+            engine.Downloaded.Add(modelId);
+        }
+        public void Unlink(string modelId) { if (_paths.Remove(modelId)) Unlinks++; }
+    }
+
+    private sealed class TestWorker : ITranscriptionWorkerConnection
+    {
+        public TranscriptionAccelerationPreference Acceleration => TranscriptionAccelerationPreference.Cpu;
+        public int ProcessId => 1234;
+        public bool IsAlive => !Disposed;
+        public bool Disposed { get; private set; }
+        public TaskCompletionSource? Wait { get; init; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TranscriptionWorkerMessage? Request { get; private set; }
+        public byte[]? Audio { get; private set; }
+        public TranscriptionWorkerState? State { get; private set; }
+        public async Task<TranscriptionWorkerMessage> SendAsync(TranscriptionWorkerMessage request, ReadOnlyMemory<byte> payload, CancellationToken ct)
+        {
+            State = new(request.ModelId, request.ModelId, new(TranscriptionAccelerationBackend.Cpu, "CPU")
+            { IsModelLoaded = true, ActiveDevice = TranscriptionHardwareSelector.CpuDevice });
+            if (request.Command != TranscriptionWorkerCommands.Transcribe) return new() { State = State };
+            Request = request;
+            Audio = payload.ToArray();
+            Entered.TrySetResult();
+            if (Wait is not null) await Wait.Task.WaitAsync(ct);
+            return new() { State = State, Result = new("He bent his face over her hair.", "en", 1, null, null, null) };
+        }
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
     private sealed class HardwareProbe : ITranscriptionHardwareSelection
     {
         public static IReadOnlyList<TranscriptionDevice> Devices { get; } =
@@ -586,6 +797,7 @@ public sealed class DictationLocalModelCardsTests
         public string ProviderDisplayName => "Local engine";
         public bool IsConfigured => true;
         public bool SupportsModelDownload => true;
+        public ITranscriptionModelLinking? ModelLinking { get; set; }
         public bool SupportsTranslation => false;
         public string? SelectedModelId { get; private set; }
 
@@ -596,6 +808,8 @@ public sealed class DictationLocalModelCardsTests
             new("medium", "Medium"),
         ];
 
+        public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Cpu;
+        public void SetAccelerationPreference(TranscriptionAccelerationPreference preference) => AccelerationPreference = preference;
         public bool StorageUnavailable { get; init; }
         public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
         public TranscriptionAccelerationStatus AccelerationStatus { get; set; } = new(TranscriptionAccelerationBackend.Cpu, "CPU") { IsModelLoaded = false };
@@ -635,6 +849,7 @@ public sealed class DictationLocalModelCardsTests
             lock (Downloaded)
             {
                 Downloaded.Remove(modelId);
+                (ModelLinking as ModelLinkProbe)?.Unlink(modelId);
             }
 
             return Task.CompletedTask;

@@ -33,6 +33,7 @@ internal sealed partial class IsolatedTranscriptionEngine
     private readonly Action _statusChanged;
     private readonly Func<string> _settings;
     private readonly TimeProvider _time;
+    private readonly TranscriptionAccelerationPreference? _executionPreference;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ITranscriptionWorkerConnection? _worker;
     private TranscriptionWorkerState? _state;
@@ -65,11 +66,14 @@ internal sealed partial class IsolatedTranscriptionEngine
         Action<PluginLogLevel, string> log,
         Action? statusChanged = null,
         TimeProvider? time = null,
-        Func<string>? settings = null
+        Func<string>? settings = null,
+        TranscriptionAccelerationPreference? executionPreference = null
     )
     {
         _inner = inner;
+        _executionPreference = executionPreference;
         _hardwareSelection = inner.HardwareSelection is null ? null : new HardwareProxy(this);
+        ModelLinking = inner.ModelLinking is null ? null : new ModelLinkProxy(this, inner.ModelLinking);
         _start = start;
         _log = log;
         _statusChanged = statusChanged ?? (() => { });
@@ -112,6 +116,7 @@ internal sealed partial class IsolatedTranscriptionEngine
     public bool SupportsTranslation => _inner.SupportsTranslation;
     public bool SupportsStreaming => _inner.SupportsStreaming;
     public bool SupportsModelDownload => _inner.SupportsModelDownload;
+    public ITranscriptionModelLinking? ModelLinking { get; }
     public DictionaryTermsBudget? DictionaryTermsBudget => _inner.DictionaryTermsBudget;
     public bool SupportsStructuredDictionaryTerms => _inner.SupportsStructuredDictionaryTerms;
     public bool SupportsLanguageHints => _inner.SupportsLanguageHints;
@@ -119,7 +124,7 @@ internal sealed partial class IsolatedTranscriptionEngine
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends => _inner.SupportedAccelerationBackends;
     public bool ProvisionsCudaRuntimeOnDemand => _inner.ProvisionsCudaRuntimeOnDemand;
     public bool IsCudaRuntimeProvisioned => _inner.IsCudaRuntimeProvisioned;
-    public TranscriptionAccelerationPreference AccelerationPreference => _inner.AccelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference => _executionPreference ?? _inner.AccelerationPreference;
 
     // Language support is metadata of the selected model, so the in-process engine answers.
     public LanguageSelectionSupport AutomaticDetectionSupport =>
@@ -515,7 +520,7 @@ internal sealed partial class IsolatedTranscriptionEngine
         if (_consecutiveCrashes >= CrashesBeforeCpuFallback && !FallbackActive() && CanFallBackToCpu())
         {
             _cpuFallback = true;
-            _fallbackFrom = _inner.AccelerationPreference;
+            _fallbackFrom = AccelerationPreference;
             _consecutiveCrashes = 0;
             _log(
                 PluginLogLevel.Warning,
@@ -552,7 +557,7 @@ internal sealed partial class IsolatedTranscriptionEngine
     // The fallback holds until the user picks an acceleration again, which is a new explicit choice.
     private bool FallbackActive()
     {
-        if (_cpuFallback && _inner.AccelerationPreference != _fallbackFrom)
+        if (_cpuFallback && AccelerationPreference != _fallbackFrom)
         {
             _cpuFallback = false;
         }
@@ -562,7 +567,7 @@ internal sealed partial class IsolatedTranscriptionEngine
 
     private TranscriptionAccelerationPreference EffectivePreference()
     {
-        return FallbackActive() ? TranscriptionAccelerationPreference.Cpu : _inner.AccelerationPreference;
+        return FallbackActive() ? TranscriptionAccelerationPreference.Cpu : AccelerationPreference;
     }
 
     private void SetState(TranscriptionWorkerState state, TranscriptionAccelerationPreference acceleration)

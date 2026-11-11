@@ -53,6 +53,12 @@ internal sealed class TranscribeModelStore
         progress?.Report(1);
     }
 
+    public string? GetLinkedPath(TranscribeModel model)
+    {
+        TranscribeModelCatalog.ValidateModel(model);
+        return ReadReceipt(model) is { IsExternal: true } receipt ? receipt.Path : null;
+    }
+
     public async Task LinkAsync(TranscribeModel model, string externalPath, CancellationToken ct)
     {
         EnsureAvailable(model);

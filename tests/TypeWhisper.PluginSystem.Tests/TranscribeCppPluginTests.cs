@@ -9,6 +9,27 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class TranscribeCppPluginTests
 {
     [Fact]
+    public async Task OptionalLinkCapabilityVerifiesOwnershipWithoutLoadingOrSavingSettings()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var linking = Assert.IsAssignableFrom<ITranscriptionModelLinking>(((ITranscriptionEngineRole)fixture.Plugin).ModelLinking);
+        await fixture.Store.DeleteAsync(fixture.Definition, CancellationToken.None);
+        Assert.Null(linking.GetLinkedModelPath(fixture.Definition.Id));
+        var before = await File.ReadAllBytesAsync(fixture.External);
+        await linking.LinkModelAsync(fixture.Definition.Id, fixture.External, CancellationToken.None);
+        Assert.True(fixture.Plugin.IsModelDownloaded(fixture.Definition.Id));
+        Assert.Equal(fixture.External, linking.GetLinkedModelPath(fixture.Definition.Id));
+        Assert.Null(fixture.Runtime.InitializedBackend);
+        fixture.Host.Verify(host => host.SetSetting(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        await fixture.Plugin.LoadModelAsync(fixture.Definition.Id, CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => linking.LinkModelAsync(fixture.Definition.Id, fixture.External, CancellationToken.None));
+        await fixture.Plugin.UnloadModelAsync();
+        await fixture.Plugin.DeleteModelAsync(fixture.Definition.Id, CancellationToken.None);
+        Assert.Null(linking.GetLinkedModelPath(fixture.Definition.Id));
+        Assert.Equal(before, await File.ReadAllBytesAsync(fixture.External));
+    }
+
+    [Fact]
     public async Task LoadedModelKeepsVerifiedFileLeaseUntilNativeModelIsFreed()
     {
         await using var fixture = await Fixture.CreateAsync();

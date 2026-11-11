@@ -78,7 +78,7 @@ internal sealed partial class IsolatedTranscriptionEngine
         ArgumentNullException.ThrowIfNull(request);
         ObjectDisposedException.ThrowIf(_disposed, this);
         var resolved = TranscriptionHardwareSelector.Resolve(request.RequestedPreference, [request.Device], request.Device.StableId);
-        if (TranscriptionHardwareSelector.ToPreference(resolved.Device.Backend) != _inner.AccelerationPreference)
+        if (TranscriptionHardwareSelector.ToPreference(resolved.Device.Backend) != AccelerationPreference)
         {
             throw new ArgumentException("The hardware device must match the resolved acceleration preference.", nameof(request));
         }
@@ -157,7 +157,7 @@ internal sealed partial class IsolatedTranscriptionEngine
             if (canRetry && attempt == 0)
             {
                 _cpuFallback = true;
-                _fallbackFrom = _inner.AccelerationPreference;
+                _fallbackFrom = AccelerationPreference;
                 _hardwareFallbackReason = failure!.Message;
                 _log(PluginLogLevel.Warning, $"{ProviderDisplayName} GPU failed; retrying once on CPU: {failure!.Message}");
                 continue;

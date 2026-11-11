@@ -16,6 +16,12 @@ The worker negotiates streaming transport separately from the selected model's c
 
 Native sessions collect at most 500 ms before decoding and flush the remaining samples at EOF. Previews use the current raw hypothesis, including corrections. Each completed window produces one final result. Sessions rotate near their audio limit after at least 160 ms of quiet input. If uninterrupted speech reaches the hard boundary, the stream fails before native truncation and asks for complete-recording batch retry. It does not cut a live word and claim that the partial result is complete.
 
+## Local model controls
+
+Dictation settings can link an existing GGUF for a listed model. The file must match that catalog entry's exact size and SHA-256. Linking does not select the model or initialize native libraries. The external path stays visible, and Unlink removes only the app's receipt, not the source file. Custom license restrictions still apply.
+
+Test model runs the public English fixture without cleanup, delivery, history, or usage updates. Another model uses a disposable worker and needs memory in addition to the model already loaded. A matching loaded model uses its current worker to avoid taking a second exclusive file lease. Testing does not save a default or provider selection. The result shows the backend and device confirmed for that test. Cancel ends the test, and recording cancels it automatically. The fixture's attribution ships in `Resources/ModelTest/README.md`.
+
 ## Verification
 
 Build with `just build-release` and run `just verify-plugins`. Ordinary tests use synthetic weights and do not download the model catalog.

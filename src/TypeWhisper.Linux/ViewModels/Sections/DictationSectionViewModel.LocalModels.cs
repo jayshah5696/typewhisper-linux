@@ -102,7 +102,7 @@ public partial class DictationSectionViewModel
 
     // Moving the model folder under a running download or load would split or pull its files.
     public bool CanChangeModelStorage =>
-        !IsMigratingModelStorage && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
+        !IsMigratingModelStorage && !HasLocalModelOperation && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
 
     partial void OnIsMigratingModelStorageChanged(bool value)
     {
@@ -111,18 +111,17 @@ public partial class DictationSectionViewModel
 
     private void RebuildLocalModelCards()
     {
+        var previous = LocalModelCards.ToDictionary(card => card.ModelId);
         LocalModelCards.Clear();
         foreach (var engine in _pluginManager.TranscriptionEngines.Where(engine => engine.SupportsModelDownload))
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                LocalModelCards.Add(new LocalModelCard(
-                    ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id),
-                    model.DisplayName,
-                    engine.ProviderDisplayName,
-                    model.SizeDescription,
-                    model.IsRecommended,
-                    model));
+                var id = ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id);
+                LocalModelCards.Add(previous.TryGetValue(id, out var existing)
+                    && existing.Metadata == model && existing.EngineName == engine.ProviderDisplayName
+                    ? existing : new LocalModelCard(id, model.DisplayName, engine.ProviderDisplayName,
+                        model.SizeDescription, model.IsRecommended, model));
             }
         }
 
@@ -150,17 +149,20 @@ public partial class DictationSectionViewModel
             if (!busy && (checkDisk || card.LastStatusType != status?.Type))
             {
                 card.Downloaded = IsDownloadedOnDisk(card.ModelId);
+                card.LinkedPath = _models.GetLinkedModelPath(card.ModelId);
             }
 
             card.LastStatusType = status?.Type;
             card.WasBusy = busy;
             var selected = card.ModelId == selectedId;
-            card.IsListed = busy || selected || (MatchesLocalModelFilters(card)
-                && (HasLocalModelFilters || ShowAllLocalModels || card.Downloaded || card.IsRecommended));
+            card.IsListed = busy || card.IsTesting || card.IsLinking || selected || (MatchesLocalModelFilters(card)
+                && (HasLocalModelFilters || ShowAllLocalModels || card.Downloaded || card.HasLink || card.IsRecommended));
             ApplyCardState(card, status, busy, selected, anyDownloading, anyBusy);
         }
 
         OnPropertyChanged(nameof(CanChangeModelStorage));
+        OnPropertyChanged(nameof(CanDeleteSelectedModel));
+        OnPropertyChanged(nameof(SelectedModelRemoveText));
         OnPropertyChanged(nameof(ShowLocalModelsToggle));
         OnPropertyChanged(nameof(LocalModelsToggleText));
         OnPropertyChanged(nameof(HasLocalModelFilters));
@@ -236,8 +238,20 @@ public partial class DictationSectionViewModel
         card.UseText = selected
             ? failed ? Loc.Instance["Dictation.ModelCardRetry"] : Loc.Instance["Dictation.ModelCardInUse"]
             : Loc.Instance["Dictation.ModelCardUse"];
-        card.ShowRemove = downloaded && !busy;
-        card.CanRemove = !anyBusy && !IsMigratingModelStorage;
+        card.ShowRemove = (downloaded || card.HasLink) && !busy;
+        card.CanRemove = !anyBusy && !IsMigratingModelStorage && !HasLocalModelOperation;
+        card.CanUse &= !HasLocalModelOperation;
+        card.CanDownload &= !HasLocalModelOperation;
+        card.CanTest = available && downloaded && !anyBusy && !anyDownloading && !IsRecording
+            && !IsMigratingModelStorage && !HasLocalModelOperation && _models.SupportsRawModelTest(card.ModelId);
+        card.ShowLink = !downloaded && !busy && _models.GetTranscriptionPlugin(card.ModelId)?.ModelLinking is not null;
+        card.CanLink = card.ShowLink && available && !anyBusy && !anyDownloading && !IsRecording
+            && !IsMigratingModelStorage && !HasLocalModelOperation;
+        if (card.IsLinking)
+        {
+            card.ShowProgress = true;
+            card.IsProgressIndeterminate = true;
+        }
     }
 
     [RelayCommand]

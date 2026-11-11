@@ -46,6 +46,16 @@ Key rules for catalog and settings handling:
 
 [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppCatalogTests.cs|Catalog tests]] reject malformed paths, revisions, metadata, and duplicates. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppModelStoreTests.cs|Storage tests]] cover resume, corruption, cancellation, ownership, symlinks, disk space, and model leases.
 
+### Verified external model links
+
+[[src/TypeWhisper.PluginSDK/ITranscriptionModelLinking.cs|Optional linking]] verifies an exact catalog artifact while preserving external ownership. Providers without the capability keep ordinary download behavior.
+
+[[src/TypeWhisper.Linux/Services/ModelManagerService.ModelLinking.cs|The host]] uses the model lock and per-model file slot. [[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.ModelLinking.cs|The isolation proxy]] rejects replacement of a loaded model before touching the host file store. No native initialization or provider selection is needed to link a file.
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.ModelLinking.cs|Settings linking controls]] use a local GGUF file picker and show verification progress, cancellation, failures, and the external source path. Linked models say Unlink in both removal controls and confirmation dialogs. A stale link remains removable when its source disappears. The source is never moved or deleted. Linking does not change the default model, and recording cancels an in-progress link to release the model lock.
+
+[[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppPluginTests.cs|Plugin tests]] check verified readiness, ownership, unloaded-only replacement, and no native initialization or settings writes. [[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Control tests]] cover link readiness, cancellation, inline failures, unlink wording, and unchanged selection.
+
 ## Acceleration and Native Runtimes
 
 Plugins utilizing hardware acceleration must verify native library availability and GPU compatibility before binding execution backends.
@@ -116,6 +126,18 @@ Search matches model names, provider labels, and provider-qualified identities a
 [[src/TypeWhisper.Linux/ViewModels/Sections/LocalModelCard.cs|Model cards]] distinguish download size from memory requirements. They display known capabilities, publisher license terms, and reference results with their dataset, language, metric, conditions, and source. Unknown metadata remains unknown. Availability restrictions disable download and use, but downloaded files can still be removed. GPU compatibility is not inferred from catalog presence.
 
 [[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Browser tests]] cover intersections, unknown metadata, hidden search matches, selected and downloading cards, restrictions, and progress preservation across six interface languages. [[tests/TypeWhisper.UiTests/LocalModelCardListTests.cs|Rendered tests]] exercise search bindings and visibility without binding errors.
+
+### Raw local model tests
+
+[[src/TypeWhisper.Linux/Services/ModelManagerService.Testing.cs|Raw model tests]] use the public English LibriSpeech fixture under the model lease lock. They never enter cleanup, delivery, history, dictionary usage, learning, or statistics processing.
+
+Only isolated providers can test without mirroring temporary selection into host settings. Another model runs in a disposable worker with a private execution preference and current native device resolution. Auto keeps its bounded CPU fallback policy. The live model is not evicted to make memory available for a test. A matching loaded model instead uses its existing worker, avoiding a second exclusive file lease. Different hardware for that same loaded file requires an explicit reload or unload.
+
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Testing.cs|The worker test operation]] names its target directly and never calls the host selection or load-mirroring methods. Worker setting writes remain memory-only. Results report the device confirmed for that test, separately from ongoing execution. Missing on-demand GPU runtimes require explicit preparation rather than test-triggered provisioning.
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.ModelTesting.cs|Test controls]] show raw text or an error, pin the busy card through filters, and disable conflicting file operations. Recording cancels the test. A private deadline is a failure, not caller cancellation or partial success. Interface-language changes refresh labels without replacing the operation result. [[tests/fixtures/README.md|Fixture attribution]] ships with the app.
+
+[[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Real-worker tests]] cover temporary selection isolation, settings preservation, same-model reuse, Auto fallback, faults, and cancellation. [[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Control tests]] cover lease conflicts, recording cancellation, raw results, and no default changes. [[tests/TypeWhisper.UiTests/LocalModelCardListTests.cs|Rendered controls]] bind both cancellation actions to the generic cancel label rather than the download action.
 
 ### Optional model metadata
 

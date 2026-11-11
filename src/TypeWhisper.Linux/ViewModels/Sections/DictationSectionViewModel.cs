@@ -488,7 +488,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AccessibilityBridgeActivated && _settings.Current.AccessibilityBridgeEnabledByApp;
 
     public bool CanDeleteSelectedModel =>
-        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId) && !_models.IsDownloading(selected.ModelId);
+        SelectedModel is { } selected && !HasLocalModelOperation && _models.CanDeleteModel(selected.ModelId) && !_models.IsDownloading(selected.ModelId);
 
     // The loader-path fix only applies when the system CUDA libraries exist on disk but
     // aren't currently loadable. Once they are loadable (HasCudaRuntimeLibraries) there is
@@ -912,7 +912,8 @@ public partial class DictationSectionViewModel : ObservableObject
             await _modelSelectionCts.CancelAsync();
         }
 
-        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", label);
+        var isLinked = IsLocalModelLinked(modelId);
+        StatusText = Loc.Instance.GetString(isLinked ? "Dictation.ModelUnlinking" : "Dictation.DeletingModel", label);
 
         try
         {
@@ -927,7 +928,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 SelectedModel = null;
             }
 
-            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", label);
+            StatusText = Loc.Instance.GetString(isLinked ? "Dictation.ModelUnlinked" : "Dictation.ModelDeleted", label);
         }
         catch (Exception ex)
         {
