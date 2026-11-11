@@ -11,6 +11,7 @@
 #   TypeWhisper-<version>-x86_64.AppImage
 #   typewhisper_<version>_amd64.deb
 #   typewhisper-<version>-1.x86_64.rpm
+#   transcribe-cpp-linux-x64-<version>.zip (independent plugin, matching host SDK)
 #
 # Tooling required: dotnet, git, curl, python3, cmake, and a C/C++ build toolchain, plus:
 #   tar gzip                 (tar.gz)
@@ -237,6 +238,13 @@ rm -f "$BUNDLE_IDENTITY_PATH"
 compute_bundle_identity "$PUBLISH_DIR/Plugins" >"$BUNDLE_IDENTITY_PATH"
 # The deployer must read this as any user; don't inherit a restrictive umask.
 chmod 0644 "$BUNDLE_IDENTITY_PATH"
+
+# Validate the complete native closure after pruning, then ship an independent
+# plugin ZIP built against this host's SDK. Do not bundle a private SDK copy.
+echo "==> Building independent transcribe.cpp plugin ZIP"
+python3 "$ROOT/scripts/package-transcribe-plugin.py" \
+  "$PUBLISH_DIR/Plugins/com.typewhisper.transcribe-cpp" \
+  "$OUTPUT_DIR/transcribe-cpp-linux-x64-${VERSION}.zip"
 
 # ---------- tar.gz (the JustWorks fallback) ----------
 echo "==> Building tar.gz"

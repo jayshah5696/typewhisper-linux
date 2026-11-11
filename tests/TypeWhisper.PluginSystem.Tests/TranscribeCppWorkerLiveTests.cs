@@ -22,8 +22,10 @@ public sealed class TranscribeCppWorkerLiveTests(ITestOutputHelper output)
         var external = Path.GetFullPath(Environment.GetEnvironmentVariable("TYPEWHISPER_TRANSCRIBE_LIVE_MODEL")!);
         var catalog = TranscribeModelCatalog.LoadEmbedded();
         var definition = catalog.Models.Single(model => model.Filename == Path.GetFileName(external));
-        var package = Path.Combine(root, "src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.transcribe-cpp");
-        var executable = Path.Combine(root, "src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper");
+        var package = Environment.GetEnvironmentVariable("TYPEWHISPER_TRANSCRIBE_LIVE_PACKAGE")
+            ?? Path.Combine(root, "src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.transcribe-cpp");
+        var executable = Environment.GetEnvironmentVariable("TYPEWHISPER_TRANSCRIBE_LIVE_HOST")
+            ?? Path.Combine(root, "src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper");
         var scratch = Path.Combine(Path.GetTempPath(), "tw-gguf-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(scratch);
         var before = new FileInfo(external).LastWriteTimeUtc;

@@ -105,6 +105,14 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 
 [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppNativeTests.cs|Native boundary tests]] cover host probe refusal, device exclusions, input validation, audio coverage, and incomplete results. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppPluginTests.cs|Plugin lifetime tests]] check file leases, failed loads, cancellation before unload, repeated text, and prompt separation. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in real-worker test]] checks packaged CPU and exact Vulkan execution, external-file preservation, CPU module exclusion, and an utterance beyond Moonshine's native audio limit.
 
+### GGUF package verification
+
+[[scripts/package-transcribe-plugin.py#build_package|The independent plugin packager]] verifies the complete native closure before publishing the ZIP. App packaging invokes it after pruning the final plugin payload.
+
+The ZIP contains the entry point, dependency metadata, pinned CPU/Vulkan libraries, CPU dispatch modules, and license notices. It excludes a private PluginSDK and optional CUDA files. [[scripts/package-transcribe-plugin.py#validate_contents|Content validation]] checks the archived bytes against the reviewed pin and header contract, including changes during packaging. [[tests/verification/test_transcribe_plugin_package.py|Package tests]] cover corruption, missing notices, stale files, symlinks, entry points, and atomic failure.
+
+[[scripts/verification/transcribe-cpp.md|Package verification]] combines the actual host loader, distribution container smoke checks, and opt-in worker tests against extracted packages. [[scripts/verification/transcribe_cpu_probe.c|The CPU probe]] checks native inference and mapped modules under constrained QEMU CPU profiles without GPU libraries. These checks do not establish GPU-family compatibility or performance.
+
 ### Explicit CUDA preparation
 
 [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.Cuda.cs|CUDA preparation]] downloads and verifies files only after the Settings action. It does not initialize native libraries in the host or change the requested mode or active worker.

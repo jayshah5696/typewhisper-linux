@@ -36,6 +36,8 @@ Changing model storage unloads the active worker under the model-manager lock an
 
 Build with `just build-release` and run `just verify-plugins`. Ordinary tests use synthetic weights and do not download the model catalog.
 
+App packaging also produces an independent plugin ZIP against the matching host SDK. The packager rejects missing, extra, corrupt, or symlinked files and rechecks the archived native bytes against the complete pin. The ZIP excludes PluginSDK, model weights, and optional CUDA files. See [package checks](../../../scripts/verification/transcribe-cpp.md) for extracted-payload loader checks, GPU-free container inference, CPU instruction dispatch, and distribution smoke commands.
+
 An optional real-worker test uses an existing pinned Moonshine Streaming Medium Q8_0 GGUF read-only. It verifies its digest before linking it into a temporary store. It does not change the source file or the installed app.
 
 ```sh
@@ -60,4 +62,6 @@ The archive test installs into a temporary directory, verifies the complete pinn
 
 Without the Vulkan flag, the model test uses CPU only. With it, the test requires a discovered hardware Vulkan device and refuses CPU fallback. It prints the loaded device and, where available, the worker's Linux DRM compute counter before and after inference. It checks batch and streaming results for the public fixture and a 95-second recording with an utterance after Moonshine's native input limit. Streaming must produce a nonempty preview, exactly one short-recording final, and two long-recording windows. This checks audio-window coverage, not continuous-speech boundary accuracy.
 
-This artifact does not establish compatibility with ARM64 or every GPU. Other model architectures, long uninterrupted speech, distribution baselines, and GPU families need their own checks before making those claims.
+A GPU-free Ubuntu 24.04 container has passed the packaged worker's CPU batch and streaming checks. The native CPU probe has also transcribed the fixture under QEMU's qemu64 and Nehalem profiles without AVX, selecting the baseline x64 and SSE4.2 modules respectively. These correctness checks are not performance measurements.
+
+This artifact does not establish compatibility with ARM64 or every GPU. Other model architectures, long uninterrupted speech, and GPU families need their own checks before making those claims.
