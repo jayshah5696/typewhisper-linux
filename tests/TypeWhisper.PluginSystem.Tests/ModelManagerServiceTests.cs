@@ -1836,6 +1836,83 @@ public class ModelManagerServiceTests
         Assert.Equal(0, fake.LoadCallCount);
     }
 
+    [Fact]
+    public async Task EnsureModelLoaded_ManualDeviceChangeReloadsAndMissingDeviceDoesNotFallBack()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        var settings = new AppSettings { SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan };
+        _settings.Setup(s => s.Current).Returns(() => settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+
+        settings = settings.WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:0000:64:00.0");
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(2, fake.LoadCallCount);
+        Assert.Equal("pci:0000:64:00.0", hardware.Request?.Device.StableId);
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(2, fake.LoadCallCount);
+
+        settings = settings.WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:missing");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.EnsureModelLoadedAsync(modelId));
+        Assert.Contains("pci:missing", error.Message);
+        Assert.Contains("Select CPU", error.Message);
+        Assert.Equal(2, fake.LoadCallCount);
+        Assert.Equal(AppSettings.LocalModelAccelerationVulkan, settings.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoaded_FailedHardwareReconfigurationCannotReuseOldLoadCache()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var settings = new AppSettings { LocalModelAcceleration = "vulkan" };
+        _settings.Setup(s => s.Current).Returns(() => settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        await sut.EnsureModelLoadedAsync(modelId);
+        settings = settings.WithLocalModelDevice("hardware", "vulkan", "pci:0000:64:00.0");
+        fake.LoadFault = new InvalidOperationException("GPU load failed after worker replacement");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.EnsureModelLoadedAsync(modelId));
+        settings = settings.WithLocalModelDevice("hardware", "vulkan", null);
+        fake.LoadFault = null;
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(3, fake.LoadCallCount);
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoaded_AutoIgnoresSavedExplicitDeviceAndOtherProviders()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var settings = new AppSettings()
+            .WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:missing")
+            .WithLocalModelDevice("other", AppSettings.LocalModelAccelerationVulkan, "other-device");
+        _settings.Setup(s => s.Current).Returns(settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await sut.EnsureModelLoadedAsync(ModelManagerService.GetPluginModelId("hardware", "parakeet"));
+
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+        Assert.Equal(TranscriptionAccelerationPreference.Auto, hardware.Request?.RequestedPreference);
+        Assert.Equal("other-device", settings.GetLocalModelDevice("other", AppSettings.LocalModelAccelerationVulkan));
+    }
+
     private sealed class FakeHardwareSelection : ITranscriptionHardwareSelection
     {
         public string? DiscoveredModelId { get; private set; }
@@ -1850,6 +1927,7 @@ public class ModelManagerServiceTests
             return Task.FromResult<IReadOnlyList<TranscriptionDevice>>([
                 new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
                 new(TranscriptionAccelerationBackend.Vulkan, "pci:0000:64:00.0", "780M", TranscriptionDeviceKind.IntegratedGpu),
+                new(TranscriptionAccelerationBackend.Vulkan, "pci:discrete", "Discrete GPU", TranscriptionDeviceKind.DiscreteGpu),
             ]);
         }
         public void ConfigureHardware(TranscriptionHardwareRequest request) => Request = request;

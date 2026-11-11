@@ -66,6 +66,32 @@ public sealed class TranscribeCppNativeTests
     }
 
     [Fact]
+    public void WaveReaderAcceptsCompleteFfmpegPipeOutputWithUnknownRiffAndFinalDataSizes()
+    {
+        var wav = Wave([short.MinValue, 0, short.MaxValue], extraChunk: true);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(4), uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(52), uint.MaxValue);
+        var pcm = TranscribeAudio.ReadWave(wav);
+        Assert.Equal([-1f, 0f, short.MaxValue / 32768f], pcm);
+    }
+
+    [Fact]
+    public void WaveReaderStillRejectsTruncationAndUnknownNonDataChunksInPipeOutput()
+    {
+        var wav = Wave([1, 2]);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(4), uint.MaxValue);
+        Assert.Throws<InvalidDataException>(() => TranscribeAudio.ReadWave(wav[..^2]));
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40), uint.MaxValue);
+        Assert.Throws<InvalidDataException>(() => TranscribeAudio.ReadWave(wav[..^1]));
+        var finiteRiff = wav.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(finiteRiff.AsSpan(4), (uint)finiteRiff.Length - 8);
+        Assert.Throws<InvalidDataException>(() => TranscribeAudio.ReadWave(finiteRiff));
+        var unknownFormat = wav.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(unknownFormat.AsSpan(16), uint.MaxValue);
+        Assert.Throws<InvalidDataException>(() => TranscribeAudio.ReadWave(unknownFormat));
+    }
+
+    [Fact]
     public void InvalidOrMismatchedWaveNeverReachesInference()
     {
         Assert.Throws<InvalidDataException>(() => TranscribeAudio.ReadWave(new byte[44]));

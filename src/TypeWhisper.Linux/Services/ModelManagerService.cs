@@ -28,6 +28,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly ConcurrentDictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
+    private string? _activeModelDeviceId;
     private string? _activeModelId;
     // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
     // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
@@ -1242,9 +1243,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
-            var requestedPreference = GetAccelerationPreference(
-                _settings.Current.LocalModelAcceleration
-            );
+            var hardwareSettings = _settings.Current;
+            var requestedPreference = GetAccelerationPreference(hardwareSettings.LocalModelAcceleration);
+            var requestedDeviceId = plugin.HardwareSelection is null ? null
+                : hardwareSettings.GetLocalModelDevice(pluginId, hardwareSettings.LocalModelAcceleration);
             var pluginSupportsCuda = plugin.SupportedAccelerationBackends.Contains(
                 TranscriptionAccelerationBackend.NvidiaCuda
             );
@@ -1280,7 +1282,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 }
 
                 hardwareRequest = TranscriptionHardwareSelector.Resolve(requestedPreference,
-                    devices.Where(device => plugin.SupportedAccelerationBackends.Contains(device.Backend)).ToArray());
+                    devices.Where(device => plugin.SupportedAccelerationBackends.Contains(device.Backend)).ToArray(), requestedDeviceId);
                 resolvedPreference = TranscriptionHardwareSelector.ToPreference(hardwareRequest.Device.Backend);
             }
             else if (pluginSupportsCuda)
@@ -1333,6 +1335,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 }
             }
 
+            if (hardwareRequest is not null)
+            {
+                // Configuring can replace the live worker before loading succeeds. The old
+                // cache must not later claim that this discarded execution is reusable.
+                _activeModelAccelerationPreference = null;
+                _activeModelDeviceId = null;
+            }
+
             plugin.SetAccelerationPreference(resolvedPreference);
             if (hardwareRequest is not null)
             {
@@ -1362,6 +1372,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
+            _activeModelDeviceId = requestedDeviceId;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1410,6 +1421,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         ClearStatus(modelId);
         ActiveModelId = null;
         _activeModelAccelerationPreference = null;
+        _activeModelDeviceId = null;
     }
 
     /// <summary>
@@ -1499,6 +1511,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
             ActiveModelId = null;
             _activeModelAccelerationPreference = null;
+            _activeModelDeviceId = null;
         }
 
         if (IsPluginModel(modelId))
@@ -1528,13 +1541,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        var targetPreference = GetAccelerationPreference(
-            _settings.Current.LocalModelAcceleration
-        );
+        var hardwareSettings = _settings.Current;
+        var targetPreference = GetAccelerationPreference(hardwareSettings.LocalModelAcceleration);
+        var targetPlugin = GetTranscriptionPlugin(targetModelId);
+        var targetDeviceId = targetPlugin?.HardwareSelection is null ? null
+            : hardwareSettings.GetLocalModelDevice(targetPlugin.GetTranscriptionSelectionId(), hardwareSettings.LocalModelAcceleration);
 
         if (
             ActiveModelId == targetModelId
             && _activeModelAccelerationPreference == targetPreference
+            && _activeModelDeviceId == targetDeviceId
         )
         {
             CancelAutoUnload();

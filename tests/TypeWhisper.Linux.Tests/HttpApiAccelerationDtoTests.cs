@@ -144,6 +144,26 @@ public class HttpApiAccelerationDtoTests
         Assert.Equal("Vulkan allocation failed", json.GetProperty("fallbackReason").GetString());
     }
 
+    [Fact]
+    public void BuildAccelerationDto_ManualRequestRemainsSeparateFromConfirmedDevice()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan")
+            {
+                IsModelLoaded = true,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Vulkan, "pci:old", "Old GPU", TranscriptionDeviceKind.IntegratedGpu),
+            },
+        };
+        var settings = (AppSettings.Default with { LocalModelAcceleration = "vulkan" })
+            .WithLocalModelDevice("fake", "vulkan", "pci:requested");
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, settings));
+        Assert.Equal("pci:requested", json.GetProperty("requestedDeviceStableId").GetString());
+        Assert.Equal("pci:old", json.GetProperty("activeDevice").GetProperty("stableId").GetString());
+        var auto = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, settings with { LocalModelAcceleration = "auto" }));
+        Assert.Equal(JsonValueKind.Null, auto.GetProperty("requestedDeviceStableId").ValueKind);
+    }
+
     private sealed class FakeAccelerationPlugin : ITranscriptionEnginePlugin
     {
         public string PluginId => "fake";

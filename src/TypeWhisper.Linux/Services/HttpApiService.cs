@@ -777,6 +777,7 @@ public sealed partial class HttpApiService : IDisposable
         return new
         {
             preference = AppSettings.NormalizeLocalModelAcceleration(settings.LocalModelAcceleration),
+            requestedDeviceStableId = settings.GetLocalModelDevice(plugin.GetTranscriptionSelectionId(), settings.LocalModelAcceleration),
             activeBackend = status.IsModelLoaded == false ? null : FormatAccelerationBackend(status.ActiveBackend),
             displayText = status.DisplayText,
             detail = status.Detail,

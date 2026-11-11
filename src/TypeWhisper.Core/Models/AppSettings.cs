@@ -96,6 +96,51 @@ public record AppSettings
     public string? SelectedModelId { get; init; }
     public string LocalModelAcceleration { get; init; } = LocalModelAccelerationAuto;
 
+    // Provider selection id -> explicit backend -> native stable device id. Auto never pins a device.
+    public Dictionary<string, Dictionary<string, string>> LocalModelDevices
+    {
+        get;
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
+
+    public string? GetLocalModelDevice(string providerId, string backend)
+    {
+        var normalized = NormalizeLocalModelAcceleration(backend);
+        if (normalized is LocalModelAccelerationAuto or LocalModelAccelerationCpu)
+        {
+            return null;
+        }
+
+        return LocalModelDevices.TryGetValue(providerId, out var devices)
+            && devices is not null && devices.TryGetValue(normalized, out var id)
+            && !string.IsNullOrWhiteSpace(id) ? id : null;
+    }
+
+    public AppSettings WithLocalModelDevice(string providerId, string backend, string? stableId)
+    {
+        var normalized = NormalizeLocalModelAcceleration(backend);
+        if (normalized is LocalModelAccelerationAuto or LocalModelAccelerationCpu)
+        {
+            return this;
+        }
+
+        var providers = new Dictionary<string, Dictionary<string, string>>(LocalModelDevices);
+        var devices = providers.TryGetValue(providerId, out var saved) && saved is not null
+            ? new Dictionary<string, string>(saved) : new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(stableId))
+        {
+            devices.Remove(normalized);
+        }
+        else
+        {
+            devices[normalized] = stableId;
+        }
+
+        providers[providerId] = devices;
+        return this with { LocalModelDevices = providers };
+    }
+
     // Custom on-disk location for large local model assets. Null = default app-data path.
     public string? LocalModelStoragePath { get; init; }
 

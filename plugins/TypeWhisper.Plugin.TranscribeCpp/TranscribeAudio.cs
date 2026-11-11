@@ -9,8 +9,13 @@ internal static class TranscribeAudio
     internal static float[] ReadWave(byte[] wav)
     {
         var span = wav.AsSpan();
-        if (span.Length < 12 || !span[..4].SequenceEqual("RIFF"u8) || !span.Slice(8, 4).SequenceEqual("WAVE"u8)
-            || BinaryPrimitives.ReadUInt32LittleEndian(span[4..]) != (uint)(span.Length - 8))
+        if (span.Length < 12 || !span[..4].SequenceEqual("RIFF"u8) || !span.Slice(8, 4).SequenceEqual("WAVE"u8))
+            throw new InvalidDataException("Expected a complete RIFF/WAVE recording.");
+        // The host's ffmpeg pipe cannot seek back to fill RIFF/data lengths. Only
+        // that explicit sentinel may consume the remaining, already-buffered PCM.
+        var riffSize = BinaryPrimitives.ReadUInt32LittleEndian(span[4..]);
+        var pipeWave = riffSize == uint.MaxValue;
+        if (!pipeWave && riffSize != (uint)(span.Length - 8))
             throw new InvalidDataException("Expected a complete RIFF/WAVE recording.");
         var formatFound = false;
         ReadOnlySpan<byte> audio = [];
@@ -18,6 +23,8 @@ internal static class TranscribeAudio
         {
             if (span.Length - offset < 8) throw new InvalidDataException("Incomplete WAVE chunk header.");
             var size = BinaryPrimitives.ReadUInt32LittleEndian(span[(offset + 4)..]);
+            if (pipeWave && formatFound && size == uint.MaxValue && span.Slice(offset, 4).SequenceEqual("data"u8))
+                size = (uint)(span.Length - offset - 8);
             if (size > int.MaxValue || size > span.Length - offset - 8)
                 throw new InvalidDataException("Incomplete WAVE audio chunk.");
             var chunk = span.Slice(offset + 8, (int)size);

@@ -176,6 +176,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _isModelDownloading;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRetryLocalModelOnCpu))]
     private bool _isRecording;
 
     [ObservableProperty]
@@ -264,6 +265,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private bool _soundFeedbackEnabled = true;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AccelerationStatusText))]
     private string _statusText = Loc.Instance["Dictation.StatusPressHotkey"];
 
     [ObservableProperty]
@@ -380,13 +382,17 @@ public partial class DictationSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(() => LastCapturePath = path);
 
         _dictation.TranscriptionCompleted += (_, text) =>
-            Dispatcher.UIThread.Post(() => LastTranscription = text);
+            Dispatcher.UIThread.Post(() =>
+            {
+                LastTranscription = text;
+                OnPropertyChanged(nameof(AccelerationStatusText));
+            });
 
         _dictation.StatusMessage += (_, msg) => Dispatcher.UIThread.Post(() => StatusText = msg);
 
         _audio.LevelChanged += OnLevelChanged;
         _models.PropertyChanged += (_, _) => dispatchNotification(OnModelStatusChanged);
-        _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
+        _pluginManager.PluginStateChanged += (_, _) => dispatchNotification(RefreshModels);
         _pluginManager.PluginStateChanged += (_, _) => dispatchNotification(RefreshLiveCleanupAvailability);
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
@@ -581,12 +587,18 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         get
         {
+            if (ShowLocalModelDevices || _models.ActiveTranscriptionPlugin?.HardwareSelection is not null)
+            {
+                return NativeHardwareStatusText();
+            }
+
             var status = _models.ActiveTranscriptionPlugin?.AccelerationStatus;
             if (status is null)
             {
                 return LocalModelAcceleration switch
                 {
-                    AppSettings.LocalModelAccelerationCpu => Loc.Instance["Dictation.AccelCpuActive"],
+                    AppSettings.LocalModelAccelerationCpu => _models.ActiveModelId is null
+                        ? Loc.Instance["Dictation.HardwareUnloaded"] : Loc.Instance["Dictation.AccelCpuActive"],
                     AppSettings.LocalModelAccelerationNvidiaCuda when !CanUseCuda =>
                         _cudaLibraryPathSetup.FindCuda12LibraryPath() is null
                             ? Loc.Instance["Dictation.AccelCudaNotInstalled"]
@@ -1018,11 +1030,12 @@ public partial class DictationSectionViewModel : ObservableObject
         return Devices.FirstOrDefault(d => d.PersistentId == resolved.PersistentId) ?? resolved;
     }
 
+    private bool _isRefreshingModelOptions;
+
     private void RefreshModels()
     {
         var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;
-
-        ModelOptions.Clear();
+        var options = new List<DictationModelOption>();
         foreach (var engine in _pluginManager.TranscriptionEngines)
         {
             foreach (var model in engine.TranscriptionModels)
@@ -1030,7 +1043,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 var fullModelId = ModelManagerService.GetPluginModelId(
                     engine.GetTranscriptionSelectionId(),
                     model.Id);
-                ModelOptions.Add(
+                options.Add(
                     new DictationModelOption(
                         fullModelId,
                         model.DisplayName,
@@ -1040,7 +1053,17 @@ public partial class DictationSectionViewModel : ObservableObject
             }
         }
 
-        SelectedModel = ModelOptions.FirstOrDefault(option => option.ModelId == previousSelectedId);
+        if (!ModelOptions.SequenceEqual(options))
+        {
+            _isRefreshingModelOptions = true;
+            try
+            {
+                ReplaceCollection(ModelOptions, options);
+                SelectedModel = ModelOptions.FirstOrDefault(option => option.ModelId == previousSelectedId);
+            }
+            finally { _isRefreshingModelOptions = false; }
+        }
+
         RebuildLocalModelCards();
         RefreshModelState();
     }
@@ -1586,6 +1609,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshModelState()
     {
         RefreshLocalModelCards(checkDisk: false);
+        RefreshLocalModelHardware();
         _lastModelStateSnapshot = CaptureModelStateSnapshot();
         RefreshSpokenFormattingVerification();
         OnPropertyChanged(nameof(AccelerationHelpText));
@@ -1633,6 +1657,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnSelectedModelChanged(DictationModelOption? value)
     {
+        if (_isRefreshingModelOptions) { return; }
         if (value is null || _settings.Current.SelectedModelId == value.ModelId)
         {
             RefreshModelState();
@@ -1662,9 +1687,11 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
+        RefreshLocalModelHardware();
+        var usesNativeDevices = ShowLocalModelDevices;
 
         // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent availability guards with their own revert handling; braced switch arms read worse.
-        if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
+        if (!usesNativeDevices && normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
             var supportsVulkan = SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
                 TranscriptionAccelerationBackend.Vulkan) == true;
@@ -1679,8 +1706,8 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
-        if ((normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
-            || (normalized == AppSettings.LocalModelAccelerationWebGpu && !CanUseWebGpu))
+        if (!usesNativeDevices && ((normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
+            || (normalized == AppSettings.LocalModelAccelerationWebGpu && !CanUseWebGpu)))
         {
             var message = normalized == AppSettings.LocalModelAccelerationAmdMigraphx
                 ? "AMD MIGraphX is available only for supported sherpa-onnx local models."
@@ -1695,7 +1722,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         // Guard: CUDA can't be selected when unavailable; Auto always works and resolves to CPU.
-        if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
+        if (!usesNativeDevices && normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
         {
             // Three distinct cases: no GPU; GPU + libs found but not on loader path; libs not installed.
             var message =
@@ -1744,6 +1771,8 @@ public partial class DictationSectionViewModel : ObservableObject
         if (
             _models.ActiveTranscriptionPlugin is not null
             && SelectedModel is { } selected
+            && !_skipHardwareReload
+            && (!usesNativeDevices || _models.ActiveModelId == selected.ModelId)
             && _models.IsDownloaded(selected.ModelId)
         )
         {

@@ -63,6 +63,16 @@ The optional [[src/TypeWhisper.PluginSDK/ITranscriptionHardwareSelection.cs|hard
 
 [[src/TypeWhisper.PluginSDK/Models/TranscriptionDevice.cs|The hardware request]] retains the original Auto or explicit intent while the legacy setter receives a concrete backend. [[src/TypeWhisper.PluginSDK/Models/TranscriptionAccelerationStatus.cs|Execution status]] can report loaded state, a confirmed device, and a fallback reason separately. [[src/TypeWhisper.Linux/Services/HttpApiService.cs|The diagnostic API]] omits active backend and device facts for a confirmed unloaded model. Legacy unknown loaded state preserves existing API behavior.
 
+### Manual device controls
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.Hardware.cs|Device controls]] keep the requested mode separate from preparation and confirmed execution. Opening Settings does not discover devices or save settings.
+
+Explicit refresh uses a disposable discovery worker with a deadline shorter than the worker boundary. Model changes cancel discovery and reject stale results. Choices exclude unsupported, unavailable, and software devices. Collection changes are deferred and occur only when relevant state changes. Unchanged provider model lists preserve selector items and discovered devices.
+
+[[src/TypeWhisper.Core/Models/AppSettings.cs|Hardware settings]] store stable device identities per provider and explicit backend. Auto and CPU ignore saved GPU identities. Missing saved devices remain visible only for their provider and backend. [[src/TypeWhisper.Linux/Services/ModelManagerService.cs|Model loading]] includes the requested identity in its cache comparison and invalidates the old configuration before a worker replacement can fail. Explicit choices never silently revert to CPU. The CPU retry action loads the same downloaded model without probing GPU drivers.
+
+Confirmed backend and device appear only for a loaded execution. Fallback causes remain separate, including after unload. [[src/TypeWhisper.Linux/Services/HttpApiService.cs|The diagnostic API]] reports the requested stable identity separately from the active device. [[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Control tests]] cover explicit discovery, stale results, deferred localization, unchanged provider notifications, truthful unloaded status, and CPU retry. [[tests/TypeWhisper.Core.Tests/Models/AppSettingsTests.cs|Settings tests]] cover old files, null maps, persistence, and preserving other provider and backend choices.
+
 ### Isolated native device selection
 
 [[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Hardware.cs|The worker hardware proxy]] discovers devices in a disposable process. Discovery does not replace a loaded model worker or report active execution.
@@ -79,7 +89,7 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 
 [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeNativeRuntime.cs|The native adapter]] validates ABI layouts before native initializers, resolves exact backend and stable device identities, and checks the loaded device. CPU registration excludes GPU modules. Sessions retain their model handles, and cancellation settles native work before freeing either handle. Borrowed text is copied before session mutation or disposal. Dictionary terms use only the native vocabulary capability, not transcript instructions.
 
-[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeAudio.cs|Audio adaptation]] validates RIFF chunks and converts PCM16 mono 16 kHz to native float samples. Bounded, non-overlapping windows prefer quiet boundaries and retain every sample. Native abort or output truncation is an error rather than partial success. This does not promise lossless word recognition at continuous-speech window cuts.
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeAudio.cs|Audio adaptation]] validates RIFF chunks and converts PCM16 mono 16 kHz to native float samples. It accepts ffmpeg pipe output only through explicit unknown-length RIFF and final data sentinels. Finite chunk lengths, format fields, and complete PCM16 samples remain checked. Bounded, non-overlapping windows prefer quiet boundaries and retain every sample. Native abort or output truncation is an error rather than partial success. This does not promise lossless word recognition at continuous-speech window cuts.
 
 [[scripts/prepare-transcribe-native.py|Artifact preparation]] verifies the pinned archive and complete file hashes before publishing libraries and license notices. [[plugins/TypeWhisper.Plugin.TranscribeCpp/Native/runtime.json|The artifact pin]] covers CPU dispatch modules and optional Vulkan dependencies. The plugin requires no Node runtime, inference server, or T3 installation.
 

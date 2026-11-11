@@ -234,6 +234,30 @@
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
+                            <StackPanel Spacing="8" IsVisible="{Binding ShowLocalModelDevices}">
+                                <TextBlock Text="{loc:Str Dictation.HardwareDevice}" Classes="row-label" />
+                                <ComboBox AutomationProperties.Name="{loc:Str Dictation.HardwareDevice}"
+                                          ItemsSource="{Binding LocalModelDeviceOptions}"
+                                          SelectedItem="{Binding SelectedLocalModelDevice}"
+                                          IsEnabled="{Binding CanSelectLocalModelDevice}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:LocalModelDeviceOption">
+                                            <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                                    <Button Content="{loc:Str Dictation.HardwareRefresh}"
+                                            Command="{Binding RefreshLocalModelDevicesCommand}"
+                                            IsEnabled="{Binding !IsDiscoveringLocalModelDevices}" />
+                                    <Button Content="{loc:Str Dictation.HardwareRetryCpu}"
+                                            Command="{Binding RetryLocalModelOnCpuCommand}"
+                                            IsEnabled="{Binding CanRetryLocalModelOnCpu}" />
+                                </WrapPanel>
+                                <TextBlock Text="{Binding LocalModelDeviceDiscoveryText}" FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
                             <TextBlock Text="{Binding AccelerationStatusText}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TwTextSecondaryBrush}"
@@ -264,7 +288,7 @@
                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                            TextWrapping="Wrap" />
                 <TextBox Text="{Binding LocalModelSearch}"
-                         Watermark="{loc:Str Dictation.ModelSearch}"
+                         PlaceholderText="{loc:Str Dictation.ModelSearch}"
                          AutomationProperties.Name="{loc:Str Dictation.ModelSearch}" />
                 <WrapPanel ItemSpacing="12" LineSpacing="6">
                     <CheckBox Content="{loc:Str Dictation.ModelFilterLive}"

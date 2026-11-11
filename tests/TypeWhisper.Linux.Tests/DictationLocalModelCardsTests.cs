@@ -329,15 +329,184 @@ public sealed class DictationLocalModelCardsTests
         Assert.True(card.CanRemove);
     }
 
+    [Fact]
+    public async Task Devices_OpeningAndChangingModeNeverProbesOrSavesAndRefreshIsExplicit()
+    {
+        var hardware = new HardwareProbe();
+        var local = new DownloadableEngine { HardwareSelection = hardware };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small") }
+            .WithLocalModelDevice(local.PluginId, "vulkan", "pci:saved");
+        using var context = new CardsTestContext(settings, local);
+        context.Settings.Invocations.Clear();
+        Assert.True(context.Sut.ShowLocalModelDevices);
+        Assert.Equal(0, hardware.Calls);
+        context.Sut.LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan;
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:saved"));
+        Assert.Equal(AppSettings.LocalModelAccelerationVulkan, context.Settings.Object.Current.LocalModelAcceleration);
+        Assert.Equal("pci:saved", context.Sut.SelectedLocalModelDevice?.StableId);
+        Assert.Equal(0, hardware.Calls);
+        context.Settings.Invocations.Clear();
+
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+        Assert.Equal(1, hardware.Calls);
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "software");
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "unsupported");
+        Assert.Contains(context.Sut.LocalModelDeviceOptions, option => option.StableId == "pci:saved");
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        var options = context.Sut.LocalModelDeviceOptions.ToArray();
+        context.Sut.SelectedLocalModelDevice = options.Single(option => option.StableId == "pci:gpu");
+        Assert.Equal(options, context.Sut.LocalModelDeviceOptions);
+        Assert.Equal("pci:gpu", context.Settings.Object.Current.GetLocalModelDevice(local.PluginId, "vulkan"));
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(context.Models.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task DeviceChoicesAndModelSelectorSurviveUnchangedProviderNotifications()
+    {
+        var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" }
+            .WithLocalModelDevice(local.PluginId, "vulkan", "pci:gpu");
+        using var context = new CardsTestContext(settings, local);
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+        var models = context.Sut.ModelOptions.ToArray();
+        var devices = context.Sut.LocalModelDeviceOptions.ToArray();
+        context.Settings.Invocations.Clear();
+        context.NotifyPluginStateChanged();
+        await context.WaitUntilAsync(() => true);
+        Assert.Same(models[0], context.Sut.ModelOptions[0]);
+        Assert.Same(devices[0], context.Sut.LocalModelDeviceOptions[0]);
+        Assert.Equal("pci:gpu", context.Sut.SelectedLocalModelDevice?.StableId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Devices_LateRefreshCannotReplaceChoicesForAnotherModel()
+    {
+        var hardware = new HardwareProbe { Gate = new TaskCompletionSource<IReadOnlyList<TranscriptionDevice>>() };
+        var local = new DownloadableEngine { HardwareSelection = hardware };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" };
+        using var context = new CardsTestContext(settings, local);
+        var refresh = context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => hardware.Calls == 1);
+        context.Sut.SelectedModel = null;
+        hardware.Gate.SetResult(HardwareProbe.Devices);
+        await refresh;
+        await context.WaitUntilAsync(() => !context.Sut.IsDiscoveringLocalModelDevices);
+        Assert.False(context.Sut.ShowLocalModelDevices);
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "pci:gpu");
+        Assert.Equal(0, local.LoadCount);
+    }
+
+    [Fact]
+    public async Task Devices_LanguageChangeDefersChoicesAndKeepsSavedIdentityWithoutSaving()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+            var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" }
+                .WithLocalModelDevice(local.PluginId, "vulkan", "pci:gpu");
+            using var context = new CardsTestContext(settings, local);
+            await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+            await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+            var options = context.Sut.LocalModelDeviceOptions.ToArray();
+            context.Settings.Invocations.Clear();
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(options, context.Sut.LocalModelDeviceOptions);
+            await context.WaitUntilAsync(() => !ReferenceEquals(options[0], context.Sut.LocalModelDeviceOptions[0]));
+            Assert.Equal("pci:gpu", context.Sut.SelectedLocalModelDevice?.StableId);
+            context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public async Task HardwareStatus_ReportsRequestedUnloadedThenActualDeviceAndFallbackThenUnloaded()
+    {
+        var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+        local.Downloaded.Add("small");
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "cpu" };
+        using var context = new CardsTestContext(settings, local);
+        Assert.Contains(Loc.Instance["Dictation.HardwareUnloaded"], context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain(Loc.Instance["Dictation.AccelCpuActive"], context.Sut.AccelerationStatusText);
+        await context.Models.EnsureModelLoadedAsync(settings.SelectedModelId);
+        local.AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Vulkan")
+        {
+            IsModelLoaded = true,
+            ActiveDevice = HardwareProbe.Devices[1],
+            FallbackReason = "original GPU failure",
+        };
+        Assert.Contains("Native GPU", context.Sut.AccelerationStatusText);
+        Assert.Contains("pci:gpu", context.Sut.AccelerationStatusText);
+        Assert.Contains("original GPU failure", context.Sut.AccelerationStatusText);
+        local.AccelerationStatus = local.AccelerationStatus with { IsModelLoaded = false };
+        Assert.Contains(Loc.Instance["Dictation.HardwareUnloaded"], context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain("Native GPU", context.Sut.AccelerationStatusText);
+        await context.Models.UnloadModelAsync();
+        Assert.Contains("original GPU failure", context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain("Native GPU", context.Sut.AccelerationStatusText);
+    }
+
+    [Fact]
+    public async Task HardwareCpuRetry_LoadsSameDownloadedModelEvenWhenNothingIsActive()
+    {
+        var probe = new HardwareProbe { Fault = new IOException("broken driver") };
+        var local = new DownloadableEngine { HardwareSelection = probe };
+        local.Downloaded.Add("small");
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" };
+        using var context = new CardsTestContext(settings, local);
+        context.Settings.Invocations.Clear();
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        Assert.Contains("broken driver", context.Sut.LocalModelDeviceDiscoveryText);
+        Assert.Equal("vulkan", context.Sut.LocalModelAcceleration);
+        Assert.Equal(0, local.LoadCount);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        await context.Sut.RetryLocalModelOnCpuCommand.ExecuteAsync(null);
+        Assert.Equal(1, local.LoadCount);
+        Assert.Equal(settings.SelectedModelId, context.Models.ActiveModelId);
+        Assert.Equal(settings.SelectedModelId, context.Settings.Object.Current.SelectedModelId);
+        Assert.Equal("cpu", context.Settings.Object.Current.LocalModelAcceleration);
+        Assert.Equal(1, probe.Calls);
+    }
+
+    private sealed class HardwareProbe : ITranscriptionHardwareSelection
+    {
+        public static IReadOnlyList<TranscriptionDevice> Devices { get; } =
+        [
+            new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+            new(TranscriptionAccelerationBackend.Vulkan, "pci:gpu", "Native GPU", TranscriptionDeviceKind.IntegratedGpu),
+            new(TranscriptionAccelerationBackend.Vulkan, "software", "llvmpipe", TranscriptionDeviceKind.SoftwareGpu),
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "unsupported", "CUDA", TranscriptionDeviceKind.DiscreteGpu),
+        ];
+        public int Calls { get; private set; }
+        public Exception? Fault { get; init; }
+        public TaskCompletionSource<IReadOnlyList<TranscriptionDevice>>? Gate { get; init; }
+        public Task<IReadOnlyList<TranscriptionDevice>> DiscoverDevicesAsync(string modelId, CancellationToken ct)
+        {
+            Calls++;
+            if (Fault is not null) { throw Fault; }
+            return Gate?.Task ?? Task.FromResult(Devices);
+        }
+        public void ConfigureHardware(TranscriptionHardwareRequest request) { }
+    }
+
     private sealed class CardsTestContext : IDisposable
     {
         private readonly ConcurrentQueue<Action> _pending = new();
         private readonly AudioRecordingService _audio;
         private readonly PluginManager _pluginManager;
 
-        public CardsTestContext(params ITranscriptionEngineRole[] engines)
+        public CardsTestContext(params ITranscriptionEngineRole[] engines) : this(AppSettings.Default with { SelectedModelId = null }, engines) { }
+
+        public CardsTestContext(AppSettings settings, params ITranscriptionEngineRole[] engines)
         {
-            Settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default with { SelectedModelId = null });
+            Settings = TestPluginManagerFactory.CreateSettings(settings);
             _pluginManager = TestPluginManagerFactory.Create();
             PluginManagerTestAccess.SetTranscriptionEngines(_pluginManager, engines);
             var commands = new SystemCommandAvailabilityService(new FakeProcessRunner());
@@ -368,6 +537,10 @@ public sealed class DictationLocalModelCardsTests
         public DictationSectionViewModel Sut { get; }
         public ModelManagerService Models { get; }
         public Mock<ISettingsService> Settings { get; }
+
+        public void NotifyPluginStateChanged() =>
+            ((EventHandler?)typeof(PluginManager).GetField("PluginStateChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(_pluginManager))?.Invoke(_pluginManager, EventArgs.Empty);
 
         public LocalModelCard Card(string modelId) =>
             Sut.LocalModelCards.Single(card => card.ModelId.EndsWith(":" + modelId, StringComparison.Ordinal));
@@ -424,6 +597,10 @@ public sealed class DictationLocalModelCardsTests
         ];
 
         public bool StorageUnavailable { get; init; }
+        public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
+        public TranscriptionAccelerationStatus AccelerationStatus { get; set; } = new(TranscriptionAccelerationBackend.Cpu, "CPU") { IsModelLoaded = false };
+        public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
+            [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan];
 
         public bool IsModelDownloaded(string modelId)
         {

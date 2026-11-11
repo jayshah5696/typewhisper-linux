@@ -52,7 +52,7 @@ internal static class TranscriptionHardwareSelector
         _ => throw new ArgumentOutOfRangeException(nameof(preference)),
     };
 
-    private static bool IsEligible(TranscriptionDevice device) => device.IsAvailable
+    internal static bool IsEligible(TranscriptionDevice device) => device.IsAvailable
         && !string.IsNullOrWhiteSpace(device.StableId)
         && device.Kind switch
         {
