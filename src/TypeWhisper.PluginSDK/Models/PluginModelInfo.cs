@@ -49,4 +49,25 @@ public sealed record PluginModelInfo(string Id, string DisplayName)
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public bool? SupportsTranslation { get; init; }
+
+    /// <summary>ISO language codes; null means undeclared, not universal language support.</summary>
+    public IReadOnlyList<string>? Languages { get; init; }
+
+    /// <summary>Per-model live streaming support; null preserves the engine-level legacy behavior.</summary>
+    public bool? SupportsStreaming { get; init; }
+
+    /// <summary>Per-model automatic language detection; null means unknown.</summary>
+    public bool? SupportsLanguageDetection { get; init; }
+
+    /// <summary>Original publisher license identifier or description, when reviewed.</summary>
+    public string? License { get; init; }
+
+    /// <summary>Original publisher's model terms, when known.</summary>
+    public string? LicenseUrl { get; init; }
+
+    /// <summary>Reason a listed model cannot currently be downloaded or loaded; null means no known restriction.</summary>
+    public string? UnavailableReason { get; init; }
+
+    /// <summary>Upstream measurements with provenance; null means undeclared.</summary>
+    public IReadOnlyList<PluginModelBenchmark>? ReferenceBenchmarks { get; init; }
 }

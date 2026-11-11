@@ -1752,6 +1752,109 @@ public class ModelManagerServiceTests
         return service;
     }
 
+    [Fact]
+    public async Task LoadModelAsync_HardwareCapability_PreservesAutoIntentAndUsesProviderDevices()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        var settings = new AppSettings { SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto };
+        _settings.Setup(s => s.Current).Returns(settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => throw new InvalidOperationException("Legacy preflight must not run"),
+        };
+
+        await sut.LoadModelAsync(modelId);
+
+        Assert.Equal("parakeet", hardware.DiscoveredModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.Auto, hardware.Request?.RequestedPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Vulkan, hardware.Request?.Device.Backend);
+        Assert.Equal(TranscriptionAccelerationPreference.Vulkan, fake.AccelerationPreferenceAtLoad);
+        Assert.Equal(AppSettings.LocalModelAccelerationAuto, settings.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_ExplicitCpu_DoesNotProbeGpuDevices()
+    {
+        var hardware = new FakeHardwareSelection { FailDiscovery = true };
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true) { HardwareSelection = hardware };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings
+        {
+            SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
+        });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await sut.LoadModelAsync(modelId);
+
+        Assert.Null(hardware.DiscoveredModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, hardware.Request?.RequestedPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, hardware.Request?.Device.Backend);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_HardwareCapability_RejectsDevicesNotSupportedByProvider()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings
+        {
+            SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan,
+        });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.LoadModelAsync(modelId));
+
+        Assert.Contains("Select CPU", error.Message);
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Null(hardware.Request);
+        Assert.Null(sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_HardwareDiscovery_DependencyCancellationIsNotCallerCancellation()
+    {
+        var hardware = new FakeHardwareSelection { DiscoveryFault = new OperationCanceledException("driver fault") };
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true) { HardwareSelection = hardware };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings { SelectedModelId = modelId });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => sut.LoadModelAsync(modelId));
+
+        Assert.Equal(ModelStatus.Failed("driver fault"), sut.GetStatus(modelId));
+        Assert.Equal(0, fake.LoadCallCount);
+    }
+
+    private sealed class FakeHardwareSelection : ITranscriptionHardwareSelection
+    {
+        public string? DiscoveredModelId { get; private set; }
+        public bool FailDiscovery { get; init; }
+        public Exception? DiscoveryFault { get; init; }
+        public TranscriptionHardwareRequest? Request { get; private set; }
+        public Task<IReadOnlyList<TranscriptionDevice>> DiscoverDevicesAsync(string modelId, CancellationToken ct)
+        {
+            if (FailDiscovery) { throw new InvalidOperationException("GPU probe must not run"); }
+            DiscoveredModelId = modelId;
+            if (DiscoveryFault is not null) { throw DiscoveryFault; }
+            return Task.FromResult<IReadOnlyList<TranscriptionDevice>>([
+                new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+                new(TranscriptionAccelerationBackend.Vulkan, "pci:0000:64:00.0", "780M", TranscriptionDeviceKind.IntegratedGpu),
+            ]);
+        }
+        public void ConfigureHardware(TranscriptionHardwareRequest request) => Request = request;
+    }
+
     private PluginManager CreatePluginManager(
         params ITranscriptionEngineRole[] transcriptionEngines
     )
@@ -1849,6 +1952,7 @@ public class ModelManagerServiceTests
             [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
 
         public bool ProvisionsCudaRuntimeOnDemand { get; set; }
+        public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
 
         /// <summary>Last preference passed to <see cref="SetAccelerationPreference" />.</summary>
         private TranscriptionAccelerationPreference? LastAccelerationPreference { get; set; }

@@ -777,10 +777,21 @@ public sealed partial class HttpApiService : IDisposable
         return new
         {
             preference = AppSettings.NormalizeLocalModelAcceleration(settings.LocalModelAcceleration),
-            activeBackend = FormatAccelerationBackend(status.ActiveBackend),
+            activeBackend = status.IsModelLoaded == false ? null : FormatAccelerationBackend(status.ActiveBackend),
             displayText = status.DisplayText,
             detail = status.Detail,
             requiresRestart = status.RequiresRestart,
+            isModelLoaded = status.IsModelLoaded,
+            activeDevice = status.IsModelLoaded != false && status.ActiveDevice is { } device
+                ? new
+                {
+                    backend = FormatAccelerationBackend(device.Backend),
+                    stableId = device.StableId,
+                    displayName = device.DisplayName,
+                    kind = device.Kind.ToString(),
+                }
+                : null,
+            fallbackReason = status.FallbackReason,
         };
     }
 

@@ -107,6 +107,43 @@ public class HttpApiAccelerationDtoTests
         Assert.True(json.GetProperty("requiresRestart").GetBoolean());
     }
 
+    [Fact]
+    public void BuildAccelerationDto_Unloaded_DoesNotReportAnActiveBackendOrDevice()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Not loaded")
+            {
+                IsModelLoaded = false,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Vulkan, "pci:old", "Old GPU", TranscriptionDeviceKind.IntegratedGpu),
+            },
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, AppSettings.Default));
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("activeBackend").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("activeDevice").ValueKind);
+        Assert.False(json.GetProperty("isModelLoaded").GetBoolean());
+    }
+
+    [Fact]
+    public void BuildAccelerationDto_Loaded_ReportsExactDeviceAndFallbackReasonSeparately()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Cpu, "Using CPU")
+            {
+                IsModelLoaded = true,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+                FallbackReason = "Vulkan allocation failed",
+            },
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, AppSettings.Default));
+        Assert.Equal("auto", json.GetProperty("preference").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeBackend").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeDevice").GetProperty("stableId").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeDevice").GetProperty("backend").GetString());
+        Assert.Equal("Vulkan allocation failed", json.GetProperty("fallbackReason").GetString());
+    }
+
     private sealed class FakeAccelerationPlugin : ITranscriptionEnginePlugin
     {
         public string PluginId => "fake";

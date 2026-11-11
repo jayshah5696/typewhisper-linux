@@ -1255,7 +1255,35 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             // Always resolve Auto → Cpu locally so plugins never receive the unresolved
             // Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
-            if (pluginSupportsCuda)
+            TranscriptionHardwareRequest? hardwareRequest = null;
+            if (plugin.HardwareSelection is { } hardware)
+            {
+                IReadOnlyList<TranscriptionDevice> devices;
+                if (requestedPreference == TranscriptionAccelerationPreference.Cpu)
+                {
+                    // CPU is a native registration restriction, not just a GPU ranking choice.
+                    devices = [TranscriptionHardwareSelector.CpuDevice];
+                }
+                else
+                {
+                    using var discovery = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    discovery.CancelAfter(TimeSpan.FromSeconds(15));
+                    try
+                    {
+                        devices = await hardware.DiscoverDevicesAsync(pluginModelId, discovery.Token)
+                            .WaitAsync(discovery.Token);
+                    }
+                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && discovery.IsCancellationRequested)
+                    {
+                        throw new TimeoutException("Native device discovery timed out. Select CPU to retry.", ex);
+                    }
+                }
+
+                hardwareRequest = TranscriptionHardwareSelector.Resolve(requestedPreference,
+                    devices.Where(device => plugin.SupportedAccelerationBackends.Contains(device.Backend)).ToArray());
+                resolvedPreference = TranscriptionHardwareSelector.ToPreference(hardwareRequest.Device.Backend);
+            }
+            else if (pluginSupportsCuda)
             {
                 resolvedPreference = ResolveAutoPreference(
                     requestedPreference,
@@ -1271,7 +1299,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             if (
-                pluginSupportsCuda
+                hardwareRequest is null
+                && pluginSupportsCuda
                 && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
             )
             {
@@ -1305,6 +1334,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             plugin.SetAccelerationPreference(resolvedPreference);
+            if (hardwareRequest is not null)
+            {
+                plugin.HardwareSelection!.ConfigureHardware(hardwareRequest);
+            }
 
             if (plugin.SupportsModelDownload)
             {

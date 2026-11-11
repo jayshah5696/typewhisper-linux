@@ -76,6 +76,9 @@ public interface ITranscriptionEngineRole
     /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
     IReadOnlyList<string> SupportedLanguages => [];
 
+    /// <summary>Optional worker-only native device selection. Null preserves legacy acceleration policy.</summary>
+    ITranscriptionHardwareSelection? HardwareSelection => null;
+
     /// <summary>Acceleration backends this engine can run on. Default: CPU only.</summary>
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
         [TranscriptionAccelerationBackend.Cpu];

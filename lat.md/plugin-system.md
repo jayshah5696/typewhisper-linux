@@ -44,3 +44,17 @@ When hardware acceleration (e.g. Vulkan, WebGPU, or ROCm/MIGraphX) is requested:
 - The plugin probes the native loader and device environment first.
 - If compatible hardware or runtime libraries are absent, the plugin falls back cleanly to CPU execution and logs the concrete reason.
 - UI elements distinguish between requested acceleration, preparing state, and the active execution backend.
+
+### Optional native device selection
+
+The optional [[src/TypeWhisper.PluginSDK/ITranscriptionHardwareSelection.cs|hardware capability]] separates provider-native discovery from legacy backend settings. Providers without it keep their existing policy.
+
+[[src/TypeWhisper.Linux/Services/ModelManagerService.cs|Model loading]] gives discovery a deadline and skips it for an explicit CPU request. It filters devices against the provider's declared backends. [[src/TypeWhisper.Linux/Services/TranscriptionHardwareSelector.cs|The host selector]] prefers ready CUDA, hardware Vulkan, then CPU for Auto. It excludes software and unknown devices, prefers discrete GPUs, and matches explicit devices by backend and stable identity. An unavailable explicit GPU choice fails with a CPU retry instruction.
+
+[[src/TypeWhisper.PluginSDK/Models/TranscriptionDevice.cs|The hardware request]] retains the original Auto or explicit intent while the legacy setter receives a concrete backend. [[src/TypeWhisper.PluginSDK/Models/TranscriptionAccelerationStatus.cs|Execution status]] can report loaded state, a confirmed device, and a fallback reason separately. [[src/TypeWhisper.Linux/Services/HttpApiService.cs|The diagnostic API]] omits active backend and device facts for a confirmed unloaded model. Legacy unknown loaded state preserves existing API behavior.
+
+### Optional model metadata
+
+[[src/TypeWhisper.PluginSDK/Models/PluginModelInfo.cs|Model metadata]] can declare languages, streaming, automatic language detection, publisher terms, availability restrictions, and reference benchmark provenance. Missing values remain unknown.
+
+[[src/TypeWhisper.PluginSDK/Models/PluginModelBenchmark.cs|Reference benchmarks]] identify the dataset, language, metric, source, and measurement conditions. They do not prove local accuracy or GPU execution. [[tests/TypeWhisper.PluginSystem.Tests/TranscriptionHardwareSelectionTests.cs|Contract tests]] cover legacy defaults, serializable identities, exact device choice, and selection exclusions. [[tests/TypeWhisper.PluginSystem.Tests/ModelManagerServiceTests.cs|Model manager tests]] cover intent preservation, provider filtering, CPU probe avoidance, and discovery cancellation faults.

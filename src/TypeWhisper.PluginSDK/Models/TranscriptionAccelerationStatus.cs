@@ -14,4 +14,14 @@ public sealed record TranscriptionAccelerationStatus(
     string DisplayText,
     string? Detail = null,
     bool RequiresRestart = false
-);
+)
+{
+    /// <summary>Confirmed loaded model state; null when a legacy provider does not report it.</summary>
+    public bool? IsModelLoaded { get; init; }
+
+    /// <summary>Device confirmed by native model loading; null while unloaded or unknown.</summary>
+    public TranscriptionDevice? ActiveDevice { get; init; }
+
+    /// <summary>Original GPU failure when an Auto request retried on CPU.</summary>
+    public string? FallbackReason { get; init; }
+}
