@@ -145,6 +145,8 @@ Auto may retry a failed stream start on CPU before audio is sent. A feed or fina
 
 [[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Real-worker tests]] cover negotiation, stale identities and updates, ordering, bounded chunks, corrected previews, repeated words, unload, cancellation, coordinator assembly, and slow-sender fallback eligibility. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in packaged test]] checks CPU and exact Vulkan previews and two final windows across a 95-second recording. It does not establish continuous-speech boundary accuracy or other model-family support.
 
+[[scripts/verification/transcribe_user_paths.py|The user-path check]] downloads through Settings, cancels and retries, selects the model, and records only a private virtual microphone. It verifies changing CPU/Vulkan overlay previews, both distinct public utterances in a long recording, worker-loss batch fallback, diagnostic finalization outcomes, History entries and final clipboard read-back. [[dictation-pipeline#Streaming preview snapshots|Streaming snapshots]] replace corrected or retracted drafts. Raw silence hypotheses can still be wrong even when final text is correct.
+
 ### Local model browser
 
 [[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.LocalModels.cs|The local model browser]] filters embedded catalogs without selecting a recognition language, saving settings, or probing native libraries.

@@ -3,7 +3,7 @@
 ## Sub-features
 
 - The Dictation settings page lists models and supported acceleration choices.
-- Unsupported choices are unavailable or return to CPU with a visible reason.
+- Legacy unsupported choices are unavailable or return to CPU with a visible reason. Native device-selection providers retain an explicit unavailable GPU request and offer an explicit CPU retry.
 - The selected model loads with the requested execution backend.
 - The status view reports the active backend and any restart requirement.
 
@@ -16,6 +16,14 @@ Open Settings, then Dictation. Choose a local model and an acceleration option. 
 Select the model and backend in Settings, then load the model and run one known audio clip. Confirm the acceleration status in the UI. If the API server is enabled, run `typewhisper-cli status --json` and check `acceleration.preference`, `acceleration.activeBackend`, and `acceleration.requiresRestart`.
 
 For WebGPU, confirm the active backend is `webgpu`; do not infer GPU use from the dropdown alone. Capture provider or runtime logs and a GPU activity sample during inference. Check that the output text remains valid and that a CPU run on the same model and clip produces the expected comparison.
+
+## transcribe.cpp checks
+
+The model browser exposes search, intersecting language filters, live-preview support, source benchmarks and publisher license terms. Selected and busy cards stay reachable through filters. Test model runs the embedded public fixture without cleanup, delivery, History or selection changes. Link existing GGUF accepts only an exact verified catalog artifact. Unlink never deletes the external source.
+
+The native device picker saves a stable identity for each provider and explicit backend. Opening Settings does not probe devices or prepare CUDA. Refresh devices probes in disposable workers. Requested mode, preparation, confirmed execution and fallback are separate states. CPU and Auto do not pin a saved GPU identity. Explicit missing GPUs fail with an explicit CPU retry; Auto can retry the same model and audio on CPU.
+
+Use `scripts/verification/transcribe-cpp.md` for the packaged worker, GPU-free container, CPU dispatch and full Settings/download/dictation checks. Physical verification covers CPU and Radeon 780M Vulkan. CUDA provisioning and missing-driver behavior are verified, but physical NVIDIA, Intel Vulkan and AMD discrete execution are not.
 
 ## Gotchas
 

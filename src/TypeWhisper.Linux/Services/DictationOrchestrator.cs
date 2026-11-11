@@ -5571,7 +5571,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             languageSelection,
             languageHints,
             sessionVersion,
-            (version, text) => TryPublishPartialTranscript(version, captureSession, text),
+            (version, text) => TryPublishPartialTranscript(version, captureSession, text, streamingSnapshot: true),
             ex =>
             {
                 // Coordinator already sets its own Faulted flag — just log.
@@ -6019,17 +6019,15 @@ public sealed partial class DictationOrchestrator : IDisposable
     private void TryPublishPartialTranscript(
         int sessionVersion,
         AudioRecordingService.AudioCaptureSession captureSession,
-        string? text
+        string? text,
+        bool streamingSnapshot = false
     )
     {
-        if (
-            !_partialTranscriptState.TryApplyPolling(
-                sessionVersion,
-                text ?? "",
-                _dictionary.PreviewCorrections,
-                out var partialText
-            )
-        )
+        string partialText;
+        var applied = streamingSnapshot
+            ? _partialTranscriptState.TryApplyStreaming(sessionVersion, text ?? "", _dictionary.PreviewCorrections, out partialText)
+            : _partialTranscriptState.TryApplyPolling(sessionVersion, text ?? "", _dictionary.PreviewCorrections, out partialText);
+        if (!applied)
         {
             return;
         }

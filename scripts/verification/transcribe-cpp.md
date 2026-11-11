@@ -89,6 +89,28 @@ timeout 480 qemu-x86_64 -cpu Nehalem /scratch/cpu-probe \
 
 The probe prints CPUID features, the active backend, transcript, and selected CPU module mappings. It fails on native errors, a non-CPU backend, an empty or unrelated transcript, or a mapped GPU library. The qemu64 profile has SSE2 but no SSE4.2, AVX, or FMA. The Nehalem profile has SSE4.2 but no AVX. These checks verify dispatch and inference for those emulated CPU profiles, not performance or every physical x64 processor.
 
+## Settings downloads and live dictation
+
+With a published payload, run the user-path check on a machine with hardware Vulkan. It requires the hidden desktop dependencies described in the project verification skill and `xclip` on PATH. The command downloads the pinned Moonshine Streaming Medium model into its own instance. It also downloads an 11-second public JFK speech fixture from the pinned whisper.cpp tag and checks its SHA-256.
+
+```sh
+uv run --no-project scripts/verification/transcribe_user_paths.py \
+  --out /scratch/new-gguf-user-check \
+  --app-dir /scratch/app
+```
+
+The check clicks Download, cancels after a partial file exists, retries, verifies the entire model digest, and clicks Use model. It checks that downloading alone does not save a default model. It records only its private virtual microphone and reads delivered text from its private X11 clipboard.
+
+Both `liveTranscriptionEnabled` and `liveTranscriptionStreamingEnabled` are enabled in this fixture. The second flag selects streaming rather than batch polling. The check reads changing overlay previews during CPU and Vulkan dictation. It then plays a 110-second recording containing distinct public utterances at the beginning and after 86 seconds. Both utterances must reach the clipboard. A final session kills only this isolated app's worker during capture and requires full-recording batch recovery. Diagnostic events must show three successful streaming finalizations and one failed stream followed by successful delivery. History must contain all four completed sessions.
+
+Raw previews are replaceable hypotheses, not final recognition. Moonshine can emit incorrect words or unrelated text during prolonged silence. This was observed in the long recording; the authoritative final text contained both public utterances without that text. Do not describe this check as proof of transcript quality for all audio. Streaming snapshots replace obsolete hypotheses rather than preserving their incorrect prefixes. The existing final dictation normalization policy still collapses adjacent repeated phrases. This is why the long fixture uses two distinct utterances rather than repeating the same sentence.
+
+Each session records transcription, post-processing, delivery, and stop-to-delivery times separately. A reused stream's `transcription_milliseconds` excludes the recognition performed during capture and its separate finalization stage. These correctness runs are not a CPU/Vulkan performance comparison.
+
+For History recovery, use `recovery_smoke.py` with `--plugin com.typewhisper.transcribe-cpp --engine transcribe-cpp --model handy-computer/moonshine-streaming-medium-gguf` and a disposable copy of a verified downloaded model. Rebase the managed receipt path when copying it to a different asset root; never edit a user receipt. The normal load still verifies the complete file. The recovery check dictates public audio, expands the actual History row, reads Copy original and Copy new result back from the private clipboard, and checks dismissal, collapse and timeout behavior.
+
+For upgrade regression, `verify_upgrade.py --out /scratch/new-upgrade-check` copies the existing installation's program files and upgrades only that scratch copy. It checks synthetic settings, History, model and recording sentinels, then verifies Needle file transcription and virtual-microphone dictation through the upgraded launcher. It never installs over or restarts the user's app.
+
 ## Verification boundaries
 
 The available physical GPU is an AMD Radeon 780M integrated GPU. Its Vulkan execution is checked separately with the worker test's Vulkan flag and DRM compute counters. A GPU-free container and broken-driver simulation do not prove NVIDIA CUDA, Intel Vulkan, or AMD discrete GPU execution. Those remain hardware verification requirements. ARM64 is not advertised by this plugin.

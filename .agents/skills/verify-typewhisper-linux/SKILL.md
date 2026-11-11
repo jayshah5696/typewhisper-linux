@@ -101,6 +101,6 @@ The fake LLM serves `GET /v1/models` and `POST /v1/chat/completions` only. Any o
 
 These areas have user-facing behavior but no live recipe proven yet. Add a feature guide only after driving one live.
 
-- Streaming and audio quality, deferred by the user to a later pass. `just ui-streaming` watches the overlay's live-preview text over AT-SPI while a public clip plays, but it has not been run. Segment-boundary quality needs the eval audio scenarios recorded.
+- Broad streaming audio quality still needs the eval audio scenarios. The transcribe.cpp check in `scripts/verification/transcribe-cpp.md` has verified changing previews, final clipboard read-back, a long recording, and worker-loss batch recovery on CPU and Radeon 780M Vulkan. It enables both live preview and the separate streaming setting. Its raw silence hypotheses are not a general quality guarantee.
 - Plugin catalog install and update from the network, and provider setup by clicking through the Plugins section. Provider activation and routing are covered in `features/plugins-and-providers.md`.
-- Container install, upgrade, and removal of packages on this host. It needs `rpm-tools` installed; CI runs it. See `features/packaging-and-install.md`.
+- Native package installation on the user's host is not exercised. The full four-format package smoke has passed in disposable Ubuntu and Fedora containers. A private RPM-tools container can provide metadata tools without installing them on the host. See `features/packaging-and-install.md`.
