@@ -1,0 +1,12 @@
+{
+  "id": "com.typewhisper.transcribe-cpp",
+  "name": "transcribe.cpp (Local)",
+  "version": "1.0.0",
+  "minHostVersion": "0.19.2",
+  "author": "TypeWhisper",
+  "description": "Offline GGUF speech recognition with transcribe.cpp",
+  "networkAccess": "local",
+  "categories": ["transcription"],
+  "assemblyName": "TypeWhisper.Plugin.TranscribeCpp.dll",
+  "pluginClass": "TypeWhisper.Plugin.TranscribeCpp.TranscribeCppPlugin"
+}

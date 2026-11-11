@@ -286,6 +286,15 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.transcribe-cpp",
+      "projectPath": "plugins/TypeWhisper.Plugin.TranscribeCpp/TypeWhisper.Plugin.TranscribeCpp.csproj",
+      "releaseSlug": "transcribe-cpp",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.voxtral",
       "projectPath": "plugins/TypeWhisper.Plugin.Voxtral/TypeWhisper.Plugin.Voxtral.csproj",
       "releaseSlug": "voxtral",

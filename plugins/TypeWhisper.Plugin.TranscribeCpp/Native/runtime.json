@@ -1,0 +1,32 @@
+{
+  "version": "0.4.1",
+  "headerHash": "f99ad4169374b8f3",
+  "rid": "linux-x64",
+  "url": "https://registry.npmjs.org/@transcribe-cpp/linux-x64-cpu-vulkan/-/linux-x64-cpu-vulkan-0.4.1.tgz",
+  "sha256": "e5dee52f77dbc4db1388a7e73f2fcdf928dd9a5cdd4b0ca8dc031777209fdb83",
+  "files": {
+    "contract.json": "ce4039f7c7a5236fff656c222478b487fd9d0891b2435db393c3fbfa8b78a5be",
+    "libggml-base.so": "0bedc6858bb1e5aedda81b1f3bd7e7578fd5ab98a8a62c6afd53087ec11df41b",
+    "libggml-cpu-alderlake.so": "1aa14e362efd1b874b2c255b89b3bbeb259ae42f0bc6fff72118ca378a037682",
+    "libggml-cpu-cannonlake.so": "701352131b5a57dd9d462ceeee48fd4fb71c71634511e8320a52f968d48b2530",
+    "libggml-cpu-cascadelake.so": "131677a346d44542ed4b55c30324eb2a4abfd90067af1036dc141a9a3ba2c01d",
+    "libggml-cpu-cooperlake.so": "965aaaa59b1d0b66f867bda9d6442a49f8abcb0d180a8a00905fa3cbb61e1842",
+    "libggml-cpu-haswell.so": "5787b42303af149aeb18c05463d214e3a966c7630b5ee46cd1884091f8949394",
+    "libggml-cpu-icelake.so": "6e5fb33713b8f5549cb02f5a3d6e9dc07b354cbd953f8d315d0fb82c8175bc41",
+    "libggml-cpu-ivybridge.so": "204bad8545de1318ca5ce7d158c833acb570358e27ee75ab88418e31a2153595",
+    "libggml-cpu-piledriver.so": "c51b31018f9745a65b080a75897f9f3423fc70378c835f4240e1b0185d2e24c5",
+    "libggml-cpu-sandybridge.so": "f1f6865e9ff32a11f676050444459bf6a4e19240ffd323be3f5243eaee5c2f3b",
+    "libggml-cpu-sapphirerapids.so": "1d94e11beaf4b4957428308a3e48756947048f09b30b50d50cd53ce4bdd65a78",
+    "libggml-cpu-skylakex.so": "675a33e18fb2d476a6cbcfafcd6103ee2339d8eb371c0a99ffe196f8a84d13b7",
+    "libggml-cpu-sse42.so": "8a80b29a97b3b3cd8766df9e5a10b760083b176e8e9f8ffb4b5668b5ad4cc37c",
+    "libggml-cpu-x64.so": "485a6bff330680534dc050f7d0cec0f8d48589daafcd7c5708e9f2d77881f7d1",
+    "libggml-cpu-zen4.so": "88eb58aee7fe085a70c7ecfcfd749cd4102c27d367bb1b09c99f6c6422ee90eb",
+    "libggml-vulkan.so": "4fdec8c3a4201fe9fbd8a24a48c43f32494d69aa943c82f3f299a727a04ac9c4",
+    "libggml.so": "0c5f5ca9beda5ec2ffcbc93f60dad3a029c768378c401e85284ce36b1a983ed6",
+    "libtranscribe.so": "78625ee207600f5cbf9a398cdbe03991d0720a41efd1019fd80e108279957cfe",
+    "licenses/LICENSE": "86a53633b56f6b029d3cb42158bcc7aac0cdff898aceb13e83b93e368bbc4ac6",
+    "licenses/LICENSE.ggml": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    "licenses/LICENSE.miniz": "6f20fa7672b00e2e975c291df737cf227addf3ad32e36fef3fe0f416e4664d3d",
+    "licenses/LICENSE.silero_vad": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+  }
+}

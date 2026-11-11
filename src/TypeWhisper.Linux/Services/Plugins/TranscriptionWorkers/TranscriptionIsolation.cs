@@ -14,11 +14,12 @@ internal sealed class TranscriptionIsolation
     /// <summary>Set to <c>0</c> to keep every engine in the app process, for diagnosis.</summary>
     private const string EnvironmentVariable = "TYPEWHISPER_TRANSCRIPTION_WORKER";
 
-    // Native whisper.cpp and sherpa-onnx inference; a crash there must not end the app.
+    // Native local inference must not let a driver or decoder crash end the app.
     private static readonly HashSet<string> s_defaultPluginIds =
     [
         "com.typewhisper.whisper-cpp",
         "com.typewhisper.sherpa-onnx",
+        "com.typewhisper.transcribe-cpp",
     ];
 
     private readonly ProcessCommand? _executable;
@@ -39,7 +40,7 @@ internal sealed class TranscriptionIsolation
     internal bool IsEnabled => _executable is not null;
 
     /// <summary>
-    ///     The isolation the app uses: Whisper and Sherpa in workers unless switched off. Off when
+    ///     Local native inference runs in workers unless switched off. Off when
     ///     another program hosts this assembly, such as a test runner, which has no worker mode.
     /// </summary>
     internal static TranscriptionIsolation CreateDefault()

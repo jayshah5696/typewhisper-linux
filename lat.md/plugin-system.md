@@ -18,7 +18,7 @@ Critical invariants for the SDK boundary include:
 Speech recognition plugins convert PCM audio byte streams into raw transcript tokens with timestamps and confidence scores.
 
 Supported transcription plugins include:
-- **Local offline engines**: Needle Whistle, Sherpa-ONNX, Whisper.cpp, Parakeet CTC, and Qwen3 STT.
+- **Local offline engines**: Needle Whistle, Sherpa-ONNX, Whisper.cpp, transcribe.cpp, Parakeet CTC, and Qwen3 STT.
 - **Cloud services**: Deepgram, AssemblyAI, Gladia, Soniox, Speechmatics, Google Cloud STT, and Cloudflare ASR.
 
 ## LLM and Processing Providers
@@ -35,6 +35,16 @@ Key rules for catalog and settings handling:
 - Opening the plugin settings dialog must not trigger network catalog refreshes or mutate persistent settings.
 - Explicit user refresh preserves in-progress form edits and persists only dirty fields.
 - Provider refreshes are bounded by strict deadlines and cancel immediately if credentials change or a newer refresh begins.
+
+### Pinned GGUF catalog and storage
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeModelCatalog.cs|The GGUF catalog loader]] validates pinned ASR metadata without native initialization or network access. Its embedded catalog contains 59 reviewed file entries, not 59 verified executions.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/Models/README.md|Catalog provenance]] records the source archive, engine compatibility, original publisher revisions, and reference measurement conditions. Original publisher license identifiers override conversion labels. Custom terms remain visible but block downloading, linking, and loading until reviewed.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeModelStore.cs|The model store]] uses the shared resumable downloader, full size and SHA-256 verification, and atomic publication. A verification receipt supports cheap readiness checks. Every load rehashes the file and holds a cross-process lease to prevent deletion or replacement by another store operation. Linked files retain external ownership and are never deleted or moved by the store.
+
+[[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppCatalogTests.cs|Catalog tests]] reject malformed paths, revisions, metadata, and duplicates. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppModelStoreTests.cs|Storage tests]] cover resume, corruption, cancellation, ownership, symlinks, disk space, and model leases.
 
 ## Acceleration and Native Runtimes
 
@@ -62,6 +72,18 @@ The optional [[src/TypeWhisper.PluginSDK/ITranscriptionHardwareSelection.cs|hard
 The proxy keeps original request intent. An Auto GPU load or inference failure gets one CPU retry in a fresh worker with the same model, audio, language, and prompt. An explicit GPU failure ends the worker and asks for an explicit CPU retry. Missing weights, unsupported requests, and caller cancellation do not trigger fallback. Status retains the cause separately and clears active-device facts after unload or worker loss. Legacy providers keep their existing crash retries and pause policy.
 
 [[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Worker tests]] use real child processes to check discovery isolation, capability rejection, native faults, load errors, bounded CPU retry, explicit GPU and CPU failures, cancellation, timeout origin, reconfiguration, and legacy recovery.
+
+### Isolated GGUF batch inference
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The transcribe.cpp plugin]] keeps metadata and file management in the host and restricts native work to transcription workers. Its current execution path provides batch inference on CPU or Vulkan.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeNativeRuntime.cs|The native adapter]] validates ABI layouts before native initializers, resolves exact backend and stable device identities, and checks the loaded device. CPU registration excludes GPU modules. Sessions retain their model handles, and cancellation settles native work before freeing either handle. Borrowed text is copied before session mutation or disposal. Dictionary terms use only the native vocabulary capability, not transcript instructions.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeAudio.cs|Audio adaptation]] validates RIFF chunks and converts PCM16 mono 16 kHz to native float samples. Bounded, non-overlapping windows prefer quiet boundaries and retain every sample. Native abort or output truncation is an error rather than partial success. This does not promise lossless word recognition at continuous-speech window cuts.
+
+[[scripts/prepare-transcribe-native.py|Artifact preparation]] verifies the pinned archive and complete file hashes before publishing libraries and license notices. [[plugins/TypeWhisper.Plugin.TranscribeCpp/Native/runtime.json|The artifact pin]] covers CPU dispatch modules and optional Vulkan dependencies. The plugin requires no Node runtime, inference server, or T3 installation.
+
+[[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppNativeTests.cs|Native boundary tests]] cover host probe refusal, device exclusions, input validation, audio coverage, and incomplete results. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppPluginTests.cs|Plugin lifetime tests]] check file leases, failed loads, cancellation before unload, repeated text, and prompt separation. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in real-worker test]] checks packaged CPU and exact Vulkan execution, external-file preservation, CPU module exclusion, and an utterance beyond Moonshine's native audio limit.
 
 ### Optional model metadata
 
