@@ -126,6 +126,9 @@ internal static partial class TranscriptionWorkerServer
             Token = token,
             State = session.State(),
             HeartbeatInterval = options.HeartbeatInterval,
+            Capabilities = engine.HardwareSelection is not null
+                ? [TranscriptionWorkerCapabilities.HardwareSelection]
+                : [],
         }).ConfigureAwait(false);
         return await session.RunAsync().ConfigureAwait(false);
     }
@@ -295,6 +298,8 @@ internal static partial class TranscriptionWorkerServer
         private long _lastStarted;
         private CancellationTokenSource? _currentCancellation;
         private string? _loadedModelId;
+        private bool _discoveredDevices;
+        private bool _configuredHardware;
 
         internal TranscriptionWorkerState State()
         {
@@ -328,7 +333,7 @@ internal static partial class TranscriptionWorkerServer
                     }
                 }
 
-                TranscriptionWorkerResult? result = null;
+                TranscriptionWorkerMessage? result = null;
                 TranscriptionWorkerError? error = null;
                 using var beating = new CancellationTokenSource();
                 var heartbeat = HeartbeatAsync(message.Id, beating.Token);
@@ -373,15 +378,14 @@ internal static partial class TranscriptionWorkerServer
         private TranscriptionWorkerMessage Response(
             long id,
             TranscriptionWorkerError? error,
-            TranscriptionWorkerResult? result
+            TranscriptionWorkerMessage? result
         )
         {
-            return new TranscriptionWorkerMessage
+            return (result ?? new TranscriptionWorkerMessage()) with
             {
                 Type = TranscriptionWorkerMessageTypes.Response,
                 Id = id,
                 Error = error,
-                Result = result,
                 State = State(),
             };
         }
@@ -468,7 +472,7 @@ internal static partial class TranscriptionWorkerServer
             _requests.Writer.TryComplete();
         }
 
-        private async Task<TranscriptionWorkerResult?> ExecuteAsync(
+        private async Task<TranscriptionWorkerMessage?> ExecuteAsync(
             TranscriptionWorkerMessage message,
             byte[] payload,
             CancellationToken ct
@@ -476,7 +480,32 @@ internal static partial class TranscriptionWorkerServer
         {
             switch (message.Command)
             {
+                case TranscriptionWorkerCommands.DiscoverDevices:
+                    if (_configuredHardware || _loadedModelId is not null)
+                    {
+                        throw new InvalidOperationException("Device discovery requires a fresh worker.");
+                    }
+
+                    var hardware = engine.HardwareSelection
+                        ?? throw new NotSupportedException("This engine does not support native device selection.");
+                    _discoveredDevices = true;
+                    var devices = await hardware.DiscoverDevicesAsync(
+                        message.ModelId ?? throw new ArgumentException("A model is required."), ct).ConfigureAwait(false);
+                    return new TranscriptionWorkerMessage { Devices = [.. devices] };
+                case TranscriptionWorkerCommands.ConfigureHardware:
+                    if (_discoveredDevices || _loadedModelId is not null || _configuredHardware)
+                    {
+                        throw new InvalidOperationException("Hardware must be configured once in a fresh worker.");
+                    }
+
+                    var request = message.HardwareRequest ?? throw new ArgumentException("A hardware request is required.");
+                    (engine.HardwareSelection
+                        ?? throw new NotSupportedException("This engine does not support native device selection."))
+                        .ConfigureHardware(request);
+                    _configuredHardware = true;
+                    return null;
                 case TranscriptionWorkerCommands.Load:
+                    RequireHardwareConfiguration();
                     var modelId = message.ModelId ?? throw new ArgumentException("A model is required.");
                     _loadedModelId = null;
                     await engine.LoadModelAsync(modelId, ct).ConfigureAwait(false);
@@ -491,9 +520,17 @@ internal static partial class TranscriptionWorkerServer
                         : await engine
                             .TranscribeAsync(payload, message.Language, message.Translate, message.Prompt, ct)
                             .ConfigureAwait(false);
-                    return TranscriptionWorkerProtocol.ToResult(result);
+                    return new TranscriptionWorkerMessage { Result = TranscriptionWorkerProtocol.ToResult(result) };
                 default:
                     throw new NotSupportedException("Unknown transcription worker command.");
+            }
+        }
+
+        private void RequireHardwareConfiguration()
+        {
+            if (engine.HardwareSelection is not null && (!_configuredHardware || _discoveredDevices))
+            {
+                throw new InvalidOperationException("The model requires hardware configuration in a fresh worker.");
             }
         }
 
@@ -501,6 +538,7 @@ internal static partial class TranscriptionWorkerServer
         // the worker loads and selects exactly that model; engines without one report their own error.
         private async Task EnsureModelAsync(string? modelId, CancellationToken ct)
         {
+            RequireHardwareConfiguration();
             if (modelId is null)
             {
                 return;

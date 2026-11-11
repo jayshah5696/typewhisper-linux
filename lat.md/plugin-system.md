@@ -42,7 +42,7 @@ Plugins utilizing hardware acceleration must verify native library availability 
 
 When hardware acceleration (e.g. Vulkan, WebGPU, or ROCm/MIGraphX) is requested:
 - The plugin probes the native loader and device environment first.
-- If compatible hardware or runtime libraries are absent, the plugin falls back cleanly to CPU execution and logs the concrete reason.
+- Legacy providers keep their existing CPU fallback behavior and report its reason. Providers using optional native device selection distinguish Auto from an explicit GPU choice.
 - UI elements distinguish between requested acceleration, preparing state, and the active execution backend.
 
 ### Optional native device selection
@@ -52,6 +52,16 @@ The optional [[src/TypeWhisper.PluginSDK/ITranscriptionHardwareSelection.cs|hard
 [[src/TypeWhisper.Linux/Services/ModelManagerService.cs|Model loading]] gives discovery a deadline and skips it for an explicit CPU request. It filters devices against the provider's declared backends. [[src/TypeWhisper.Linux/Services/TranscriptionHardwareSelector.cs|The host selector]] prefers ready CUDA, hardware Vulkan, then CPU for Auto. It excludes software and unknown devices, prefers discrete GPUs, and matches explicit devices by backend and stable identity. An unavailable explicit GPU choice fails with a CPU retry instruction.
 
 [[src/TypeWhisper.PluginSDK/Models/TranscriptionDevice.cs|The hardware request]] retains the original Auto or explicit intent while the legacy setter receives a concrete backend. [[src/TypeWhisper.PluginSDK/Models/TranscriptionAccelerationStatus.cs|Execution status]] can report loaded state, a confirmed device, and a fallback reason separately. [[src/TypeWhisper.Linux/Services/HttpApiService.cs|The diagnostic API]] omits active backend and device facts for a confirmed unloaded model. Legacy unknown loaded state preserves existing API behavior.
+
+### Isolated native device selection
+
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Hardware.cs|The worker hardware proxy]] discovers devices in a disposable process. Discovery does not replace a loaded model worker or report active execution.
+
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/TranscriptionWorkerProtocol.cs|The authenticated protocol]] negotiates native device selection. [[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/TranscriptionWorkerServer.cs|The worker]] requires one hardware configuration before loading and rejects loading after discovery in that process. This protects runtimes whose backend registration cannot change after initialization.
+
+The proxy keeps original request intent. An Auto GPU load or inference failure gets one CPU retry in a fresh worker with the same model, audio, language, and prompt. An explicit GPU failure ends the worker and asks for an explicit CPU retry. Missing weights, unsupported requests, and caller cancellation do not trigger fallback. Status retains the cause separately and clears active-device facts after unload or worker loss. Legacy providers keep their existing crash retries and pause policy.
+
+[[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Worker tests]] use real child processes to check discovery isolation, capability rejection, native faults, load errors, bounded CPU retry, explicit GPU and CPU failures, cancellation, timeout origin, reconfiguration, and legacy recovery.
 
 ### Optional model metadata
 

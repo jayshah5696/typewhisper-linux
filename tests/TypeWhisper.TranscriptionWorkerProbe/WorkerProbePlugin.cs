@@ -21,6 +21,13 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
     private IPluginHostServices? _host;
     private string? _loadedModelId;
     private string? _computeBackend;
+    private TranscriptionHardwareRequest? _hardwareRequest;
+
+    public bool EnableHardwareSelection { get; set; }
+    public ITranscriptionHardwareSelection? HardwareSelection =>
+        EnableHardwareSelection || _host?.GetSetting<string>("probe-hardware") == "enabled"
+            ? new ProbeHardware(this)
+            : null;
 
     public string PluginId => Id;
     public string PluginName => "Worker probe";
@@ -47,7 +54,11 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
                 ? TranscriptionAccelerationBackend.NvidiaCuda
                 : TranscriptionAccelerationBackend.Cpu,
             $"Probe {AccelerationPreference} in {Environment.ProcessId}"
-        );
+        )
+        {
+            IsModelLoaded = HardwareSelection is null ? null : _loadedModelId is not null,
+            ActiveDevice = _loadedModelId is null ? null : _hardwareRequest?.Device,
+        };
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -93,6 +104,12 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
             throw new FileNotFoundException("The probe model is missing.");
         }
 
+        if (_host?.GetSetting<string>("probe-gpu-load-error") == "enabled"
+            && AccelerationPreference != TranscriptionAccelerationPreference.Cpu)
+        {
+            throw new InvalidOperationException("The probe GPU ran out of memory.");
+        }
+
         _loadedModelId = modelId;
         _host?.Log(PluginLogLevel.Info, $"loaded {modelId} in {Environment.ProcessId}");
         return Task.CompletedTask;
@@ -106,6 +123,12 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
         CancellationToken ct
     )
     {
+        if (HardwareSelection is not null && _host is not null)
+        {
+            await File.AppendAllTextAsync(Path.Join(_host.PluginDataDirectory, "hardware-attempts"),
+                $"{Environment.ProcessId};{AccelerationPreference};{wavAudio.Length}{Environment.NewLine}", ct);
+        }
+
         switch (language)
         {
             case "crash":
@@ -128,6 +151,13 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
                 if (AccelerationPreference != TranscriptionAccelerationPreference.Cpu)
                 {
                     _ = memset(8, 0, 1);
+                }
+
+                break;
+            case "fail-on-gpu":
+                if (AccelerationPreference != TranscriptionAccelerationPreference.Cpu)
+                {
+                    throw new InvalidOperationException("The probe GPU failed during decoding.");
                 }
 
                 break;
@@ -168,7 +198,9 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
                 $"prompt={prompt}",
                 $"preference={AccelerationPreference}",
                 $"setting={setting}",
-                $"backend={_computeBackend}"
+                $"backend={_computeBackend}",
+                $"requested={_hardwareRequest?.RequestedPreference}",
+                $"device={_hardwareRequest?.Device.StableId}"
             ),
             language,
             1.5,
@@ -178,6 +210,35 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
             Segments = [new PluginTranscriptionSegment("probe", 0, 1) { NoSpeechProbability = 0.25f }],
             TokenTimings = [new VocabularyTokenTiming("probe", 0.25, 0.5)],
         };
+    }
+
+    private sealed class ProbeHardware(WorkerProbePlugin engine) : ITranscriptionHardwareSelection
+    {
+        public async Task<IReadOnlyList<TranscriptionDevice>> DiscoverDevicesAsync(string modelId, CancellationToken ct)
+        {
+            engine._host?.Log(PluginLogLevel.Info, $"discovery in {Environment.ProcessId}");
+            if (modelId == "slow-discovery")
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+
+            return
+            [
+                new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+                new(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0",
+                    $"GPU in {Environment.ProcessId}", TranscriptionDeviceKind.DiscreteGpu),
+            ];
+        }
+
+        public void ConfigureHardware(TranscriptionHardwareRequest request)
+        {
+            if (engine._loadedModelId is not null)
+            {
+                throw new InvalidOperationException("Hardware must be configured before loading.");
+            }
+
+            engine._hardwareRequest = request;
+        }
     }
 
     private void Spawn()

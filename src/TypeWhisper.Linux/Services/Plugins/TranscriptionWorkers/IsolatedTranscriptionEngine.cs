@@ -11,11 +11,11 @@ internal sealed class TranscriptionWorkerFaultedException(string message, Except
 /// <summary>
 ///     Presents a local engine to the host while its model loading and inference run in a worker
 ///     process. Metadata, downloads, removal and settings stay with the in-process engine, which
-///     never loads a model. A crashed worker is replaced and the request retried; repeated crashes
-///     on an accelerated backend switch the engine to the CPU, and further crashes pause it briefly
-///     instead of looping. A worker that hung is not retried: it already cost the user its timeout.
+///     never loads a model. Legacy providers retry crashes, fall back to CPU after repeated GPU
+///     faults, and pause after further crashes. Providers with hardware selection instead preserve
+///     request intent: only Auto GPU failures get one fresh-worker CPU retry.
 /// </summary>
-internal sealed class IsolatedTranscriptionEngine
+internal sealed partial class IsolatedTranscriptionEngine
     : ITranscriptionEngineRole,
         ITranscriptionEngineSelectionIdentity,
         ITranscriptionLanguageSelectionCapabilities,
@@ -75,6 +75,7 @@ internal sealed class IsolatedTranscriptionEngine
         }
 
         _inner = inner;
+        _hardwareSelection = inner.HardwareSelection is null ? null : new HardwareProxy(this);
         _start = start;
         _log = log;
         _statusChanged = statusChanged ?? (() => { });
@@ -139,7 +140,9 @@ internal sealed class IsolatedTranscriptionEngine
     // What the worker actually runs on, once one has started. A worker never needs an app restart:
     // a changed choice or an explicit load starts a new one.
     public TranscriptionAccelerationStatus AccelerationStatus =>
-        FallbackActive()
+        HardwareSelection is not null
+            ? HardwareAccelerationStatus()
+            : FallbackActive()
             ? new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU",
@@ -172,6 +175,7 @@ internal sealed class IsolatedTranscriptionEngine
         // The next request starts a worker with the new preference, which supersedes an earlier
         // explicit backend just as it does in the engine itself.
         _inner.SetAccelerationPreference(preference);
+        _hardwareRequest = null;
         _computeBackend = null;
         if (preference != _fallbackFrom)
         {
@@ -375,6 +379,18 @@ internal sealed class IsolatedTranscriptionEngine
                 throw new TranscriptionWorkerFaultedException(PausedMessage());
             }
 
+            if (HardwareSelection is not null)
+            {
+                try
+                {
+                    return await RunHardwareAsync(request, payload, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    statusChanged = true;
+                }
+            }
+
             var restartedForRuntime = false;
             for (var attempt = 1; ; attempt++)
             {
@@ -567,11 +583,13 @@ internal sealed class IsolatedTranscriptionEngine
         var computeBackend = FallbackActive() ? null : _computeBackend;
         // A worker reads the plugin's settings once, so a changed setting needs a new one.
         var settings = _settings();
+        var hardware = EffectiveHardwareRequest();
         if (
             _worker is { IsAlive: true } running
             && running.Acceleration == preference
             && _workerComputeBackend == computeBackend
             && _workerSettings == settings
+            && _workerHardwareRequest == hardware
         )
         {
             return running;
@@ -580,6 +598,28 @@ internal sealed class IsolatedTranscriptionEngine
         await DiscardWorkerAsync().ConfigureAwait(false);
         // Snapshots: a change during startup must still be seen as a change afterwards.
         _worker = await _start(preference, computeBackend, ct).ConfigureAwait(false);
+        if (hardware is not null)
+        {
+            try
+            {
+                var configured = await _worker.SendAsync(new TranscriptionWorkerMessage
+                {
+                    Command = TranscriptionWorkerCommands.ConfigureHardware,
+                    HardwareRequest = hardware,
+                }, default, ct).ConfigureAwait(false);
+                if (configured.Error is { } error)
+                {
+                    throw TranscriptionWorkerProtocol.ToException(error);
+                }
+            }
+            catch
+            {
+                await DiscardWorkerAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        _workerHardwareRequest = hardware;
         _workerComputeBackend = computeBackend;
         _workerSettings = settings;
         if (_worker.State is { } state)
@@ -594,6 +634,12 @@ internal sealed class IsolatedTranscriptionEngine
     {
         var worker = _worker;
         _worker = null;
+        _workerHardwareRequest = null;
+        if (HardwareSelection is not null)
+        {
+            _state = null;
+        }
+
         if (worker is not null)
         {
             await worker.DisposeAsync().ConfigureAwait(false);

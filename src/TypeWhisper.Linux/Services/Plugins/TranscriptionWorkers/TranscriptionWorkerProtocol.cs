@@ -225,8 +225,15 @@ internal static class TranscriptionWorkerMessageTypes
     internal const string Heartbeat = "heartbeat";
 }
 
+internal static class TranscriptionWorkerCapabilities
+{
+    internal const string HardwareSelection = "hardware-selection-v1";
+}
+
 internal static class TranscriptionWorkerCommands
 {
+    internal const string DiscoverDevices = "discover-devices";
+    internal const string ConfigureHardware = "configure-hardware";
     internal const string Load = "load";
     internal const string Transcribe = "transcribe";
     internal const string Shutdown = "shutdown";
@@ -243,7 +250,12 @@ internal sealed record TranscriptionWorkerMessage
     /// <summary>In <see cref="TranscriptionWorkerMessageTypes.Hello" />: the launch token, proving the peer is the worker this host started.</summary>
     public string? Token { get; init; }
 
+    /// <summary>Optional features negotiated in the authenticated hello.</summary>
+    public string[]? Capabilities { get; init; }
+
     public string? Command { get; init; }
+    public TranscriptionHardwareRequest? HardwareRequest { get; init; }
+    public TranscriptionDevice[]? Devices { get; init; }
     public string? ModelId { get; init; }
     public string? Language { get; init; }
     public string[]? LanguageHints { get; init; }

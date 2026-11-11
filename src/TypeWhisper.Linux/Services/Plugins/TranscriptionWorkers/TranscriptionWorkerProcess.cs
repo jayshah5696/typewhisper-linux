@@ -41,6 +41,7 @@ internal interface ITranscriptionWorkerConnection : IAsyncDisposable
     int ProcessId { get; }
     bool IsAlive { get; }
     TranscriptionWorkerState? State { get; }
+    IReadOnlyList<string> Capabilities => [];
 
     /// <summary>
     ///     Returns the worker's answer, including engine errors. Throws
@@ -99,6 +100,8 @@ internal sealed record TranscriptionWorkerLaunch(
 
         return request.Command switch
         {
+            TranscriptionWorkerCommands.DiscoverDevices => TimeSpan.FromSeconds(15),
+            TranscriptionWorkerCommands.ConfigureHardware => TimeSpan.FromSeconds(15),
             TranscriptionWorkerCommands.Load => TimeSpan.FromMinutes(10),
             // The WAV is normally 16 kHz mono PCM16; counting its header as audio only adds a little.
             TranscriptionWorkerCommands.Transcribe => TimeSpan.FromSeconds(120 + 10d * payloadBytes / (16000 * 2d)),
@@ -160,6 +163,7 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
     public int ProcessId { get; }
     public bool IsAlive => !_terminating && !_ended.Task.IsCompleted && _session.IsRunning;
     public TranscriptionWorkerState? State { get; private set; }
+    public IReadOnlyList<string> Capabilities { get; private set; } = [];
 
     internal static async Task<TranscriptionWorkerProcess> StartAsync(
         IPluginProcessSupervisor processes,
@@ -356,6 +360,7 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
         }
 
         State = hello.State;
+        Capabilities = hello.Capabilities ?? [];
         // A worker that announces no beat is never ended for silence.
         _heartbeats = hello.HeartbeatInterval is not null;
 
@@ -369,6 +374,12 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
     )
     {
         ct.ThrowIfCancellationRequested();
+        if (request.Command is TranscriptionWorkerCommands.DiscoverDevices or TranscriptionWorkerCommands.ConfigureHardware
+            && !Capabilities.Contains(TranscriptionWorkerCapabilities.HardwareSelection))
+        {
+            throw new NotSupportedException("This transcription worker does not support native device selection.");
+        }
+
         if (payload.Length > TranscriptionWorkerProtocol.MaximumAudioBytes)
         {
             throw new ArgumentException("The audio is too large for the local transcription engine.", nameof(payload));
