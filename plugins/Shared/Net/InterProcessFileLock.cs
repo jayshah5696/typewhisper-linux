@@ -34,7 +34,15 @@ internal static class InterProcessFileLock
     ///     would let a later caller create a fresh inode and "acquire" the lock while a
     ///     current holder still owns the old one. It is an inert, empty file.
     /// </summary>
-    public static async Task<FileStream> AcquireAsync(string lockPath, CancellationToken ct)
+    public static Task<FileStream> AcquireAsync(string lockPath, CancellationToken ct) =>
+        AcquireCoreAsync(lockPath, FileShare.None, ct);
+
+    // Concurrent read-only artifact users can share a sentinel. Install, clear and migration
+    // still take FileShare.None and cannot replace libraries until every user has exited.
+    internal static Task<FileStream> AcquireSharedAsync(string lockPath, CancellationToken ct) =>
+        AcquireCoreAsync(lockPath, FileShare.ReadWrite, ct);
+
+    private static async Task<FileStream> AcquireCoreAsync(string lockPath, FileShare sharing, CancellationToken ct)
     {
         while (true)
         {
@@ -45,7 +53,7 @@ internal static class InterProcessFileLock
                     lockPath,
                     FileMode.OpenOrCreate,
                     FileAccess.ReadWrite,
-                    FileShare.None
+                    sharing
                 );
             }
             catch (IOException ex) when (IsContention(ex))

@@ -523,6 +523,8 @@ public sealed partial class ModelManagerService : INotifyPropertyChanged, IDispo
         bool begun;
         lock (_fileOperationGate)
         {
+            if (_exclusiveAssetOperation)
+                throw new InvalidOperationException("Model assets are changing. Wait for the current operation to finish.");
             begun = _fileOperations.TryAdd(modelId, operation);
             running = begun ? Task.FromResult(ModelFileOperationOutcome.Ended) : _fileOperations[modelId].Completion;
         }
@@ -862,20 +864,28 @@ public sealed partial class ModelManagerService : INotifyPropertyChanged, IDispo
     /// <summary>
     ///     Deletes every on-demand-provisioning engine's cached CUDA runtime (the shared
     ///     CUDA math libraries plus each engine's own GPU build) so a corrupt cache can
-    ///     be recovered: the next process start re-provisions from scratch. The active
-    ///     model is unloaded first so no <c>.so</c> is in use. Every engine is attempted
+    ///     be recovered. Worker providers require explicit preparation again; legacy providers
+    ///     may prepare on a later load. The active model is unloaded first. Every engine is attempted
     ///     (one failing doesn't stop the others), but if any clear fails the collected
     ///     failures are thrown as an aggregate — so a corrupt runtime is never reported to
     ///     the user as repaired when it is still on disk. Note: libraries already loaded
-    ///     this session are held until exit, so a restart is required for the fresh
-    ///     re-download to take effect.
+    ///     in a legacy host process are held until exit, so those engines need a restart.
     /// </summary>
     public async Task ClearCudaRuntimeCacheAsync(CancellationToken cancellationToken = default)
     {
         await _modelLock.WaitAsync(cancellationToken);
+        var claimed = false;
         try
         {
+            lock (_fileOperationGate)
+            {
+                if (_exclusiveAssetOperation || _fileOperations.Count != 0)
+                    throw new InvalidOperationException("Model or runtime files are in use. Finish the current operation before clearing CUDA.");
+                _exclusiveAssetOperation = claimed = true;
+            }
             await UnloadModelCoreAsync();
+            if (ActiveModelId is not null)
+                throw new InvalidOperationException("The model could not unload. CUDA files were not removed.");
 
             var failures = new List<string>();
             foreach (
@@ -916,6 +926,10 @@ public sealed partial class ModelManagerService : INotifyPropertyChanged, IDispo
         }
         finally
         {
+            if (claimed)
+            {
+                lock (_fileOperationGate) { _exclusiveAssetOperation = false; }
+            }
             _modelLock.Release();
         }
     }

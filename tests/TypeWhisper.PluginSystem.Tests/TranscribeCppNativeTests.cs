@@ -1,6 +1,8 @@
+extern alias TranscribeCpp;
+
 using System.Buffers.Binary;
 using Moq;
-using TypeWhisper.Plugin.TranscribeCpp;
+using TranscribeCpp::TypeWhisper.Plugin.TranscribeCpp;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 

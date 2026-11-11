@@ -6,7 +6,10 @@ namespace TypeWhisper.PluginSDK;
 /// <remarks>
 /// Discovery must run in an isolated worker, not in the settings process. It must not download
 /// runtimes or load model weights. The host enforces a deadline and supplies the intended model.
-/// Implementations register CPU backends only for an explicit CPU request. Configuration does
+/// Discovery starts with the concrete CPU preference to inspect baseline CPU and optional Vulkan
+/// devices. A self-provisioning CUDA engine whose files are ready is also probed in a separate fresh
+/// worker with the concrete NvidiaCuda preference. A CUDA probe failure must not erase baseline
+/// devices. Inference registers CPU backends only for an explicit CPU request. Configuration does
 /// not prove execution; report the loaded device through the engine's acceleration status.
 /// </remarks>
 public interface ITranscriptionHardwareSelection

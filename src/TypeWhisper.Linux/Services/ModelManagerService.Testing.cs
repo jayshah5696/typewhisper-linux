@@ -43,9 +43,9 @@ public sealed partial class ModelManagerService
                         ? ResolveAutoPreference(requested, () => CudaRuntimePreflight().Success)
                         : TranscriptionAccelerationPreference.Cpu
                     : requested;
-            if (resolved != TranscriptionAccelerationPreference.Cpu && engine.ProvisionsCudaRuntimeOnDemand
+            if (resolved == TranscriptionAccelerationPreference.NvidiaCuda && engine.ProvisionsCudaRuntimeOnDemand
                 && !engine.IsCudaRuntimeProvisioned)
-                throw new InvalidOperationException("Prepare the GPU runtime explicitly before testing, or choose CPU.");
+                throw new InvalidOperationException("Prepare the CUDA runtime explicitly before testing, or choose CPU or Vulkan.");
             await using var fixture = typeof(ModelManagerService).Assembly.GetManifestResourceStream("TypeWhisper.ModelTest.wav")
                 ?? throw new FileNotFoundException("The public model test fixture is missing.");
             using var audio = new MemoryStream();

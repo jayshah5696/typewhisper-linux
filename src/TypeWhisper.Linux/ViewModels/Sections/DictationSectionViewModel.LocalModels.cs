@@ -102,7 +102,8 @@ public partial class DictationSectionViewModel
 
     // Moving the model folder under a running download or load would split or pull its files.
     public bool CanChangeModelStorage =>
-        !IsMigratingModelStorage && !HasLocalModelOperation && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
+        !IsRecording && !IsDownloadingCudaRuntime && !IsClearingGpuRuntime && !IsMigratingModelStorage
+        && !HasLocalModelOperation && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
 
     partial void OnIsMigratingModelStorageChanged(bool value)
     {

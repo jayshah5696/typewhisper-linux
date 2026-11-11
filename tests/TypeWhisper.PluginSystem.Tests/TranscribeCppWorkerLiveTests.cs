@@ -1,9 +1,11 @@
+extern alias TranscribeCpp;
+
 using System.Globalization;
 using Moq;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
-using TypeWhisper.Plugin.TranscribeCpp;
+using TranscribeCpp::TypeWhisper.Plugin.TranscribeCpp;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.PluginSDK.Processes;

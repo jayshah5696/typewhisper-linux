@@ -99,6 +99,87 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task StorageChangeRejectsActiveLeaseWithoutMovingOrUnloading()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        await using var lease = await sut.AcquireTranscriptionAsync(modelId);
+        var moved = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ChangeModelStorageAsync(() =>
+        {
+            moved = true;
+            return Task.CompletedTask;
+        }));
+        Assert.False(moved);
+        Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task StorageChangeHoldsExecutionAndFileSlotsUntilCommitAndReleasesThemOnFailure()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        await sut.LoadModelAsync(modelId);
+        var copying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var moving = sut.ChangeModelStorageAsync(async () =>
+        {
+            Assert.True(plugin.UnloadStarted.Task.IsCompleted);
+            copying.SetResult();
+            await commit.Task;
+            throw new IOException("copy failed");
+        });
+        await copying.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Null(await sut.TryAcquireTranscriptionAsync(modelId));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.DownloadModelAsync(modelId));
+            Assert.Equal(0, plugin.DownloadCallCount);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.PrepareCudaRuntimeAsync(plugin, null, CancellationToken.None));
+        }
+        finally { commit.SetResult(); }
+        await Assert.ThrowsAsync<IOException>(() => moving);
+        await sut.LoadModelAsync(modelId);
+        Assert.Equal(2, plugin.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task RuntimeClearRejectsConcurrentPreparationAndDoesNotRemoveFiles()
+    {
+        using var sut = CreateServiceWithLoadableModel(out _, out var plugin);
+        plugin.ProvisionsCudaRuntimeOnDemand = true;
+        plugin.CudaPreparationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparation = sut.PrepareCudaRuntimeAsync(plugin, null, CancellationToken.None);
+        await plugin.CudaPreparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ClearCudaRuntimeCacheAsync());
+            Assert.False(plugin.ClearCudaRuntimeCalled);
+            Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+        }
+        finally { plugin.CudaPreparationGate.SetResult(); }
+        await preparation;
+        await sut.ClearCudaRuntimeCacheAsync();
+        Assert.True(plugin.ClearCudaRuntimeCalled);
+    }
+
+    [Fact]
+    public async Task StorageChangeRejectsDownloadAlreadyWritingFiles()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        plugin.ModelDownloaded = false;
+        plugin.DownloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var download = sut.DownloadModelAsync(modelId);
+        await plugin.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ChangeModelStorageAsync(() =>
+                throw new InvalidOperationException("must not run")));
+            Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+        }
+        finally { plugin.DownloadGate.SetResult(); }
+        await download;
+    }
+
+    [Fact]
     public async Task AcquireTranscriptionAsync_WhileLeaseHeld_DoesNotArmAutoUnload()
     {
         using var sut = CreateServiceWithLoadableModel(
@@ -1695,7 +1776,7 @@ public class ModelManagerServiceTests
 
     private ModelManagerService CreateServiceWithLoadableModel(
         out string fullModelId,
-        out ITranscriptionEnginePlugin plugin,
+        out FakeTranscriptionPlugin plugin,
         int modelAutoUnloadSeconds = 0
     )
     {
@@ -2030,6 +2111,13 @@ public class ModelManagerServiceTests
             [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
 
         public bool ProvisionsCudaRuntimeOnDemand { get; set; }
+        public TaskCompletionSource? CudaPreparationGate { get; set; }
+        public TaskCompletionSource CudaPreparationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            CudaPreparationStarted.TrySetResult();
+            if (CudaPreparationGate is not null) await CudaPreparationGate.Task.WaitAsync(ct);
+        }
         public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
 
         /// <summary>Last preference passed to <see cref="SetAccelerationPreference" />.</summary>

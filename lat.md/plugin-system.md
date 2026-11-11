@@ -95,7 +95,7 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 
 ### Isolated GGUF batch inference
 
-[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The transcribe.cpp plugin]] keeps metadata and file management in the host and restricts native work to transcription workers. It provides batch inference and model-specific streaming on CPU or Vulkan.
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The transcribe.cpp plugin]] keeps metadata and file management in the host and restricts native work to transcription workers. It provides batch inference and model-specific streaming on CPU or Vulkan, with separately prepared CUDA support.
 
 [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeNativeRuntime.cs|The native adapter]] validates ABI layouts before native initializers, resolves exact backend and stable device identities, and checks the loaded device. CPU registration excludes GPU modules. Sessions retain their model handles, and cancellation settles native work before freeing either handle. Borrowed text is copied before session mutation or disposal. Dictionary terms use only the native vocabulary capability, not transcript instructions.
 
@@ -104,6 +104,26 @@ The proxy keeps original request intent. An Auto GPU load or inference failure g
 [[scripts/prepare-transcribe-native.py|Artifact preparation]] verifies the pinned archive and complete file hashes before publishing libraries and license notices. [[plugins/TypeWhisper.Plugin.TranscribeCpp/Native/runtime.json|The artifact pin]] covers CPU dispatch modules and optional Vulkan dependencies. The plugin requires no Node runtime, inference server, or T3 installation.
 
 [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppNativeTests.cs|Native boundary tests]] cover host probe refusal, device exclusions, input validation, audio coverage, and incomplete results. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppPluginTests.cs|Plugin lifetime tests]] check file leases, failed loads, cancellation before unload, repeated text, and prompt separation. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in real-worker test]] checks packaged CPU and exact Vulkan execution, external-file preservation, CPU module exclusion, and an utterance beyond Moonshine's native audio limit.
+
+### Explicit CUDA preparation
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.Cuda.cs|CUDA preparation]] downloads and verifies files only after the Settings action. It does not initialize native libraries in the host or change the requested mode or active worker.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/Native/cuda.json|The CUDA artifact pin]] identifies a complete official build, including licenses, for the same header contract as the baseline package. [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCudaArtifact.cs|The installer]] checks archive and file hashes, stages the complete closure, and publishes readiness atomically. Native use rehashes it under a retained file lease. Canceled transfers remain resumable; partial files never count as installed.
+
+[[plugins/Shared/Cuda/CudaRuntimeProvisioner.cs|The shared provisioner]] prepares CUDA 12 runtime and cuBLAS files without host preloading. Only a CUDA worker checks the driver and preloads existing libraries. It never downloads during discovery or inference. Baseline CPU/Vulkan and ready CUDA discovery use separate disposable workers so a broken CUDA driver cannot poison Vulkan. Auto prefers eligible CUDA, hardware Vulkan, then CPU. Explicit GPU failures never silently change mode.
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.cs|Settings controls]] support cancellation and distinguish ready files from confirmed execution. Preparation preserves selection and settings. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppCudaTests.cs|Artifact tests]] cover malformed archives, corruption, leases, cancellation, and opt-in offline verification of the official archive. [[tests/TypeWhisper.Linux.Tests/IsolatedCudaDiscoveryTests.cs|Discovery tests]] cover unavailable CUDA without losing Vulkan. [[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Control tests]] check explicit preparation and Vulkan raw tests without CUDA files.
+
+### Model storage coordination
+
+[[src/TypeWhisper.Linux/Services/ModelManagerService.Storage.cs|Storage changes]] hold the execution lock through unloading, copying, settings commit, and cleanup. Active leases or file operations refuse the move before settings change.
+
+[[src/TypeWhisper.Linux/Services/ModelManagerService.Cuda.cs|Explicit runtime preparation]] also reserves a file-operation slot. Model storage moves and runtime clearing cannot race that preparation. Failed unload stops deletion or migration rather than treating a still-loaded model as released.
+
+[[src/TypeWhisper.Core/Services/LocalModelStorageService.cs|Asset migration]] includes GGUF models and per-plugin runtimes but excludes provider settings. Existing source and destination sentinel locks remain held through commit and cleanup. Sentinel inodes are never copied over or unlinked. A foreign lease refuses migration without a settings change. External link receipts move without copying or changing their source weights.
+
+[[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeCppPlugin.cs|The plugin]] rebinds its model store and optional CUDA paths to the current host asset directory after unload. Worker launch resolves that directory per process start. [[tests/TypeWhisper.Core.Tests/Services/LocalModelStorageServiceTests.cs|Migration tests]] cover receipts, source ownership, foreign leases, retained sentinels, settings, and failure safety. [[tests/TypeWhisper.PluginSystem.Tests/ModelManagerServiceTests.cs|Manager tests]] cover lease and operation conflicts, failed copy recovery, and runtime preparation races.
 
 ### Isolated GGUF streaming
 
@@ -133,7 +153,7 @@ Search matches model names, provider labels, and provider-qualified identities a
 
 Only isolated providers can test without mirroring temporary selection into host settings. Another model runs in a disposable worker with a private execution preference and current native device resolution. Auto keeps its bounded CPU fallback policy. The live model is not evicted to make memory available for a test. A matching loaded model instead uses its existing worker, avoiding a second exclusive file lease. Different hardware for that same loaded file requires an explicit reload or unload.
 
-[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Testing.cs|The worker test operation]] names its target directly and never calls the host selection or load-mirroring methods. Worker setting writes remain memory-only. Results report the device confirmed for that test, separately from ongoing execution. Missing on-demand GPU runtimes require explicit preparation rather than test-triggered provisioning.
+[[src/TypeWhisper.Linux/Services/Plugins/TranscriptionWorkers/IsolatedTranscriptionEngine.Testing.cs|The worker test operation]] names its target directly and never calls the host selection or load-mirroring methods. Worker setting writes remain memory-only. Results report the device confirmed for that test, separately from ongoing execution. Missing on-demand CUDA runtimes require explicit preparation rather than test-triggered provisioning. Vulkan tests do not require optional CUDA files.
 
 [[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.ModelTesting.cs|Test controls]] show raw text or an error, pin the busy card through filters, and disable conflicting file operations. Recording cancels the test. A private deadline is a failure, not caller cancellation or partial success. Interface-language changes refresh labels without replacing the operation result. [[tests/fixtures/README.md|Fixture attribution]] ships with the app.
 

@@ -1,6 +1,8 @@
+extern alias TranscribeCpp;
+
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using TypeWhisper.Plugin.TranscribeCpp;
+using TranscribeCpp::TypeWhisper.Plugin.TranscribeCpp;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

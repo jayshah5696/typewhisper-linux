@@ -29,9 +29,11 @@ internal interface ITranscribeNativeSession : IDisposable
 
 internal sealed record NativeTranscript(string Text, string? Language);
 
-internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
+internal sealed class TranscribeNativeRuntime(string? cudaDirectory = null) : ITranscribeNativeRuntime
 {
-    private static readonly Lazy<IntPtr> s_library = new(LoadLibrary);
+    private static readonly Lock s_librarySync = new();
+    private static string? s_loadedDirectory;
+    private static IntPtr s_library;
     private bool _initialized;
 
     public void Initialize(TranscriptionAccelerationBackend? backend)
@@ -43,7 +45,10 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
         if (_initialized) return;
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
             throw new PlatformNotSupportedException("The bundled transcribe.cpp runtime supports Linux x64 only.");
-        _ = s_library.Value;
+        var directory = backend == TranscriptionAccelerationBackend.NvidiaCuda
+            ? cudaDirectory ?? throw new InvalidOperationException("Prepare the optional CUDA artifact explicitly first.")
+            : Path.Combine(Path.GetDirectoryName(typeof(TranscribeNativeRuntime).Assembly.Location)!, "native", "linux-x64");
+        LoadLibrary(directory);
         if (Text(transcribe_version()) != TranscribeModelCatalog.SupportedEngineVersion)
             throw new InvalidOperationException("The native transcribe.cpp version does not match the pinned binding.");
         VerifyLayout<LoadParams>(0);
@@ -56,16 +61,23 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
         VerifyLayout<BackendParams>(15);
         var allowed = backend switch
         {
-            null => 1u | 4u, // Optional CUDA is added only after its separate artifact is ready.
+            null => 1u | 4u, // CUDA discovery uses its own process and native artifact.
             TranscriptionAccelerationBackend.Cpu => 1u,
             TranscriptionAccelerationBackend.Vulkan => 1u | 4u,
-            TranscriptionAccelerationBackend.NvidiaCuda => throw new NotSupportedException("The optional transcribe.cpp CUDA artifact is not installed."),
+            TranscriptionAccelerationBackend.NvidiaCuda => 1u | 8u,
             TranscriptionAccelerationBackend.AmdMigraphx => throw new NotSupportedException("transcribe.cpp does not use MIGraphX."),
             TranscriptionAccelerationBackend.WebGpu => throw new NotSupportedException("transcribe.cpp does not use WebGPU."),
             _ => throw new ArgumentOutOfRangeException(nameof(backend)),
         };
         // _ex's mask is authoritative, while the environment also protects any earlier registration.
-        Environment.SetEnvironmentVariable("TRANSCRIBE_BACKENDS", backend == TranscriptionAccelerationBackend.Cpu ? "cpu" : "cpu,vulkan");
+        Environment.SetEnvironmentVariable("TRANSCRIBE_BACKENDS", backend switch
+        {
+            TranscriptionAccelerationBackend.Cpu => "cpu",
+            TranscriptionAccelerationBackend.NvidiaCuda => "cpu,cuda",
+            null or TranscriptionAccelerationBackend.Vulkan => "cpu,vulkan",
+            TranscriptionAccelerationBackend.AmdMigraphx or TranscriptionAccelerationBackend.WebGpu => throw new NotSupportedException("Unsupported backend."),
+            _ => throw new ArgumentOutOfRangeException(nameof(backend)),
+        });
         Environment.SetEnvironmentVariable("GGML_BACKEND_PATH", null);
         transcribe_backend_init_params_init(out var parameters);
         parameters.Allowed = allowed;
@@ -157,18 +169,26 @@ internal sealed class TranscribeNativeRuntime : ITranscribeNativeRuntime
         };
     }
 
-    private static IntPtr LoadLibrary()
+    private static void LoadLibrary(string directory)
     {
-        var directory = Path.Combine(Path.GetDirectoryName(typeof(TranscribeNativeRuntime).Assembly.Location)!, "native", "linux-x64");
-        using var contract = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "contract.json")));
-        if (contract.RootElement.GetProperty("version").GetString() != "0.4.1"
-            || contract.RootElement.GetProperty("header_hash").GetString() != "f99ad4169374b8f3")
-            throw new InvalidDataException("The transcribe.cpp native artifact contract does not match the pinned header.");
-        var library = NativeLibrary.Load(Path.Combine(directory, "libtranscribe.so"));
-        NativeLibrary.SetDllImportResolver(typeof(TranscribeNativeRuntime).Assembly,
-            (name, _, _) => name == "typewhisper-transcribe" ? library : IntPtr.Zero);
-        // Backend modules and this library remain process-local and pinned until worker exit.
-        return library;
+        lock (s_librarySync)
+        {
+            if (s_library != IntPtr.Zero)
+            {
+                if (s_loadedDirectory != directory) throw new InvalidOperationException("Change the native artifact in a fresh worker.");
+                return;
+            }
+            using var contract = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "contract.json")));
+            if (contract.RootElement.GetProperty("version").GetString() != "0.4.1"
+                || contract.RootElement.GetProperty("header_hash").GetString() != "f99ad4169374b8f3")
+                throw new InvalidDataException("The transcribe.cpp native artifact contract does not match the pinned header.");
+            var library = NativeLibrary.Load(Path.Combine(directory, "libtranscribe.so"));
+            NativeLibrary.SetDllImportResolver(typeof(TranscribeNativeRuntime).Assembly,
+                (name, _, _) => name == "typewhisper-transcribe" ? library : IntPtr.Zero);
+            // Backend modules and this library remain process-local and pinned until worker exit.
+            s_library = library;
+            s_loadedDirectory = directory;
+        }
     }
 
     private static void VerifyLayout<T>(int id) where T : struct

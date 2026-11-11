@@ -1,6 +1,8 @@
+extern alias TranscribeCpp;
+
 using System.Security.Cryptography;
 using Moq;
-using TypeWhisper.Plugin.TranscribeCpp;
+using TranscribeCpp::TypeWhisper.Plugin.TranscribeCpp;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -27,6 +29,46 @@ public sealed class TranscribeCppPluginTests
         await fixture.Plugin.DeleteModelAsync(fixture.Definition.Id, CancellationToken.None);
         Assert.Null(linking.GetLinkedModelPath(fixture.Definition.Id));
         Assert.Equal(before, await File.ReadAllBytesAsync(fixture.External));
+    }
+
+    [Fact]
+    public async Task OptionalCudaDoesNotProvisionOnActivationOrLoadAndDoesNotBreakCpu()
+    {
+        await using var fixture = await Fixture.CreateAsync(TranscriptionAccelerationPreference.NvidiaCuda);
+        ITranscriptionEngineRole engine = fixture.Plugin;
+        Assert.Contains(TranscriptionAccelerationBackend.NvidiaCuda, engine.SupportedAccelerationBackends);
+        Assert.True(engine.ProvisionsCudaRuntimeOnDemand);
+        Assert.False(engine.IsCudaRuntimeProvisioned);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "Runtimes")));
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadModelAsync(fixture.Definition.Id, CancellationToken.None));
+        Assert.Contains("explicit", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(engine.IsCudaRuntimeProvisioned);
+        Assert.False(fixture.Plugin.AccelerationStatus.IsModelLoaded);
+        Assert.Null(fixture.Runtime.InitializedBackend);
+        fixture.Host.Verify(host => host.SetSetting(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AssetLocationChangeRebindsModelStoreWithoutChangingSelectionOrExternalSource()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var assetRoot = fixture.Root;
+        fixture.Host.SetupGet(host => host.PluginAssetDirectory).Returns(() => assetRoot);
+        var destination = Path.Combine(fixture.Root, "moved-assets");
+        Directory.CreateDirectory(destination);
+        await fixture.Plugin.LoadModelAsync(fixture.Definition.Id, CancellationToken.None);
+        await fixture.Plugin.UnloadModelAsync();
+        Directory.Move(Path.Combine(fixture.Root, "models"), Path.Combine(destination, "models"));
+        assetRoot = destination;
+
+        Assert.True(fixture.Plugin.IsModelDownloaded(fixture.Definition.Id));
+        Assert.Equal(fixture.External, fixture.Plugin.GetLinkedModelPath(fixture.Definition.Id));
+        await fixture.Plugin.LoadModelAsync(fixture.Definition.Id, CancellationToken.None);
+        Assert.True(fixture.Plugin.AccelerationStatus.IsModelLoaded);
+        await fixture.Plugin.UnloadModelAsync();
+        await fixture.Plugin.DeleteModelAsync(fixture.Definition.Id, CancellationToken.None);
+        Assert.True(File.Exists(fixture.External));
+        fixture.Host.Verify(host => host.SetSetting(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
@@ -252,7 +294,7 @@ public sealed class TranscribeCppPluginTests
         internal TranscribeModel Definition { get; private set; } = null!;
         private readonly HttpClient _client = new();
 
-        internal static async Task<Fixture> CreateAsync()
+        internal static async Task<Fixture> CreateAsync(TranscriptionAccelerationPreference preference = TranscriptionAccelerationPreference.Cpu)
         {
             var fixture = new Fixture();
             Directory.CreateDirectory(fixture.Root);
@@ -267,8 +309,10 @@ public sealed class TranscribeCppPluginTests
             fixture.Host.Setup(value => value.GetSetting<string>("selectedModel")).Returns(fixture.Definition.Id);
             fixture.Plugin = new TranscribeCppPlugin(() => fixture.Runtime, catalog with { Models = [fixture.Definition] });
             await fixture.Plugin.ActivateAsync(fixture.Host.Object);
-            fixture.Plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
-            fixture.Plugin.ConfigureHardware(new(TranscriptionAccelerationPreference.Cpu, fixture.Runtime.Model.Device));
+            fixture.Plugin.SetAccelerationPreference(preference);
+            var device = preference == TranscriptionAccelerationPreference.Cpu ? fixture.Runtime.Model.Device
+                : new TranscriptionDevice(TranscriptionAccelerationBackend.NvidiaCuda, "test-cuda", "Test CUDA", TranscriptionDeviceKind.DiscreteGpu);
+            fixture.Plugin.ConfigureHardware(new(preference, device));
             return fixture;
         }
         public async ValueTask DisposeAsync()

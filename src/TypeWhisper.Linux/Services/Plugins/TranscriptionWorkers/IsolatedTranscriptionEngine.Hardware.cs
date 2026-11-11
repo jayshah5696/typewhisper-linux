@@ -48,19 +48,30 @@ internal sealed partial class IsolatedTranscriptionEngine
             try
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                await using var probe = await _start(TranscriptionAccelerationPreference.Cpu, null, running.Token)
-                    .ConfigureAwait(false);
-                var response = await probe.SendAsync(new TranscriptionWorkerMessage
+                var devices = (await ProbeDevicesAsync(modelId, TranscriptionAccelerationPreference.Cpu, running.Token)
+                    .ConfigureAwait(false)).ToList();
+                // An optional CUDA artifact can use a different ggml build. Never mix its registry
+                // or dependencies with baseline Vulkan discovery, including a broken CUDA driver.
+                if (_inner.ProvisionsCudaRuntimeOnDemand && _inner.IsCudaRuntimeProvisioned
+                    && _inner.SupportedAccelerationBackends.Contains(TranscriptionAccelerationBackend.NvidiaCuda))
                 {
-                    Command = TranscriptionWorkerCommands.DiscoverDevices,
-                    ModelId = modelId,
-                }, default, running.Token).ConfigureAwait(false);
-                if (response.Error is { } error)
-                {
-                    throw TranscriptionWorkerProtocol.ToException(error);
+                    using var cudaDeadline = CancellationTokenSource.CreateLinkedTokenSource(running.Token);
+                    cudaDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        devices.AddRange((await ProbeDevicesAsync(modelId, TranscriptionAccelerationPreference.NvidiaCuda,
+                            cudaDeadline.Token).ConfigureAwait(false)).Where(device => device.Backend == TranscriptionAccelerationBackend.NvidiaCuda));
+                    }
+                    catch (OperationCanceledException) when (running.IsCancellationRequested) { throw; }
+                    catch (Exception ex) when (ex is InvalidOperationException or IOException or NotSupportedException or TimeoutException or OperationCanceledException)
+                    {
+                        var reason = ex is OperationCanceledException ? "CUDA device discovery timed out." : ex.Message;
+                        devices.Add(new(TranscriptionAccelerationBackend.NvidiaCuda, "cuda-runtime", "CUDA runtime", TranscriptionDeviceKind.Unknown,
+                            IsAvailable: false, UnavailableReason: reason));
+                        _log(PluginLogLevel.Warning, $"CUDA discovery failed; baseline Vulkan and CPU remain available: {reason}");
+                    }
                 }
-
-                return response.Devices ?? throw new InvalidDataException("The worker returned no device list.");
+                return devices.DistinctBy(device => (device.Backend, device.StableId)).ToArray();
             }
             finally
             {
@@ -71,6 +82,19 @@ internal sealed partial class IsolatedTranscriptionEngine
         {
             throw StoppedException(ex);
         }
+    }
+
+    private async Task<IReadOnlyList<TranscriptionDevice>> ProbeDevicesAsync(
+        string modelId, TranscriptionAccelerationPreference preference, CancellationToken ct)
+    {
+        await using var probe = await _start(preference, null, ct).ConfigureAwait(false);
+        var response = await probe.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = TranscriptionWorkerCommands.DiscoverDevices,
+            ModelId = modelId,
+        }, default, ct).ConfigureAwait(false);
+        if (response.Error is { } error) throw TranscriptionWorkerProtocol.ToException(error);
+        return response.Devices ?? throw new InvalidDataException("The worker returned no device list.");
     }
 
     private void ConfigureHardware(TranscriptionHardwareRequest request)

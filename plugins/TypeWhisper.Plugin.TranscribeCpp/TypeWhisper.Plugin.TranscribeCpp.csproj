@@ -11,9 +11,12 @@
         <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
         <EmbeddedResource Include="Models\catalog.json" />
+        <EmbeddedResource Include="Native\cuda.json" />
         <Compile Include="..\Shared\Net\ResilientDownloader.cs" Link="Shared\Net\ResilientDownloader.cs" />
         <Compile Include="..\Shared\Net\DownloadSpace.cs" Link="Shared\Net\DownloadSpace.cs" />
         <Compile Include="..\Shared\Net\InterProcessFileLock.cs" Link="Shared\Net\InterProcessFileLock.cs" />
+        <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs" Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+        <Compile Include="..\Shared\Io\DurableFileWrite.cs" Link="Shared\Io\DurableFileWrite.cs" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="manifest.json" CopyToOutputDirectory="PreserveNewest" />

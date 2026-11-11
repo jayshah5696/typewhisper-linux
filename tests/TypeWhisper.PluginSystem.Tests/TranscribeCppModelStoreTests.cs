@@ -1,8 +1,10 @@
+extern alias TranscribeCpp;
+
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using TypeWhisper.Plugin.TranscribeCpp;
+using TranscribeCpp::TypeWhisper.Plugin.TranscribeCpp;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

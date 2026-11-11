@@ -222,6 +222,10 @@
                                     Content="{Binding DownloadCudaRuntimeText}"
                                     Command="{Binding DownloadCudaRuntimeCommand}"
                                     IsVisible="{Binding ShowDownloadCudaRuntimeAction}" />
+                            <Button Classes="small-action"
+                                    Content="{loc:Str Common.Cancel}"
+                                    Command="{Binding CancelCudaRuntimeDownloadCommand}"
+                                    IsVisible="{Binding IsDownloadingCudaRuntime}" />
                             <Button Grid.Column="2"
                                     Content="{Binding ClearGpuRuntimeText}"
                                     Command="{Binding ClearGpuRuntimeCommand}"

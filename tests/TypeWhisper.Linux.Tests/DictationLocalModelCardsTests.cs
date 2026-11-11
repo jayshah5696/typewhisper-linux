@@ -512,6 +512,25 @@ public sealed class DictationLocalModelCardsTests
     }
 
     [Fact]
+    public async Task RawVulkanTestDoesNotRequireOptionalCudaFiles()
+    {
+        var local = new DownloadableEngine { ProvisionsCudaRuntimeOnDemand = true, HardwareSelection = new HardwareProbe() };
+        local.Downloaded.Add("small");
+        var started = new List<TranscriptionAccelerationPreference>();
+        await using var isolated = new IsolatedTranscriptionEngine(local, (preference, _, _) =>
+        {
+            started.Add(preference);
+            return Task.FromResult<ITranscriptionWorkerConnection>(new TestWorker());
+        }, (_, _) => { });
+        using var context = new CardsTestContext(new AppSettings { LocalModelAcceleration = "vulkan" }, isolated);
+        var result = await context.Models.TestModelAsync(context.Card("small").ModelId, CancellationToken.None);
+        Assert.Equal("He bent his face over her hair.", result.Transcription.Text);
+        Assert.Contains(TranscriptionAccelerationPreference.Vulkan, started);
+        Assert.Equal(0, local.CudaPrepareCalls);
+        Assert.False(local.IsCudaRuntimeProvisioned);
+    }
+
+    [Fact]
     public async Task RawTest_LegacyAutoCpuProviderDoesNotProbeOrRequestCuda()
     {
         var local = new DownloadableEngine();
@@ -665,6 +684,7 @@ public sealed class DictationLocalModelCardsTests
     {
         public TranscriptionAccelerationPreference Acceleration => TranscriptionAccelerationPreference.Cpu;
         public int ProcessId => 1234;
+        public IReadOnlyList<string> Capabilities => [TranscriptionWorkerCapabilities.HardwareSelection];
         public bool IsAlive => !Disposed;
         public bool Disposed { get; private set; }
         public TaskCompletionSource? Wait { get; init; }
@@ -674,6 +694,7 @@ public sealed class DictationLocalModelCardsTests
         public TranscriptionWorkerState? State { get; private set; }
         public async Task<TranscriptionWorkerMessage> SendAsync(TranscriptionWorkerMessage request, ReadOnlyMemory<byte> payload, CancellationToken ct)
         {
+            if (request.Command == TranscriptionWorkerCommands.DiscoverDevices) return new() { Devices = HardwareProbe.Devices.ToArray() };
             State = new(request.ModelId, request.ModelId, new(TranscriptionAccelerationBackend.Cpu, "CPU")
             { IsModelLoaded = true, ActiveDevice = TranscriptionHardwareSelector.CpuDevice });
             if (request.Command != TranscriptionWorkerCommands.Transcribe) return new() { State = State };
@@ -784,6 +805,35 @@ public sealed class DictationLocalModelCardsTests
         }
     }
 
+    [Fact]
+    public async Task NativeCudaPreparationDoesNotChangeTheRequestedModeAndCanBeCanceled()
+    {
+        var engine = new DownloadableEngine { HardwareSelection = new HardwareProbe(), ProvisionsCudaRuntimeOnDemand = true };
+        using var context = new CardsTestContext(new AppSettings
+        {
+            SelectedModelId = "plugin:com.test.local:small", LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
+        }, engine);
+        await context.WaitUntilAsync(() => context.Sut.SelectedModel is not null);
+        var mode = context.Sut.LocalModelAcceleration;
+        context.Settings.Invocations.Clear();
+        Assert.Equal(0, engine.CudaPrepareCalls);
+        await context.Sut.DownloadCudaRuntimeCommand.ExecuteAsync(null);
+        Assert.Equal(1, engine.CudaPrepareCalls);
+        Assert.Equal(mode, context.Sut.LocalModelAcceleration);
+        context.Settings.Verify(value => value.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        Assert.DoesNotContain("restart", context.Sut.CudaSetupStatus, StringComparison.OrdinalIgnoreCase);
+
+        engine.CudaPreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = context.Sut.DownloadCudaRuntimeCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => engine.CudaPrepareCalls == 2);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.CancelCudaRuntimeDownloadCommand.Execute(null);
+        await running.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(context.Sut.IsDownloadingCudaRuntime);
+        Assert.Equal(mode, context.Sut.LocalModelAcceleration);
+        Assert.Contains("cancel", context.Sut.CudaSetupStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class DownloadableEngine : ITranscriptionEngineRole
     {
         public HashSet<string> Downloaded { get; } = [];
@@ -799,6 +849,16 @@ public sealed class DictationLocalModelCardsTests
         public bool SupportsModelDownload => true;
         public ITranscriptionModelLinking? ModelLinking { get; set; }
         public bool SupportsTranslation => false;
+        public bool ProvisionsCudaRuntimeOnDemand { get; init; }
+        public bool IsCudaRuntimeProvisioned { get; private set; }
+        public int CudaPrepareCalls { get; private set; }
+        public TaskCompletionSource? CudaPreparation { get; set; }
+        public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            CudaPrepareCalls++;
+            if (CudaPreparation is not null) await CudaPreparation.Task.WaitAsync(ct);
+            IsCudaRuntimeProvisioned = true;
+        }
         public string? SelectedModelId { get; private set; }
 
         public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; init; } =

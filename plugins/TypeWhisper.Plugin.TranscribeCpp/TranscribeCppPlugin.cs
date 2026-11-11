@@ -13,7 +13,9 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
     { Timeout = TimeSpan.FromHours(2) };
     private CancellationTokenSource _lifetime = new();
     private IPluginHostServices? _host;
+    private readonly Lock _storeSync = new();
     private TranscribeModelStore? _store;
+    private string? _assetDirectory;
     private ITranscribeNativeRuntime? _runtime;
     private ITranscribeNativeModel? _model;
     private TranscribeModelLease? _lease;
@@ -21,10 +23,10 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
     private TranscriptionHardwareRequest? _hardware;
     private bool _disposed;
 
-    public TranscribeCppPlugin() : this(() => new TranscribeNativeRuntime()) { }
-    internal TranscribeCppPlugin(Func<ITranscribeNativeRuntime> runtimeFactory, TranscribeModelCatalog? catalog = null)
+    public TranscribeCppPlugin() : this(null) { }
+    internal TranscribeCppPlugin(Func<ITranscribeNativeRuntime>? runtimeFactory, TranscribeModelCatalog? catalog = null)
     {
-        _runtimeFactory = runtimeFactory;
+        _runtimeFactory = runtimeFactory ?? (() => new TranscribeNativeRuntime(_cudaArtifact?.DirectoryPath));
         _catalog = catalog ?? TranscribeModelCatalog.LoadEmbedded();
     }
 
@@ -46,19 +48,36 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
     public ITranscriptionHardwareSelection HardwareSelection => this;
     public ITranscriptionModelLinking ModelLinking => this;
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan];
+        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan, TranscriptionAccelerationBackend.NvidiaCuda];
     public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Cpu;
     public TranscriptionAccelerationStatus AccelerationStatus { get; private set; } = UnloadedStatus();
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => _catalog.Models.Select(value => value.ToModelInfo()).ToArray();
     private TranscribeModel? SelectedDefinition => SelectedModelId is { } id ? _catalog.Get(id) : null;
-    private TranscribeModelStore Store => _store ?? throw new InvalidOperationException("Activate the plugin before managing model files.");
+    private TranscribeModelStore Store
+    {
+        get
+        {
+            var directory = _host?.PluginAssetDirectory
+                ?? throw new InvalidOperationException("Activate the plugin before managing model files.");
+            lock (_storeSync)
+            {
+                if (_store is null || _assetDirectory != directory)
+                {
+                    if (_model is not null) throw new InvalidOperationException("Unload the model before changing its storage location.");
+                    _store = new TranscribeModelStore(Path.Combine(directory, "models"), _client);
+                    _assetDirectory = directory;
+                }
+                return _store;
+            }
+        }
+    }
 
     public Task ActivateAsync(IPluginHostServices host)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_lifetime.IsCancellationRequested) { _lifetime.Dispose(); _lifetime = new CancellationTokenSource(); }
         _host = host;
-        _store = new TranscribeModelStore(Path.Combine(host.PluginAssetDirectory, "models"), _client);
+        _ = Store;
         var saved = host.GetSetting<string>("selectedModel");
         SelectedModelId = _catalog.Models.Any(value => value.Id == saved) ? saved : null;
         return Task.CompletedTask;
@@ -71,7 +90,7 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         SelectedModelId = modelId;
     }
 
-    public string? GetLinkedModelPath(string modelId) => _store?.GetLinkedPath(_catalog.Get(modelId));
+    public string? GetLinkedModelPath(string modelId) => _host is null ? null : Store.GetLinkedPath(_catalog.Get(modelId));
     public async Task LinkModelAsync(string modelId, string sourcePath, CancellationToken ct)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
@@ -86,7 +105,7 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         finally { _gate.Release(); }
     }
 
-    public bool IsModelDownloaded(string modelId) => _store?.IsReady(_catalog.Get(modelId)) == true;
+    public bool IsModelDownloaded(string modelId) => _host is not null && Store.IsReady(_catalog.Get(modelId));
     public async Task DownloadModelAsync(string modelId, IProgress<double>? progress, CancellationToken ct)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
@@ -115,11 +134,13 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         {
             if (_model is not null || _hardware is not null)
                 throw new InvalidOperationException("Probe devices in a fresh worker, not a configured model worker.");
+            var cuda = AccelerationPreference == TranscriptionAccelerationPreference.NvidiaCuda;
+            if (cuda) await PrepareCudaWorkerAsync(linked.Token).ConfigureAwait(false);
             return await Task.Run(() =>
             {
                 linked.Token.ThrowIfCancellationRequested();
                 _runtime ??= _runtimeFactory();
-                _runtime.Initialize(null);
+                _runtime.Initialize(cuda ? TranscriptionAccelerationBackend.NvidiaCuda : null);
                 var devices = _runtime.DiscoverDevices();
                 linked.Token.ThrowIfCancellationRequested();
                 return devices;
@@ -134,10 +155,10 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         _ = preference switch
         {
             TranscriptionAccelerationPreference.Cpu => true,
-            TranscriptionAccelerationPreference.Vulkan => true,
+            TranscriptionAccelerationPreference.Vulkan or TranscriptionAccelerationPreference.NvidiaCuda => true,
             TranscriptionAccelerationPreference.Auto => throw new ArgumentException("The host must resolve Auto before calling the legacy setter.", nameof(preference)),
-            TranscriptionAccelerationPreference.NvidiaCuda or TranscriptionAccelerationPreference.AmdMigraphx or TranscriptionAccelerationPreference.WebGpu =>
-                throw new NotSupportedException("This transcribe.cpp runtime supports CPU and Vulkan."),
+            TranscriptionAccelerationPreference.AmdMigraphx or TranscriptionAccelerationPreference.WebGpu =>
+                throw new NotSupportedException("This transcribe.cpp runtime supports CPU, Vulkan, and optional CUDA."),
             _ => throw new ArgumentOutOfRangeException(nameof(preference)),
         };
         AccelerationPreference = preference;
@@ -152,8 +173,9 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         {
             TranscriptionAccelerationPreference.Cpu => TranscriptionAccelerationBackend.Cpu,
             TranscriptionAccelerationPreference.Vulkan => TranscriptionAccelerationBackend.Vulkan,
-            TranscriptionAccelerationPreference.Auto or TranscriptionAccelerationPreference.NvidiaCuda
-                or TranscriptionAccelerationPreference.AmdMigraphx or TranscriptionAccelerationPreference.WebGpu => throw new InvalidOperationException("Resolve a supported backend first."),
+            TranscriptionAccelerationPreference.NvidiaCuda => TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationPreference.Auto or TranscriptionAccelerationPreference.AmdMigraphx
+                or TranscriptionAccelerationPreference.WebGpu => throw new InvalidOperationException("Resolve a supported backend first."),
             _ => throw new ArgumentOutOfRangeException(nameof(request)),
         };
         if (request.Device.Backend != expected || !request.Device.IsAvailable
@@ -180,6 +202,8 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         var definition = _catalog.Get(modelId);
         var request = _hardware ?? throw new InvalidOperationException("Configure exact hardware in an isolated worker before loading a model.");
         await UnloadCoreAsync().ConfigureAwait(false);
+        if (request.Device.Backend == TranscriptionAccelerationBackend.NvidiaCuda)
+            await PrepareCudaWorkerAsync(ct).ConfigureAwait(false);
         var lease = await Store.AcquireAsync(definition, ct).ConfigureAwait(false);
         try
         {
@@ -270,6 +294,7 @@ public sealed partial class TranscribeCppPlugin : ITranscriptionEnginePlugin, IT
         _loadedModelId = null;
         AccelerationStatus = UnloadedStatus();
         if (_lease is not null) { await _lease.DisposeAsync().ConfigureAwait(false); _lease = null; }
+        if (_cudaLease is not null) { await _cudaLease.DisposeAsync().ConfigureAwait(false); _cudaLease = null; }
     }
     private static TranscriptionAccelerationStatus UnloadedStatus() =>
         new(TranscriptionAccelerationBackend.Cpu, "No model loaded") { IsModelLoaded = false };

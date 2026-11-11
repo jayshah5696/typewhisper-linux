@@ -352,9 +352,8 @@ public partial class DictationSectionViewModel : ObservableObject
         _commands = commands;
         _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _a11yBus = a11yBus;
-        // Unload the active local model before moving its files so the source
-        // path isn't held open during migration.
-        _modelStorage = new LocalModelStorageService(_settings, () => _models.UnloadModel());
+        // ModelManagerService holds execution and file-operation coordination through the move.
+        _modelStorage = new LocalModelStorageService(_settings);
 
         _dictation.RecordingStateChanged += (_, recording) =>
             Dispatcher.UIThread.Post(() =>
@@ -496,7 +495,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // handled by ShowDownloadCudaRuntimeAction instead. The !CanUseCuda gate also hides it
     // once an engine is fully provisioned from its own cache (CUDA already usable).
     public bool ShowCudaLibraryPathAction =>
-        _commands.HasCudaGpu
+        SelectedModelPlugin?.HardwareSelection is null && _commands.HasCudaGpu
         && !CanUseCuda
         && !_commands.HasCudaRuntimeLibraries
         && _cudaLibraryPathSetup.FindCuda12LibraryPath() is not null;
@@ -1795,7 +1794,7 @@ public partial class DictationSectionViewModel : ObservableObject
         ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageMoving"];
         try
         {
-            await _modelStorage.MoveDownloadsAndUsePathAsync(folderPath);
+            await _models.ChangeModelStorageAsync(() => _modelStorage.MoveDownloadsAndUsePathAsync(folderPath));
             ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageUpdated"];
         }
         catch (LocalModelStorageUnavailableException ex)
@@ -1830,7 +1829,7 @@ public partial class DictationSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ResetModelStorage()
+    private async Task ResetModelStorageAsync()
     {
         if (!IsUsingCustomModelStorage || !CanChangeModelStorage)
         {
@@ -1839,9 +1838,25 @@ public partial class DictationSectionViewModel : ObservableObject
 
         // Leaves already-moved files where they are and points future downloads back
         // at the default app-data location.
-        _modelStorage.ResetToDefault();
-        ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
-        RefreshLocalModelCards(checkDisk: true);
+        IsMigratingModelStorage = true;
+        try
+        {
+            await _models.ChangeModelStorageAsync(() =>
+            {
+                _modelStorage.ResetToDefault();
+                return Task.CompletedTask;
+            });
+            ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
+        }
+        catch (Exception ex)
+        {
+            ModelStorageStatusText = Loc.Instance.GetString("Dictation.ModelStorageChangeFailed", ex.Message);
+        }
+        finally
+        {
+            IsMigratingModelStorage = false;
+            RefreshLocalModelCards(checkDisk: true);
+        }
     }
 
     private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)
@@ -1966,9 +1981,17 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
-    // Driver-only host (or partial install): download just the CUDA libraries the selected
-    // engine is missing, show progress, then ask the user to restart so a clean process
-    // loads the GPU build. The engine itself skips any library already on the system.
+    private CancellationTokenSource? _cudaPreparationCts;
+    private bool _cudaPreparationCanceled;
+
+    [RelayCommand]
+    private void CancelCudaRuntimeDownload()
+    {
+        _cudaPreparationCanceled = true;
+        _cudaPreparationCts?.Cancel();
+    }
+
+    // Explicit preparation stays separate from the requested and active execution backend.
     [RelayCommand]
     private async Task DownloadCudaRuntimeAsync()
     {
@@ -1978,7 +2001,11 @@ public partial class DictationSectionViewModel : ObservableObject
             return;
         }
 
+        using var preparation = new CancellationTokenSource(TimeSpan.FromHours(2));
+        _cudaPreparationCts = preparation;
+        _cudaPreparationCanceled = false;
         IsDownloadingCudaRuntime = true;
+        OnPropertyChanged(nameof(CanChangeModelStorage));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
         StatusText = Loc.Instance["Dictation.CudaDownloadingShort"];
         CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloading", "0%");
@@ -1986,39 +2013,56 @@ public partial class DictationSectionViewModel : ObservableObject
         // Marshal progress onto the UI thread — the provisioner reports from a background
         // task, and CudaSetupStatus binds straight into the view.
         var progress = new Progress<double>(p =>
-            CudaSetupStatus = Loc.Instance.GetString(
-                "Dictation.CudaDownloading",
-                Math.Clamp(p, 0, 1).ToString("P0")
-            )
-        );
+        {
+            if (ReferenceEquals(_cudaPreparationCts, preparation) && ReferenceEquals(SelectedModelPlugin, plugin))
+                CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloading", Math.Clamp(p, 0, 1).ToString("P0"));
+        });
 
         try
         {
-            await plugin.EnsureCudaRuntimeReadyAsync(progress, CancellationToken.None);
+            await Task.Run(() => _models.PrepareCudaRuntimeAsync(plugin, progress, preparation.Token), preparation.Token);
+            preparation.Token.ThrowIfCancellationRequested();
 
             // Refresh the cached provisioned flag (cheap now — the cache is populated, so the
             // probe is file-existence checks, no `ldconfig`) so CanUseCuda reads true before
             // we select CUDA below.
             await RefreshSelectedPluginCudaProvisionedAsync();
 
-            // Auto-select CUDA so the single restart we prompt for lands directly on the
-            // GPU — the user downloaded the runtime in order to use it, so making them
-            // also toggle the dropdown (and restart a second time) is needless friction.
-            // CanUseCuda is now true (the selected engine just provisioned the cache), so
-            // this persists the preference instead of the guard reverting it to CPU. Set
-            // the status text AFTER, since the acceleration-change handler clears it.
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda;
-            CudaSetupStatus = Loc.Instance["Dictation.CudaDownloaded"];
-            StatusText = Loc.Instance["Dictation.CudaDownloadedShort"];
+            if (ReferenceEquals(SelectedModelPlugin, plugin))
+            {
+                if (plugin.HardwareSelection is not null)
+                {
+                    CudaSetupStatus = Loc.Instance["Dictation.CudaPreparedNative"];
+                    StatusText = CudaSetupStatus;
+                    // Discovery remains explicit and uses a fresh worker. Do not change the
+                    // user's mode, active worker or saved device merely because files are ready.
+                }
+                else
+                {
+                    LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda;
+                    CudaSetupStatus = Loc.Instance["Dictation.CudaDownloaded"];
+                    StatusText = Loc.Instance["Dictation.CudaDownloadedShort"];
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_cudaPreparationCanceled && preparation.IsCancellationRequested)
+        {
+            if (ReferenceEquals(SelectedModelPlugin, plugin))
+                CudaSetupStatus = StatusText = Loc.Instance["Dictation.CudaDownloadCanceled"];
         }
         catch (Exception ex)
         {
-            CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloadFailed", ex.Message);
-            StatusText = Loc.Instance["Dictation.CudaDownloadFailedShort"];
+            if (ReferenceEquals(SelectedModelPlugin, plugin))
+            {
+                CudaSetupStatus = Loc.Instance.GetString("Dictation.CudaDownloadFailed", ex.Message);
+                StatusText = Loc.Instance["Dictation.CudaDownloadFailedShort"];
+            }
         }
         finally
         {
+            _cudaPreparationCts = null;
             IsDownloadingCudaRuntime = false;
+            OnPropertyChanged(nameof(CanChangeModelStorage));
             OnPropertyChanged(nameof(CanUseCuda));
             OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
             OnPropertyChanged(nameof(ShowClearGpuRuntimeAction));
@@ -2027,10 +2071,8 @@ public partial class DictationSectionViewModel : ObservableObject
         }
     }
 
-    // Recovery for a corrupt cached GPU runtime: delete every provisioning engine's
-    // cached CUDA runtime (the shared math libs + each engine's own GPU build) so the
-    // next process start re-provisions from scratch. The libs already dlopen'd this
-    // session are held until exit, so the success message prompts the user to restart.
+    // Clear every provisioning engine's cached CUDA files. Native worker providers can
+    // prepare them explicitly again without restarting the app; legacy loaders remain pinned.
     [RelayCommand]
     private async Task ClearGpuRuntimeAsync()
     {
@@ -2051,11 +2093,10 @@ public partial class DictationSectionViewModel : ObservableObject
             // plugins' synchronous ClearCache()/Directory.Delete would otherwise run on the
             // dispatcher and freeze the UI (the "Clearing…" status wouldn't even paint).
             await Task.Run(() => _models.ClearCudaRuntimeCacheAsync());
-            // Re-provisioning happens on the next process start, so don't re-offer the
-            // in-session download (it would just re-fetch into a process that can't use it).
-            _gpuRuntimeClearedPendingRestart = true;
-            CudaSetupStatus = Loc.Instance["Dictation.GpuRuntimeCleared"];
-            StatusText = Loc.Instance["Dictation.GpuRuntimeCleared"];
+            // Only legacy loaders need an app restart before another prepared build can load.
+            _gpuRuntimeClearedPendingRestart = plugin.HardwareSelection is null;
+            CudaSetupStatus = StatusText = Loc.Instance[plugin.HardwareSelection is null
+                ? "Dictation.GpuRuntimeCleared" : "Dictation.GpuRuntimeClearedNative"];
         }
         catch (Exception ex)
         {
