@@ -27,7 +27,7 @@ public sealed class DictationLocalModelCardsTests
         Assert.Equal(["Small", "Large", "Medium"], context.Sut.LocalModelCards.Select(card => card.DisplayName));
         var small = context.Card("small");
         var large = context.Card("large");
-        Assert.Equal("~200 MB · Local engine", small.DetailText);
+        Assert.Equal($"{Loc.Instance["Dictation.ModelDownloadSize"]}: ~200 MB · Local engine", small.DetailText);
         Assert.Equal(Loc.Instance["Dictation.ModelCardDownloaded"], small.BadgeText);
         Assert.True(small is { ShowUse: true, CanUse: true, ShowRemove: true, ShowDownload: false });
         Assert.Equal(Loc.Instance["Dictation.ModelCardRecommended"], large.BadgeText);
@@ -185,6 +185,150 @@ public sealed class DictationLocalModelCardsTests
         Assert.Equal(Loc.Instance["Dictation.ModelCardNotDownloaded"], small.BadgeText);
     }
 
+    [Fact]
+    public void Search_ListsHiddenMatchesAndIncludesProviderAndIdentityWithoutSavingSettings()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Settings.Invocations.Clear();
+        var cards = context.Sut.LocalModelCards.ToArray();
+
+        context.Sut.LocalModelSearch = "  medium  ";
+        Assert.Equal(["Medium"], cards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        context.Sut.LocalModelSearch = "LOCAL ENGINE";
+        Assert.All(cards, card => Assert.True(card.IsListed));
+        context.Sut.LocalModelSearch = "com.test.local:small";
+        Assert.Equal(["Small"], cards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        context.Sut.LocalModelSearch = "";
+        Assert.False(context.Card("medium").IsListed);
+        Assert.Equal(cards, context.Sut.LocalModelCards);
+        context.Settings.Verify(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public void LanguageFilters_RequireEveryLanguageAndRejectUnknownMetadata()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Sut.ShowAllLocalModels = true;
+        var languages = context.Sut.LocalModelLanguageFilters.ToArray();
+        languages.Single(option => option.Code == "en").IsSelected = true;
+        Assert.Equal(["Small", "Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        languages.Single(option => option.Code == "de").IsSelected = true;
+        Assert.Equal(["Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        Assert.Equal(languages, context.Sut.LocalModelLanguageFilters);
+        Assert.Equal("auto", context.Sut.Language);
+        context.Sut.ClearLocalModelFiltersCommand.Execute(null);
+        Assert.All(languages, option => Assert.False(option.IsSelected));
+        Assert.All(context.Sut.LocalModelCards, card => Assert.True(card.IsListed));
+    }
+
+    [Fact]
+    public async Task Filters_KeepSelectedAndDownloadingCardsReachable()
+    {
+        var local = new DownloadableEngine { DownloadGate = new TaskCompletionSource() };
+        local.Downloaded.Add("small");
+        using var context = new CardsTestContext(local);
+        context.Sut.UseLocalModelCommand.Execute(context.Card("small"));
+        await context.WaitUntilAsync(() => context.Card("small").IsActive);
+        var download = context.Sut.DownloadLocalModelCommand.ExecuteAsync(context.Card("large"));
+        await local.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await context.WaitUntilAsync(() => context.Card("large").ShowCancel);
+
+        context.Sut.LocalModelSearch = "no match";
+        context.Sut.LivePreviewModelsOnly = true;
+        Assert.True(context.Card("small").IsListed);
+        Assert.True(context.Card("large").IsListed);
+        Assert.False(context.Card("medium").IsListed);
+        context.Sut.CancelLocalModelDownloadCommand.Execute(context.Card("large"));
+        await download.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(context.Card("large").IsListed);
+        Assert.True(context.Card("small").IsListed);
+    }
+
+    [Fact]
+    public void LiveFilter_RequiresKnownPerModelSupport()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Sut.LivePreviewModelsOnly = true;
+        Assert.Equal(["Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+    }
+
+    [Theory]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
+    public async Task LanguageChange_PreservesFiltersAndOperationProgressWithoutSaving(string language)
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var local = new DownloadableEngine { DownloadGate = new TaskCompletionSource() };
+            using var context = new CardsTestContext(local);
+            context.Sut.LocalModelSearch = "Large";
+            context.Sut.LocalModelLanguageFilters.Single(option => option.Code == "en").IsSelected = true;
+            var large = context.Card("large");
+            var download = context.Sut.DownloadLocalModelCommand.ExecuteAsync(large);
+            await local.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            local.LastProgress!.Report(0.25);
+            await context.WaitUntilAsync(() => large.PercentText == "25%");
+            var options = context.Sut.LocalModelLanguageFilters.ToArray();
+            context.Settings.Invocations.Clear();
+
+            Loc.Instance.CurrentLanguage = language;
+            Assert.Equal(options, context.Sut.LocalModelLanguageFilters);
+            await context.WaitUntilAsync(() => !ReferenceEquals(options[0], context.Sut.LocalModelLanguageFilters[0]));
+            Assert.True(context.Sut.LocalModelLanguageFilters.Single(option => option.Code == "en").IsSelected);
+            Assert.Equal("Large", context.Sut.LocalModelSearch);
+            Assert.Equal("25%", large.PercentText);
+            Assert.True(large.ShowCancel);
+            Assert.Equal(Loc.Instance["Dictation.ModelCardDownloading"], large.BadgeText);
+            Assert.Contains(Loc.Instance["Dictation.ModelMetadataYes"], large.CapabilityText);
+            Assert.Equal(Loc.Instance.GetString("Dictation.ModelFilterResults", 1, 3), context.Sut.LocalModelResultsText);
+            context.Settings.Verify(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+            context.Sut.CancelLocalModelDownloadCommand.Execute(large);
+            await download.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void Metadata_ShowsDownloadSizeTermsAndReferenceProvenanceAndBlocksUnavailableActions()
+    {
+        var local = new DownloadableEngine
+        {
+            TranscriptionModels =
+            [
+                new("restricted", "Restricted")
+                {
+                    SizeDescription = "400 MiB", Languages = ["en"], SupportsStreaming = false,
+                    SupportsTranslation = true, License = "Publisher terms", LicenseUrl = "https://example.org/terms",
+                    UnavailableReason = "Terms need review",
+                    ReferenceBenchmarks = [new("LibriSpeech", "en", "WER", 4.2, "https://example.org/results", "Publisher CPU run")],
+                },
+            ],
+        };
+        local.Downloaded.Add("restricted");
+        using var context = new CardsTestContext(local);
+        var card = context.Card("restricted");
+        Assert.Contains("400 MiB", card.DetailText);
+        Assert.Contains(Loc.Instance["Dictation.ModelDownloadSize"], card.DetailText);
+        Assert.Contains("Terms need review", card.StateText);
+        Assert.Contains("Publisher terms", card.LicenseText);
+        Assert.Equal("https://example.org/terms", card.LicenseUrl);
+        Assert.Contains("LibriSpeech", card.ReferenceBenchmarkText);
+        Assert.Contains("WER", card.ReferenceBenchmarkText);
+        Assert.Contains("https://example.org/results", card.ReferenceBenchmarkText);
+        Assert.Contains("Publisher CPU run", card.ReferenceBenchmarkText);
+        Assert.False(card.CanUse);
+        Assert.False(card.CanDownload);
+        Assert.True(card.CanRemove);
+    }
+
     private sealed class CardsTestContext : IDisposable
     {
         private readonly ConcurrentQueue<Action> _pending = new();
@@ -272,10 +416,10 @@ public sealed class DictationLocalModelCardsTests
         public bool SupportsTranslation => false;
         public string? SelectedModelId { get; private set; }
 
-        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; init; } =
         [
-            new("small", "Small") { SizeDescription = "~200 MB" },
-            new("large", "Large") { IsRecommended = true },
+            new("small", "Small") { SizeDescription = "~200 MB", Languages = ["en"], SupportsStreaming = false },
+            new("large", "Large") { IsRecommended = true, Languages = ["en", "de"], SupportsStreaming = true },
             new("medium", "Medium"),
         ];
 

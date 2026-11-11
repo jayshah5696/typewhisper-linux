@@ -263,6 +263,37 @@
                            FontSize="12"
                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                            TextWrapping="Wrap" />
+                <TextBox Text="{Binding LocalModelSearch}"
+                         Watermark="{loc:Str Dictation.ModelSearch}"
+                         AutomationProperties.Name="{loc:Str Dictation.ModelSearch}" />
+                <WrapPanel ItemSpacing="12" LineSpacing="6">
+                    <CheckBox Content="{loc:Str Dictation.ModelFilterLive}"
+                              IsChecked="{Binding LivePreviewModelsOnly}" />
+                    <Button Content="{loc:Str Dictation.ModelFilterClear}"
+                            Command="{Binding ClearLocalModelFiltersCommand}"
+                            IsVisible="{Binding HasLocalModelFilters}" />
+                </WrapPanel>
+                <Expander Header="{loc:Str Dictation.ModelFilterLanguages}"
+                          HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{loc:Str Dictation.ModelFilterLanguagesHelp}" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding LocalModelLanguageFilters}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel ItemSpacing="12" LineSpacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LocalModelLanguageFilter">
+                                    <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Expander>
+                <TextBlock Text="{Binding LocalModelResultsText}" FontSize="12" TextWrapping="Wrap" />
+                <TextBlock Text="{loc:Str Dictation.ModelSizeHelp}" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}" />
                 <ItemsControl ItemsSource="{Binding LocalModelCards}">
                     <!-- Hide the item container, not the card, so unlisted cards leave no spacing. A container
                          theme, unlike a style, doesn't also match the presenters inside the buttons. -->
@@ -303,6 +334,19 @@
                                                        Classes.failed="{Binding IsFailed}" />
                                         </Border>
                                     </Grid>
+                                    <TextBlock Text="{Binding CapabilityText}" FontSize="12" TextWrapping="Wrap" />
+                                    <Expander Header="{loc:Str Dictation.ModelDetails}" HorizontalAlignment="Stretch">
+                                        <StackPanel Spacing="6">
+                                            <SelectableTextBlock Text="{Binding LanguagesText}" FontSize="12" TextWrapping="Wrap" />
+                                            <SelectableTextBlock Text="{Binding LicenseText}" FontSize="12" TextWrapping="Wrap" />
+                                            <SelectableTextBlock Text="{Binding LicenseUrl}" FontSize="12" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding LicenseUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock Text="{loc:Str Dictation.ModelReferenceHelp}" FontSize="12" TextWrapping="Wrap"
+                                                       IsVisible="{Binding HasReferenceBenchmarks}" />
+                                            <SelectableTextBlock Text="{Binding ReferenceBenchmarkText}" FontSize="12" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding HasReferenceBenchmarks}" />
+                                        </StackPanel>
+                                    </Expander>
                                     <TextBlock Text="{Binding StateText}"
                                                FontSize="12"
                                                Foreground="{DynamicResource TwTextSecondaryBrush}"

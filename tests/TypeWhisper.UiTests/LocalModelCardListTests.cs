@@ -38,12 +38,25 @@ public sealed class LocalModelCardListTests(UiSession ui)
                 MainWindowRenderTests.Settle();
                 AssertContainersMatchListing(window, dictation, expectHidden: true);
 
+                var search = window.GetVisualDescendants().OfType<TextBox>()
+                    .Single(control => Avalonia.Automation.AutomationProperties.GetName(control)
+                        == Linux.Services.Localization.Loc.Instance["Dictation.ModelSearch"]);
+                search.Text = "no matching local model";
+                MainWindowRenderTests.Settle();
+                Assert.Equal("no matching local model", dictation.LocalModelSearch);
+                Assert.All(dictation.LocalModelCards.Where(card => card.ModelId != dictation.SelectedModel?.ModelId && !card.ShowProgress),
+                    card => Assert.False(card.IsListed));
+                dictation.ClearLocalModelFiltersCommand.Execute(null);
+                MainWindowRenderTests.Settle();
+                Assert.Equal("", search.Text);
+
                 Assert.True(sink.Errors.Count == 0, string.Join("\n", sink.Errors));
             }
             finally
             {
                 Logger.Sink = sink.Inner;
                 dictation.ShowAllLocalModels = false;
+                dictation.ClearLocalModelFiltersCommand.Execute(null);
                 window.Close();
             }
         }, CancellationToken.None);

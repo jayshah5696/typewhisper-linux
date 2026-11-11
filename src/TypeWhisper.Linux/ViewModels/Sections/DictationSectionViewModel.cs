@@ -1135,6 +1135,14 @@ public partial class DictationSectionViewModel : ObservableObject
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
         RefreshMicrophoneTestLanguage();
+        // Do not replace filter options inside a selector's current selection transaction.
+        _postToUi(() =>
+        {
+            RefreshLocalModelLanguageFilters();
+            foreach (var card in LocalModelCards)
+                card.RefreshLocalizedMetadata();
+            RefreshLocalModelCards(checkDisk: false);
+        });
         var acceleration = LocalModelAcceleration;
         var language = Language;
         var additionalLanguageCodes = AdditionalLanguages.Select(option => option.Code).ToArray();

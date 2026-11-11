@@ -97,6 +97,16 @@ Auto may retry a failed stream start on CPU before audio is sent. A feed or fina
 
 [[tests/TypeWhisper.Linux.Tests/TranscriptionWorkerTests.cs|Real-worker tests]] cover negotiation, stale identities and updates, ordering, bounded chunks, corrected previews, repeated words, unload, cancellation, coordinator assembly, and slow-sender fallback eligibility. [[tests/TypeWhisper.PluginSystem.Tests/TranscribeCppWorkerLiveTests.cs|The opt-in packaged test]] checks CPU and exact Vulkan previews and two final windows across a 95-second recording. It does not establish continuous-speech boundary accuracy or other model-family support.
 
+### Local model browser
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.LocalModels.cs|The local model browser]] filters embedded catalogs without selecting a recognition language, saving settings, or probing native libraries.
+
+Search matches model names, provider labels, and provider-qualified identities across the full catalog. Language filters require every checked language; undeclared languages do not match. Live-preview filtering requires known per-model support. Selected and busy cards remain visible even when they do not match. Filtering changes card visibility rather than replacing selector items. Interface-language changes defer filter-option replacement and preserve filters and operation progress.
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/LocalModelCard.cs|Model cards]] distinguish download size from memory requirements. They display known capabilities, publisher license terms, and reference results with their dataset, language, metric, conditions, and source. Unknown metadata remains unknown. Availability restrictions disable download and use, but downloaded files can still be removed. GPU compatibility is not inferred from catalog presence.
+
+[[tests/TypeWhisper.Linux.Tests/DictationLocalModelCardsTests.cs|Browser tests]] cover intersections, unknown metadata, hidden search matches, selected and downloading cards, restrictions, and progress preservation across six interface languages. [[tests/TypeWhisper.UiTests/LocalModelCardListTests.cs|Rendered tests]] exercise search bindings and visibility without binding errors.
+
 ### Optional model metadata
 
 [[src/TypeWhisper.PluginSDK/Models/PluginModelInfo.cs|Model metadata]] can declare languages, streaming, automatic language detection, publisher terms, availability restrictions, and reference benchmark provenance. Missing values remain unknown.
