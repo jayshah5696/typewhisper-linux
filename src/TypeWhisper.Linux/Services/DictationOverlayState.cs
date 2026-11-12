@@ -16,6 +16,13 @@ public sealed record DictationOverlayState
     public bool DeliverySucceeded { get; init; }
     public bool IsRecording { get; init; }
     public string StatusText { get; init; } = "Ready";
+
+    /// <summary>
+    ///     Pipeline phase behind <see cref="StatusText"/>, so <c>typewhisper status</c>
+    ///     never has to parse the localized display text.
+    /// </summary>
+    public DictationOverlayPhase Phase { get; init; }
+
     public string? PartialText { get; init; }
 
     /// <summary>
@@ -32,4 +39,11 @@ public sealed record DictationOverlayState
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }
     public DateTime? SessionStartedAtUtc { get; init; }
+}
+
+public enum DictationOverlayPhase
+{
+    Idle,
+    Transcribing,
+    Injecting,
 }

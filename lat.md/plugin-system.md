@@ -36,6 +36,8 @@ Key rules for catalog and settings handling:
 - Explicit user refresh preserves in-progress form edits and persists only dirty fields.
 - Provider refreshes are bounded by strict deadlines and cancel immediately if credentials change or a newer refresh begins.
 
+[[src/TypeWhisper.Linux/Services/ModelManagerService.cs|Model reuse]] checks the engine's current selection against the selection captured after loading. Saving plugin settings can change that selection. Reuse also requires matching acceleration and native device preferences.
+
 ### Pinned GGUF catalog and storage
 
 [[plugins/TypeWhisper.Plugin.TranscribeCpp/TranscribeModelCatalog.cs|The GGUF catalog loader]] validates pinned ASR metadata without native initialization or network access. Its embedded catalog contains 59 reviewed file entries, not 59 verified executions.

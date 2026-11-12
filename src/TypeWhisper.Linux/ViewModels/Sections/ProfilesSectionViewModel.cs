@@ -35,6 +35,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly UiOperationGuard _uiOperations;
     private readonly DispatcherTimer _windowTimer;
     private bool _isWindowUpdateInProgress;
+    private bool _isRelabelingSelectedProfile;
     private int _liveContextActivationCount;
     private CancellationTokenSource? _liveContextCts;
     private int _liveContextGeneration;
@@ -210,7 +211,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshPromptActionOptions();
         RefreshMemorySourceOptions();
         RefreshLanguageOptions();
-        foreach (var option in TranslationModelInfo.ProfileTargetOptions)
+        foreach (var option in TranslationTargetLabels.ProfileOptions())
         {
             TranslationTargetOptions.Add(option);
         }
@@ -398,7 +399,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
             );
         set
         {
-            var code = value?.Code;
+            // A null item is the ComboBox clearing while its options are replaced, not a choice.
+            if (value is null)
+            {
+                return;
+            }
+
+            var code = value.Code;
             if (string.Equals(code, EditTranslationTarget, StringComparison.Ordinal))
             {
                 return;
@@ -621,6 +628,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnSelectedProfileChanged(Profile? value)
     {
+        if (_isRelabelingSelectedProfile)
+            return;
+
         HotkeyValidationMessage = null;
         ProcessNameChips.Clear();
         UrlPatternChips.Clear();
@@ -792,7 +802,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 var profile = new Profile
                 {
                     Id = Guid.NewGuid().ToString(),
-                    Name = "New profile",
+                    Name = Loc.Instance["Profiles.NewProfileName"],
                     IsEnabled = true,
                     Priority = 0,
                     ProcessNames = [],
@@ -901,7 +911,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var duplicate = SelectedProfile with
         {
             Id = Guid.NewGuid().ToString(),
-            Name = $"{SelectedProfile.Name} Copy",
+            Name = Loc.Instance.GetString("Profiles.CopyName", SelectedProfile.Name),
             // Drop the hotkey: two profiles can't share a chord (SetProfileHotkeys rejects collisions),
             // so a copied hotkey would be silently dead.
             HotkeyData = null,
@@ -1178,27 +1188,40 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     private void RefreshProfiles()
     {
-        var selectedId = SelectedProfile?.Id;
+        var selected = SelectedProfile;
+        var selectedId = selected?.Id;
+        var current = _profiles.Profiles;
+        var replacement = current.FirstOrDefault(profile => profile.Id == selectedId);
+        var preserveDraft = selected is not null && replacement is not null
+            && selected with { Name = replacement.Name } == replacement;
 
-        Profiles.Clear();
-        foreach (var profile in _profiles.Profiles)
+        _isRelabelingSelectedProfile = preserveDraft;
+        try
         {
-            Profiles.Add(profile);
-        }
+            Profiles.Clear();
+            foreach (var profile in current)
+                Profiles.Add(profile);
 
-        if (selectedId is not null)
-        {
-            SelectById(selectedId);
-            return;
-        }
+            if (selectedId is not null)
+            {
+                SelectById(selectedId);
+                return;
+            }
 
-        if (Profiles.Count > 0 && SelectedProfile is null)
-        {
-            SelectedProfile = Profiles[0];
+            if (Profiles.Count > 0 && SelectedProfile is null)
+                SelectedProfile = Profiles[0];
+            else
+                NotifyStateChanged();
         }
-        else
+        finally
         {
-            NotifyStateChanged();
+            _isRelabelingSelectedProfile = false;
+            if (preserveDraft)
+            {
+                if (EditName == selected!.Name)
+                    EditName = replacement!.Name;
+                NotifyStateChanged();
+            }
         }
     }
 
@@ -1241,6 +1264,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var clipboardContextOverride = EditClipboardContextOverride;
         var language = EditLanguage;
         var task = EditTask;
+        var translationTarget = EditTranslationTarget;
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
@@ -1250,6 +1274,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
         ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
         ReplaceCollection(TaskOptions, CreateTaskOptions());
+        ReplaceCollection(TranslationTargetOptions, TranslationTargetLabels.ProfileOptions());
         RefreshLanguageOptions();
         WhisperModeOptions = CreateNullableBooleanOptions();
         OnPropertyChanged(nameof(WhisperModeOptions));
@@ -1266,8 +1291,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditClipboardContextOverride = clipboardContextOverride;
         EditLanguage = language;
         EditTask = task;
+        EditTranslationTarget = translationTarget;
 
         OnPropertyChanged(nameof(SelectedModelOption));
+        OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
         OnPropertyChanged(nameof(SelectedMemorySourceOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
@@ -1285,9 +1312,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(MatchStatusText));
-        if (_browserStatusIsState)
+        if (_browserStatusResult is null)
         {
             RefreshBrowserAccessibilityStatus();
+        }
+        else
+        {
+            BrowserAccessibilityStatusMessage = _browserStatusResult();
         }
     }
 
@@ -1475,6 +1506,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
         else
         {
+            SelectedProfile = null;
             NotifyStateChanged();
         }
     }
@@ -1642,30 +1674,56 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = FormatBrowserSetupResult(result);
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserSetupResult(result));
     }
 
     internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
     {
+        var skipped = result.SkippedFirefoxProfiles;
+        var nonUtf8 = result.NonUtf8FirefoxProfiles;
+        // Names its own profiles, so it can follow the permission wording or a failure.
+        var encodingRetry = nonUtf8.Count > 0
+            ? Loc.Instance.GetString("Profiles.BrowserSetupFirefoxEncodingRetry", string.Join(", ", nonUtf8))
+            : null;
         if (result.Success)
         {
-            return result.SkippedFirefoxProfiles.Count > 0
-                ? Loc.Instance.GetString(
-                    "Profiles.BrowserSetupPartialFirefox",
-                    string.Join(", ", result.SkippedFirefoxProfiles)
-                )
-                : Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message);
+            if (skipped.Count == 0)
+            {
+                return nonUtf8.Count > 0
+                    ? Loc.Instance.GetString(
+                        "Profiles.BrowserSetupPartialFirefoxEncoding",
+                        string.Join(", ", nonUtf8)
+                    )
+                    : Loc.Instance.GetString(
+                        "Profiles.BrowserSetupSuccess",
+                        Loc.Instance["Profiles.BrowserSetupEnabled"]
+                    );
+            }
+
+            var partial = Loc.Instance.GetString(
+                "Profiles.BrowserSetupPartialFirefox",
+                string.Join(", ", skipped)
+            );
+            return encodingRetry is null ? partial : $"{partial} {encodingRetry}";
         }
 
         var failure = $"{result.Message} {result.Detail}";
-        return result.SkippedFirefoxProfiles.Count > 0
-            ? $"{failure} {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}"
-            : failure;
+        if (skipped.Count > 0)
+        {
+            failure += $" {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}";
+        }
+
+        return encodingRetry is null ? failure : $"{failure} {encodingRetry}";
     }
 
-    // The computed browser status follows a language switch; a setup result keeps its wording.
-    private bool _browserStatusIsState;
+    // Rewords the last setup/revert result on a language switch; null while the computed status shows.
+    private Func<string>? _browserStatusResult;
+
+    internal void ShowBrowserStatusResult(Func<string> format)
+    {
+        _browserStatusResult = format;
+        BrowserAccessibilityStatusMessage = format();
+    }
 
     private void RefreshBrowserAccessibilityStatus()
     {
@@ -1701,7 +1759,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
-        _browserStatusIsState = true;
+        _browserStatusResult = null;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
     }
@@ -1738,10 +1796,34 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         // Refresh first so the state message doesn't overwrite the revert result.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = result.Success
-            ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
-            : $"{result.Message} {result.Detail}";
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserRevertResult(result));
+    }
+
+    internal static string FormatBrowserRevertResult(BrowserAccessibilitySetupHelper.SetupResult result)
+    {
+        if (!result.Success)
+        {
+            return $"{result.Message} {result.Detail}";
+        }
+
+        var parts = new List<string> { Loc.Instance["Profiles.BrowserRevertRemoved"] };
+        if (result.LeftEnvFile)
+        {
+            parts.Add(Loc.Instance["Profiles.BrowserRevertLeftEnvFile"]);
+        }
+
+        AddNamedPart("Profiles.BrowserRevertRemovedLaunchers", result.RemovedLaunchers);
+        AddNamedPart("Profiles.BrowserRevertCleanedProfiles", result.CleanedFirefoxProfiles);
+        AddNamedPart("Profiles.BrowserRevertSkippedProfiles", result.SkippedFirefoxProfiles);
+        return Loc.Instance.GetString("Profiles.BrowserRevertSuccess", string.Join(" ", parts));
+
+        void AddNamedPart(string key, IReadOnlyList<string> names)
+        {
+            if (names.Count > 0)
+            {
+                parts.Add(Loc.Instance.GetString(key, string.Join(", ", names)));
+            }
+        }
     }
 
     private void NotifyStateChanged()

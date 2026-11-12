@@ -40,6 +40,8 @@ On Linux desktops, input delivery interacts with the active display server:
 - In [[src/TypeWhisper.Linux/Services/TextInsertionService.cs]], non-ASCII text falls back to clipboard paste when no Unicode-capable typing backend (`xdotool` or `wtype`) is available, avoiding dropped glyphs in `ydotool`.
 - Destination applications receive text without corrupting existing clipboard contents by restoring the prior clipboard payload after paste completion.
 
+[[src/TypeWhisper.Linux/Services/Insertion/RichClipboardWriter.cs|Rich clipboard restoration]] republishes captured X11 MIME payloads after Auto or Clipboard paste. [[src/TypeWhisper.Linux/Services/TextInsertionService.cs|Text insertion]] avoids wtype for XWayland targets and reports clipboard fallback when safe direct Unicode typing is unavailable.
+
 ## Dictation Recovery and History
 
 History and recovery retain completed transcripts when delivery fails, subject to the user's retention and recording settings. They do not guarantee recovery of every interrupted capture or failed recognition.

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -36,6 +38,8 @@ public enum InsertionFailureReason
     PasteRetriesExhausted,
     PartialTypingFailure,
     LockedFieldUnavailable,
+    WtypeXWaylandTarget,
+    NonAsciiTypingUnavailable,
 }
 
 public sealed record TextInsertionRequest(
@@ -364,8 +368,9 @@ public sealed class TextInsertionService
 
         if (shouldTypeDirectly)
         {
-            // Auto must not let non-ASCII text fall through to ydotool; paste instead if the others fail.
-            var unicodeBackendsOnly = strategy is not TextInsertionStrategy.DirectTyping && !IsAsciiSafe(text);
+            // ydotool exits 0 after dropping non-ASCII, so such text never goes to it, even under an
+            // explicit DirectTyping preference; Auto pastes instead if the other backends fail.
+            var unicodeBackendsOnly = !IsAsciiSafe(text);
             var directResult = await TypeTextAsync(
                 text,
                 targetWindowId,
@@ -373,6 +378,34 @@ public sealed class TextInsertionService
                 request.LockedFocusTarget,
                 unicodeBackendsOnly
             );
+            if (
+                strategy is TextInsertionStrategy.DirectTyping
+                && unicodeBackendsOnly
+                && directResult is InsertionResult.Failed
+                && !LastTypingDeliveredPartialText
+                && LastFailureReason
+                    is not (InsertionFailureReason.FocusFailed or InsertionFailureReason.LockedFieldUnavailable)
+            )
+            {
+                // Nothing was typed. The platform's reason varies (None when it only skipped ydotool
+                // for this text), so only this service's focus failures opt out. Copy rather than
+                // paste, since the user chose typing over a paste shortcut.
+                if (_platform.HasAsciiOnlyTypingBackend)
+                {
+                    LastFailureReason = InsertionFailureReason.NonAsciiTypingUnavailable;
+                }
+
+                LogInsertionFallback("Direct typing fell back to clipboard: no backend typed the non-ASCII text.");
+                if (!_platform.IsClipboardSetAvailable)
+                {
+                    return InsertionResult.MissingClipboardTool;
+                }
+
+                return await _platform.SetClipboardTextAsync(text)
+                    ? InsertionResult.CopiedToClipboard
+                    : InsertionResult.Failed;
+            }
+
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
@@ -416,6 +449,9 @@ public sealed class TextInsertionService
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         var previousClipboardHasNonTextFormats =
             await _platform.ClipboardHasNonTextFormatsAsync();
+        var previousRichFormats = autoPaste && previousClipboard is not null && previousClipboardHasNonTextFormats
+            ? await _platform.TryCaptureRichClipboardAsync()
+            : null;
         if (!await _platform.SetClipboardTextAsync(text))
         {
             return InsertionResult.Failed;
@@ -558,6 +594,7 @@ public sealed class TextInsertionService
                 text,
                 previousClipboard,
                 previousClipboardHasNonTextFormats,
+                previousRichFormats,
                 pasteWatch,
                 deliveryConfirmed
             );
@@ -622,7 +659,7 @@ public sealed class TextInsertionService
             return (false, false);
         }
 
-        var ok = await _platform.TypeTextAsync(text);
+        var ok = await _platform.TypeTextAsync(text, unicodeBackendsOnly: !IsAsciiSafe(text));
         return (ok, !ok && _platform.LastTypingDeliveredPartialText);
     }
 
@@ -907,6 +944,7 @@ public sealed class TextInsertionService
         string pastedText,
         string? previousClipboard,
         bool previousClipboardHasNonTextFormats,
+        IReadOnlyList<ClipboardFormatData>? previousRichFormats,
         IPasteWatch? watch,
         bool? deliveryConfirmed
     )
@@ -976,7 +1014,14 @@ public sealed class TextInsertionService
 
             if (previousClipboardHasNonTextFormats)
             {
-                LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
+                if (
+                    previousRichFormats is null
+                    || !await _platform.TryRestoreRichClipboardAsync(previousClipboard, previousRichFormats)
+                )
+                {
+                    LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
+                }
+
                 return;
             }
 
@@ -1033,6 +1078,7 @@ public sealed class TextInsertionService
                 is InsertionFailureReason.WtypeCompositorUnsupported
                 or InsertionFailureReason.YdotoolSocketUnreachable
                 or InsertionFailureReason.NoWaylandTypingTool
+                or InsertionFailureReason.WtypeXWaylandTarget
             )
             {
                 // First-failing structural reason within this request wins — a later,
@@ -1290,6 +1336,9 @@ internal interface ITextInsertionPlatform
     /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
 
+    /// <summary>True when the chain has a backend that unicode-only typing skips (ydotool).</summary>
+    bool HasAsciiOnlyTypingBackend => false;
+
     InsertionFailureReason LastFailureReason { get; }
 
     /// <summary>
@@ -1318,6 +1367,17 @@ internal interface ITextInsertionPlatform
     ///     something a plain-text round trip cannot faithfully preserve or restore.
     /// </summary>
     Task<bool> ClipboardHasNonTextFormatsAsync();
+
+    /// <summary>
+    ///     Reads the clipboard's non-text formats (e.g. <c>text/html</c>) as raw bytes so they
+    ///     can be put back after an insertion. Null when the platform cannot restore them.
+    /// </summary>
+    Task<IReadOnlyList<ClipboardFormatData>?> TryCaptureRichClipboardAsync() =>
+        Task.FromResult<IReadOnlyList<ClipboardFormatData>?>(null);
+
+    /// <summary>Owns the clipboard with <paramref name="text" /> plus every captured format.</summary>
+    Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
+        Task.FromResult(false);
 
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
@@ -1355,7 +1415,9 @@ internal interface ITextInsertionPlatform
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
+    private const int MaxRichClipboardBytes = 16 * 1024 * 1024;
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan s_focusedWindowProbeTimeout = TimeSpan.FromSeconds(1);
 
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.
@@ -1382,6 +1444,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     );
 
     private readonly IProcessRunner _ioRunner;
+    private readonly Func<Task<bool>> _focusedWindowIsXWayland;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
 
@@ -1447,13 +1510,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             string,
             IReadOnlyList<string>,
             Task<(int exitCode, string stderr)>
-        >? processRunnerWithStderr = null
+        >? processRunnerWithStderr = null,
+        Func<Task<bool>>? focusedWindowIsXWayland = null
     )
     {
         _ioRunner = new ProcessRunner();
         _snapshot = snapshot;
         _processRunner = processRunner;
         _processRunnerWithStderr = processRunnerWithStderr;
+        _focusedWindowIsXWayland = focusedWindowIsXWayland ?? (() => Task.FromResult(false));
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1467,6 +1532,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _snapshot = snapshot;
         _processRunner = DefaultProcessRunnerWithEnv;
         _processRunnerWithStderr = DefaultProcessRunnerWithStderr;
+        _focusedWindowIsXWayland = IsHyprlandFocusedWindowXWaylandAsync;
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1494,6 +1560,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // existing Firefox windows, gnome-terminal), silently dropping the character.
     public bool CanTypeNonAscii =>
         !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
+
+    public bool HasAsciiOnlyTypingBackend => _chain.Contains(InputBackend.Ydotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
@@ -1626,16 +1694,75 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal static bool ListingHasNonTextFormats(string listing)
+    public async Task<IReadOnlyList<ClipboardFormatData>?> TryCaptureRichClipboardAsync()
     {
-        return listing.Split('\n').Any(rawLine =>
+        // wl-copy serves a single MIME type, so it cannot rebuild a multi-format clipboard.
+        if (UsesWaylandClipboard)
         {
-            var target = rawLine.Trim();
-            return target.Length != 0
-                   && !s_textSafeTargets.Contains(target)
-                   && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
-        });
+            return null;
+        }
+
+        try
+        {
+            var listing = await RunClipboardReadAsync(["-selection", "clipboard", "-o", "-t", "TARGETS"], MaxRichClipboardBytes)
+                .ConfigureAwait(false);
+            if (listing is null)
+            {
+                return null;
+            }
+
+            var formats = new List<ClipboardFormatData>();
+            var remaining = MaxRichClipboardBytes;
+            foreach (var target in RichTargets(Encoding.UTF8.GetString(listing)))
+            {
+                var data = await RunClipboardReadAsync(["-selection", "clipboard", "-o", "-t", target], remaining)
+                    .ConfigureAwait(false);
+                if (data is null)
+                {
+                    return null;
+                }
+
+                remaining -= data.Length;
+                formats.Add(new ClipboardFormatData(target, data));
+            }
+
+            return formats.Count == 0 ? null : formats;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TextInsertionService] rich clipboard capture failed: {ex.Message}");
+            return null;
+        }
     }
+
+    public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
+        UsesWaylandClipboard ? Task.FromResult(false) : RichClipboardWriter.TrySetAsync(text, formats);
+
+    private async Task<byte[]?> RunClipboardReadAsync(IReadOnlyList<string> args, int maxBytes)
+    {
+        var result = await _ioRunner.RunOneShotAsync(
+            new ProcessCommand("xclip", args),
+            new ProcessOneShotOptions(
+                Timeout: s_clipboardOperationTimeout,
+                StandardOutput: ProcessCaptureMode.Binary,
+                StandardError: ProcessCaptureMode.Discard
+            )
+            {
+                MaximumStandardOutputBytes = maxBytes,
+            }
+        ).ConfigureAwait(false);
+        return result.Succeeded ? result.StandardOutput : null;
+    }
+
+    internal static IEnumerable<string> RichTargets(string listing) =>
+        listing.Split('\n')
+            .Select(rawLine => rawLine.Trim())
+            .Where(target => target.Length != 0
+                             && !s_textSafeTargets.Contains(target)
+                             && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal);
+
+    internal static bool ListingHasNonTextFormats(string listing) => RichTargets(listing).Any();
 
     public async Task<bool> SetClipboardTextAsync(string text)
     {
@@ -1718,6 +1845,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
+        // ydotool goes first for the chord: GTK3 native-Wayland windows drop wtype's
+        // Ctrl+V (its uploaded keymap misses GTK3's key bindings) while wtype exits 0.
         return await WalkChainAsync(async backend =>
             backend switch
             {
@@ -1733,7 +1862,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         : YdotoolBackend.PasteArgs()
                 ),
                 InputBackend.None or _ => false,
-            }
+            },
+            preferYdotool: true
         );
     }
 
@@ -1911,10 +2041,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private async Task<bool> WalkChainAsync(
         Func<InputBackend, Task<bool>> attempt,
-        InputBackend? skip = null
+        InputBackend? skip = null,
+        bool preferYdotool = false
     )
     {
-        var chain = _chain;
+        var chain = preferYdotool ? _chain.OrderBy(b => b != InputBackend.Ydotool).ToList() : _chain;
         var disabled = _disabled;
         LastFailureReason = InsertionFailureReason.None;
         _abortChainAfterAttempt = false;
@@ -1926,11 +2057,27 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
 
         var anyAttempted = false;
+        var skippedWtypeForXWayland = false;
+        var skippedBackendForThisText = false;
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
-            if (disabled.Contains(backend) || backend == skip)
+            if (disabled.Contains(backend))
             {
+                continue;
+            }
+
+            if (backend == skip)
+            {
+                skippedBackendForThisText = true;
+                continue;
+            }
+
+            // XWayland ignores wtype's uploaded keymap: typed text arrives as unrelated
+            // keys and chords are dropped, yet wtype still exits 0.
+            if (backend == InputBackend.Wtype && await _focusedWindowIsXWayland())
+            {
+                skippedWtypeForXWayland = true;
                 continue;
             }
 
@@ -1946,12 +2093,47 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
         }
 
-        if (!anyAttempted)
+        // A working backend left out only for this text (ydotool for non-ASCII) is no
+        // setup gap, so neither setup hint applies.
+        if (!anyAttempted && !skippedBackendForThisText)
         {
-            LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+            LastFailureReason = skippedWtypeForXWayland
+                ? InsertionFailureReason.WtypeXWaylandTarget
+                : InsertionFailureReason.NoWaylandTypingTool;
         }
 
         return false;
+    }
+
+    private async Task<bool> IsHyprlandFocusedWindowXWaylandAsync()
+    {
+        if (!_isWayland || _snapshot.Compositor != "hyprland")
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await _ioRunner.RunAsync(
+                "hyprctl",
+                ["activewindow", "-j"],
+                timeout: s_focusedWindowProbeTimeout
+            ).ConfigureAwait(false);
+            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                return false;
+            }
+
+            using var doc = JsonDocument.Parse(result.StandardOutput);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("xwayland", out var xwayland)
+                   && xwayland.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException)
+        {
+            Trace.WriteLine($"[TextInsertionService] hyprctl focused-window probe failed: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -1995,8 +2177,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
             // xdotool is never added on Wayland: XTEST reaches only XWayland
             // surfaces and can exit 0 even when the native-Wayland target received
-            // nothing — and nothing here can tell whether the focused surface
-            // is XWayland.
+            // nothing — and only Hyprland (see IsHyprlandFocusedWindowXWaylandAsync)
+            // tells us whether the focused surface is XWayland.
         }
         else if (snapshot.HasXdotool)
         {

@@ -343,7 +343,7 @@
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3">
-                                                    <TextBlock Text="{Binding EntryType}"
+                                                    <TextBlock Text="{Binding EntryType, Converter={x:Static loc:LocEnumConverter.Instance}, ConverterParameter=Dictionary.Type}"
                                                                FontSize="10.5"
                                                                Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
@@ -382,7 +382,7 @@
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3">
-                                                    <TextBlock Text="{Binding Priority, StringFormat='Priority {0}'}"
+                                                    <TextBlock Text="{Binding Priority, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Dictionary.PriorityBadge}"
                                                                FontSize="10.5"
                                                                Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
@@ -474,7 +474,7 @@
                                                            MaxLines="2">
                                                     <Run Text="{Binding Pack.Icon}" />
                                                     <Run Text=" " />
-                                                    <Run Text="{Binding Pack.Name}" />
+                                                    <Run Text="{Binding Name}" />
                                                 </TextBlock>
                                                 <TextBlock Text="{Binding TermCountLabel}"
                                                            FontSize="11"

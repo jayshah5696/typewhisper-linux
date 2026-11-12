@@ -321,7 +321,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     /// <summary>
     ///     Current pipeline phase for <c>typewhisper status</c>. The audio
     ///     recorder is source of truth for <c>recording</c>; once stopped, the
-    ///     overlay StatusText drives transcribing / injecting / idle.
+    ///     overlay phase drives transcribing / injecting / idle.
     /// </summary>
     public string CurrentStateLabel
     {
@@ -338,7 +338,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 snapshot = _overlayState;
             }
 
-            return MapOverlayStatusToStateLabel(snapshot.StatusText);
+            return MapOverlayPhaseToStateLabel(snapshot.Phase);
         }
     }
 
@@ -611,9 +611,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         _hookFailedHandler = (_, message) =>
         {
             Trace.WriteLine($"[Dictation] Hotkey hook unavailable: {message}");
-            ReportStatus("Global hotkey disabled.");
+            ReportStatus(Localization.Loc.Instance["Overlay.HotkeyDisabled"]);
             ShowFeedback(
-                "Global hotkey disabled. Check libuiohook/X11 permissions.",
+                Localization.Loc.Instance["Overlay.HotkeyDisabledDetail"],
                 true
             );
         };
@@ -1024,6 +1024,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     DeliverySucceeded = false,
                     RecoveryText = null,
                     StatusText = Localization.Loc.Instance["Dictation.StatusRecording"],
+                    Phase = DictationOverlayPhase.Idle,
                     ActiveProfileName = null,
                     ActiveAppName = null,
                     SessionStartedAtUtc = DateTime.UtcNow,
@@ -1077,10 +1078,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                     startupTaskName, "translate", StringComparison.OrdinalIgnoreCase
                 );
 
+                // The stop-time load replaces a changed engine selection, so a stream on it
+                // would be dropped and the audio sent again.
                 if (
                     startupMode == LiveTranscriptionMode.Streaming
                     && startupPlugin is not null
                     && !startupIsTranslate
+                    && _models.ActiveEngineSelectionIsCurrent
                 )
                 {
                     StartStreamingTranscriptionSession(
@@ -1888,11 +1892,12 @@ public sealed partial class DictationOrchestrator : IDisposable
                                 FeedbackDurationMilliseconds = null,
                                 IsRecording = false,
                                 StatusText = Localization.Loc.Instance["Overlay.Canceled"],
+                                Phase = DictationOverlayPhase.Idle,
                                 PartialText = null,
                                 SessionStartedAtUtc = null,
                             }
                         );
-                        StatusMessage?.Invoke(this, "Canceled");
+                        StatusMessage?.Invoke(this, Localization.Loc.Instance["Overlay.Canceled"]);
                         _models.PluginManager.EventBus.Publish(
                             new RecordingStoppedEvent
                             {
@@ -1937,6 +1942,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             FeedbackDurationMilliseconds = null,
                             IsRecording = false,
                             StatusText = Localization.Loc.Instance["Overlay.Processing"],
+                            Phase = DictationOverlayPhase.Transcribing,
                             SessionStartedAtUtc = null,
                         }
                     );
@@ -2173,29 +2179,19 @@ public sealed partial class DictationOrchestrator : IDisposable
     public bool HasDictationInFlight => _inFlightTracker.HasActivity || _insertionOrder.HasPending;
 
     /// <summary>
-    ///     Maps an overlay StatusText to one of the <c>typewhisper status</c>
+    ///     Maps an overlay phase to one of the <c>typewhisper status</c>
     ///     labels (transcribing / injecting / idle). The <c>recording</c> label
-    ///     comes from the audio recorder, not StatusText, so it is not produced here.
+    ///     comes from the audio recorder, not the overlay, so it is not produced here.
     /// </summary>
-    internal static string MapOverlayStatusToStateLabel(string? statusText)
+    internal static string MapOverlayPhaseToStateLabel(DictationOverlayPhase phase)
     {
-        if (statusText is null)
+        return phase switch
         {
-            return "idle";
-        }
-
-        if (
-            statusText.StartsWith("Processing", StringComparison.OrdinalIgnoreCase)
-            || statusText.StartsWith("Transcribing", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            return "transcribing";
-        }
-
-        // Overlay shows "Inserting…"; the documented CLI state is "injecting".
-        return statusText.StartsWith("Inserting", StringComparison.OrdinalIgnoreCase)
-            ? "injecting"
-            : "idle";
+            DictationOverlayPhase.Transcribing => "transcribing",
+            // Overlay shows "Inserting…"; the documented CLI state is "injecting".
+            DictationOverlayPhase.Injecting => "injecting",
+            DictationOverlayPhase.Idle or _ => "idle",
+        };
     }
 
     /// <summary>
@@ -2481,8 +2477,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
             Trace.WriteLine($"[Dictation] Model load canceled by user ('{effectiveModelId}').");
-            ReportStatus(context, "Canceled");
-            ShowFeedback(context, "Canceled", false, true);
+            ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+            ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
             PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
             return;
         }
@@ -2500,8 +2496,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 $"Transcription model '{effectiveModelId}' failed to load: {safeMessage}",
                 ErrorCategory.Transcription
             );
-            ReportStatus(context, $"Failed to load configured model: {safeMessage}");
-            ShowFeedback(context, "Model load failed.", true);
+            ReportStatus(context, Localization.Loc.Instance.GetString("Overlay.ModelLoadFailedWithReason", safeMessage));
+            ShowFeedback(context, Localization.Loc.Instance["Overlay.ModelLoadFailed"], true);
             PublishSessionTerminal(context.SessionId, "failed", safeMessage);
             return;
         }
@@ -2518,7 +2514,11 @@ public sealed partial class DictationOrchestrator : IDisposable
         _telemetry.Tag(context.SessionId, "engine.model", TelemetryNames.SanitizeModelId(engineModelId));
         var engineSupportsTranslation = plugin.SupportsTranslation;
 
-        ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
+        ReportStatus(
+            context,
+            Localization.Loc.Instance.GetString("Overlay.TranscribingVia", plugin.ProviderDisplayName),
+            DictationOverlayPhase.Transcribing
+        );
 
         var transcriptionCompletedPublished = false;
         try
@@ -2629,8 +2629,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 transcribeOperation?.Finish(DiagnosticsOutcome.Cancelled);
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
-                ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", false, true);
+                ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
                 PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
                 return;
             }
@@ -2652,7 +2652,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         ErrorMessage = diagnosticMessage, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                var failureMessage = $"Transcription failed: {userMessage}";
+                var failureMessage = Localization.Loc.Instance.GetString("Overlay.TranscriptionFailedWithReason", userMessage);
                 ReportStatus(context, failureMessage);
                 TryPublishSessionSpeechFeedback(
                     context,
@@ -2694,8 +2694,8 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             if (string.IsNullOrEmpty(rawText))
             {
-                ReportStatus(context, "Transcription returned no text.");
-                ShowFeedback(context, "Transcription returned no text.", true);
+                ReportStatus(context, Localization.Loc.Instance["Overlay.TranscriptionEmpty"]);
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.TranscriptionEmpty"], true);
                 PublishSessionTerminal(
                     context.SessionId,
                     "discarded",
@@ -2715,8 +2715,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 && !_settings.Current.TranscribeShortQuietClipsAggressively
             )
             {
-                ReportStatus(context, "No speech detected.");
-                ShowFeedback(context, "No speech detected.", true);
+                ReportStatus(context, Localization.Loc.Instance["Overlay.NoSpeech"]);
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.NoSpeech"], true);
                 PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
                 return;
             }
@@ -2737,8 +2737,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Trace.WriteLine(
                     $"[Dictation] Discarded likely Whisper hallucination ('{rawText}', {recordedDuration:0.00}s)."
                 );
-                ReportStatus(context, "No speech detected.");
-                ShowFeedback(context, "No speech detected.", true);
+                ReportStatus(context, Localization.Loc.Instance["Overlay.NoSpeech"]);
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.NoSpeech"], true);
                 PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
                 return;
             }
@@ -2855,8 +2855,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
                 {
                     rescoreOperation?.Finish(DiagnosticsOutcome.Cancelled);
-                    ReportStatus(context, "Canceled");
-                    ShowFeedback(context, "Canceled", false, true);
+                    ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+                    ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
                     PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
                     return;
                 }
@@ -2976,7 +2976,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 // Surface the inject phase so `typewhisper status` reports
                 // `injecting` while a long transcript is still being typed.
-                ReportStatus(context, "Inserting…");
+                ReportStatus(context, Localization.Loc.Instance["Overlay.Inserting"], DictationOverlayPhase.Injecting);
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
             }
 
@@ -3007,8 +3007,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     _telemetry.Finish(context.SessionId, "canceled");
                     Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
-                    ReportStatus(context, "Canceled");
-                    ShowFeedback(context, "Canceled", false, true);
+                    ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+                    ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
                     return;
                 }
 
@@ -3067,8 +3067,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     $"[Dictation] Action canceled by user "
                     + $"(action='{actionPlugin?.ActionId ?? "<none>"}')."
                 );
-                ReportStatus(context, "Canceled");
-                ShowFeedback(context, "Canceled", false, true);
+                ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
                 return;
             }
             catch (Exception ex)
@@ -3083,8 +3083,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     $"[Dictation] Text insertion/action failed (target='{context.AppProcess}', "
                     + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}"
                 );
-                ReportStatus(context, $"Insertion failed: {safeMessage}");
-                ShowFeedback(context, "Insertion failed.", true);
+                ReportStatus(context, Localization.Loc.Instance.GetString("Overlay.InsertionFailedWithReason", safeMessage));
+                ShowFeedback(context, Localization.Loc.Instance["Overlay.InsertionFailed"], true);
                 insertion = ClassifyThrownInsertionFailure(actionPlugin is not null);
                 insertionThrew = true;
             }
@@ -3126,28 +3126,30 @@ public sealed partial class DictationOrchestrator : IDisposable
                 var completionMessage = actionExecutionResult?.Message ?? insertion switch
                 {
                     InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
-                        "Pressed Enter.",
+                        Localization.Loc.Instance["Overlay.PressedEnter"],
                     InsertionResult.Pasted or InsertionResult.Typed =>
-                        $"Typed {finalText.Length} char(s).",
+                        Localization.Loc.Instance.GetString("Overlay.TypedChars", finalText.Length),
                     InsertionResult.CopiedToClipboard =>
                         ClipboardFallbackMessage(context.AppProcess),
-                    InsertionResult.ActionHandled => "Action completed.",
-                    InsertionResult.ActionFailed => "Action failed.",
-                    InsertionResult.ActionUnavailable => promptActionUnavailable
-                        ? "Configured prompt action is unavailable." : "Action destination unavailable.",
+                    InsertionResult.ActionHandled => Localization.Loc.Instance["ActionResult.Completed"],
+                    InsertionResult.ActionFailed => Localization.Loc.Instance["ActionResult.Failed"],
+                    InsertionResult.ActionUnavailable => Localization.Loc.Instance[promptActionUnavailable
+                        ? "Overlay.PromptActionUnavailable" : "Overlay.ActionDestinationUnavailable"],
                     InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-                    InsertionResult.MissingPasteTool =>
-                        $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+                    InsertionResult.MissingPasteTool => Localization.Loc.Instance.GetString(
+                        "TextInsertion.FailedWithHint", _commands.GetSnapshot().PasteToolInstallHint),
                     InsertionResult.Failed when _textInsertion.LastTypingDeliveredPartialText =>
-                        "Text insertion failed partway through typing. Some of the dictated text may "
-                        + "already be in the target app — check before dictating again.",
+                        Localization.Loc.Instance["TextInsertion.FailedPartway"],
+                    InsertionResult.Failed
+                        when _textInsertion.LastFailureReason is InsertionFailureReason.WtypeXWaylandTarget =>
+                        Localization.Loc.Instance["TextInsertion.WtypeXWaylandFailed"],
                     InsertionResult.Failed =>
-                        "Text insertion failed. Dictated text could not be copied or pasted.",
+                        Localization.Loc.Instance["TextInsertion.FailedNoClipboard"],
                     InsertionResult.NoText when commandResult.CancelInsertion =>
-                        "Dictation canceled.",
+                        Localization.Loc.Instance["Overlay.DictationCanceled"],
                     InsertionResult.NoText when enterSuppressed =>
-                        "Enter not sent: focus moved off the dictation's field.",
-                    InsertionResult.NoText or _ => "Done.",
+                        Localization.Loc.Instance["Overlay.EnterSuppressed"],
+                    InsertionResult.NoText or _ => Localization.Loc.Instance["Overlay.Done"],
                 };
                 var isError =
                     insertion
@@ -3268,8 +3270,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             // "Canceled" rather than a transcription failure regardless of
             // whether TranscriptionCompletedEvent had fired.
             Trace.WriteLine("[Dictation] Pipeline canceled by user.");
-            ReportStatus(context, "Canceled");
-            ShowFeedback(context, "Canceled", false, true);
+            ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+            ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
             if (!transcriptionCompletedPublished)
             {
                 PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
@@ -3292,12 +3294,14 @@ public sealed partial class DictationOrchestrator : IDisposable
                     ErrorMessage = safeMessage, ModelId = engineModelId, AppName = context.AppTitle,
                 }
             );
-            ReportStatus(context, $"Transcription failed: {safeMessage}");
+            ReportStatus(context, Localization.Loc.Instance.GetString("Overlay.TranscriptionFailedWithReason", safeMessage));
             TryPublishSessionSpeechFeedback(
                 context,
                 () => _speechFeedback.BeginAnnounceError(safeMessage)
             );
-            var feedbackText = ex is InvalidOperationException ? safeMessage : "Transcription failed.";
+            var feedbackText = ex is InvalidOperationException
+                ? safeMessage
+                : Localization.Loc.Instance["Overlay.TranscriptionFailed"];
             ShowFeedback(context, feedbackText, true);
             PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
@@ -3369,9 +3373,12 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         try
         {
-            var message = $"Running prompt action '{promptAction.Name}'...";
-            Trace.WriteLine($"[Dictation] {message}");
-            ReportStatus(context, message);
+            Trace.WriteLine($"[Dictation] Running prompt action '{promptAction.Name}'...");
+            ReportStatus(
+                context,
+                Localization.Loc.Instance.GetString("Overlay.RunningPromptAction", promptAction.Name),
+                DictationOverlayPhase.Transcribing
+            );
 
             var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
@@ -3428,9 +3435,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             var sanitized = SanitizeForDisplay(ex.Message, text, promptAction.SystemPrompt);
-            var message = $"Prompt action '{promptAction.Name}' failed: {sanitized}";
-            Trace.WriteLine($"[Dictation] {ex.GetType().Name}: {message}");
-            ReportStatus(context, message);
+            Trace.WriteLine($"[Dictation] {ex.GetType().Name}: Prompt action '{promptAction.Name}' failed: {sanitized}");
+            ReportStatus(context, Localization.Loc.Instance.GetString("Overlay.PromptActionFailed", promptAction.Name, sanitized));
             throw ex is PluginRequestException failure
                 ? new PluginRequestException(sanitized,
                     failure.FailureKind, failure.HttpStatusCode, failure.RetryAfter, failure.IsTransient)
@@ -3656,19 +3662,20 @@ public sealed partial class DictationOrchestrator : IDisposable
             // can introduce a newline; the one-shot insertion can then safely paste multiline text
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
-            // through that one-shot insert. Locked fields also need its exact-focus gate. Auto
-            // also needs a chain that types non-ASCII (not ydotool or X11's xdotool), since a later
-            // chunk may hold it; the one-shot pastes such text.
+            // through that one-shot insert. Locked fields also need its exact-focus gate. Both
+            // strategies also need a chain that types non-ASCII (not ydotool or X11's xdotool):
+            // a later chunk may hold it after earlier ASCII chunks were typed, leaving a truncated
+            // prefix. The one-shot types an ASCII result and pastes or copies a non-ASCII one.
             failureInput = input;
             failurePrompt = action.SystemPrompt;
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
                 && context.LockedFocusField is null
                 && !TextInsertionService.IsTerminalApp(context.AppProcess)
+                && _textInsertion.CanTypeNonAscii
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
-                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)
-                        && _textInsertion.CanTypeNonAscii));
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
 
             if (!canStreamDirectly)
             {
@@ -3802,15 +3809,15 @@ public sealed partial class DictationOrchestrator : IDisposable
         catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
         {
             Trace.WriteLine("[Command] Spoken command canceled by user.");
-            ReportStatus(context, "Canceled");
-            ShowFeedback(context, "Canceled", false, true);
+            ReportStatus(context, Localization.Loc.Instance["Overlay.Canceled"]);
+            ShowFeedback(context, Localization.Loc.Instance["Overlay.Canceled"], false, true);
             PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
         }
         catch (Exception ex)
         {
             var safeMessage = SanitizeForDisplay(ex.Message, command, failureInput, failureOutput, failurePrompt);
             Trace.WriteLine($"[Command] Spoken command failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
-            ReportStatus(context, $"Command failed: {safeMessage}");
+            ReportStatus(context, Localization.Loc.Instance.GetString("Command.FailedWithReason", safeMessage));
             ShowFeedback(context, DescribeSpokenCommandFailure(ex, safeMessage), true);
             PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
@@ -4115,14 +4122,9 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionResult.CopiedToClipboard =>
                 ClipboardFallbackMessage(context.AppProcess),
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-            InsertionResult.MissingPasteTool =>
-                $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-            InsertionResult.ActionFailed
-                or InsertionResult.ActionHandled
-                or InsertionResult.ActionUnavailable
-                or InsertionResult.Failed
-                or InsertionResult.NoText
-                or _ => "Text insertion failed. Command result could not be inserted.",
+            InsertionResult.MissingPasteTool => Localization.Loc.Instance.GetString(
+                "TextInsertion.FailedWithHint", _commands.GetSnapshot().PasteToolInstallHint),
+            InsertionResult.ActionFailed or InsertionResult.ActionHandled or InsertionResult.ActionUnavailable or InsertionResult.Failed or InsertionResult.NoText or _ => Localization.Loc.Instance["Command.InsertFailed"],
         };
         var isError =
             insertion
@@ -4466,9 +4468,11 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private static string ClipboardToolMissingMessage()
     {
-        return WaylandSessionDetector.HasWaylandDisplay()
-            ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
-            : "Text insertion failed. Install xclip to enable clipboard insertion.";
+        var installHint = Localization.Loc.Instance.GetString(
+            "TextInsertion.ClipboardInstallHint",
+            WaylandSessionDetector.HasWaylandDisplay() ? "wl-clipboard" : "xclip"
+        );
+        return Localization.Loc.Instance.GetString("TextInsertion.FailedWithHint", installHint);
     }
 
     private async Task<LockedFocusTarget?> CaptureLockedFieldAsync(
@@ -4552,19 +4556,21 @@ public sealed partial class DictationOrchestrator : IDisposable
         return failureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>
-                "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
+                Localization.Loc.Instance["TextInsertion.CompositorClipboardFallback"],
             InsertionFailureReason.YdotoolSocketUnreachable =>
-                "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
+                Localization.Loc.Instance["TextInsertion.YdotoolSocketClipboardFallback"],
+            InsertionFailureReason.WtypeXWaylandTarget =>
+                Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
-                $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+                Localization.Loc.Instance.GetString(
+                    "TextInsertion.ClipboardFallbackWithHint", _commands.GetSnapshot().PasteToolInstallHint),
             InsertionFailureReason.LockedFieldUnavailable =>
                 Localization.Loc.Instance["Dictation.LockedFieldGone"],
+            InsertionFailureReason.NonAsciiTypingUnavailable =>
+                Localization.Loc.Instance["TextInsertion.NonAsciiTypingClipboardFallback"],
             InsertionFailureReason.FocusFailed =>
-                "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
-            InsertionFailureReason.None
-                or InsertionFailureReason.PartialTypingFailure
-                or InsertionFailureReason.PasteRetriesExhausted
-                or _ => "Copied to clipboard (paste with Ctrl+V).",
+                Localization.Loc.Instance["TextInsertion.FocusFailedClipboardFallback"],
+            InsertionFailureReason.None or InsertionFailureReason.PartialTypingFailure or InsertionFailureReason.PasteRetriesExhausted or _ => Localization.Loc.Instance["TextInsertion.ClipboardFallback"],
         };
     }
 
@@ -4740,6 +4746,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             DurationSeconds = duration,
             Language = language,
             ProfileName = context.Profile?.Name,
+            ProfileId = context.Profile?.Id,
             EngineUsed = engine,
             ModelUsed = modelUsed,
             AudioFileName = Path.GetFileName(wavPath),
@@ -4960,6 +4967,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 IsOverlayVisible = true,
                 StatusText = message,
+                Phase = DictationOverlayPhase.Idle,
                 ShowFeedback = false,
                 FeedbackText = null,
                 ActionResultUrl = null,
@@ -5115,6 +5123,11 @@ public sealed partial class DictationOrchestrator : IDisposable
     /// </summary>
     private void ReportStatus(RecordingContext context, string message)
     {
+        ReportStatus(context, message, DictationOverlayPhase.Idle);
+    }
+
+    private void ReportStatus(RecordingContext context, string message, DictationOverlayPhase phase)
+    {
         if (context.SuppressStatus)
         {
             return;
@@ -5131,6 +5144,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 IsOverlayVisible = true,
                 StatusText = message,
+                Phase = phase,
                 ShowFeedback = false,
                 FeedbackText = null,
                 ActionResultUrl = null,
@@ -5478,6 +5492,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 LlmResponseText = null,
                 IsRecording = false,
                 StatusText = Localization.Loc.Instance["Overlay.Ready"],
+                Phase = DictationOverlayPhase.Idle,
                 ActiveProfileName = null,
                 ActiveAppName = null,
                 SessionStartedAtUtc = null,
@@ -5834,7 +5849,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 else if (ShouldAutoStopForSilence())
                 {
                     _silenceStopRequested = true;
-                    ReportStatus("Silence detected. Stopping…");
+                    ReportStatus(Localization.Loc.Instance["Overlay.SilenceStopping"]);
                     // ReSharper disable once MethodSupportsCancellation -- fire-and-forget silence auto-stop; StopAsync runs teardown to completion.
                     FireAndLog(() => Task.Run(StopAsync), "silence auto-stop");
                     return;

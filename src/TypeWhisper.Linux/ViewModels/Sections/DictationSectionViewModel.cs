@@ -396,7 +396,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
 
-        foreach (var option in TranslationModelInfo.GlobalTargetOptions)
+        foreach (var option in TranslationTargetLabels.GlobalOptions())
         {
             TranslationTargetOptions.Add(option);
         }
@@ -663,7 +663,13 @@ public partial class DictationSectionViewModel : ObservableObject
             );
         set
         {
-            var code = value?.Code;
+            // A null item is the ComboBox clearing while its options are replaced, not a choice.
+            if (value is null)
+            {
+                return;
+            }
+
+            var code = value.Code;
             if (string.Equals(code, TranslationTargetLanguage, StringComparison.Ordinal))
             {
                 return;
@@ -1157,11 +1163,21 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
-        RefreshMicrophoneTestLanguage();
+        OnPropertyChanged(nameof(MicrophoneTestButtonText));
         // Do not replace filter options inside a selector's current selection transaction.
         _postToUi(() =>
         {
-            RefreshLocalModelLanguageFilters();
+            var wasLocalizedOptionRefresh = _isLocalizedOptionRefresh;
+            _isLocalizedOptionRefresh = true;
+            try
+            {
+                // Provider labels and model filters must refresh outside the language selector transaction.
+                RefreshModels();
+            }
+            finally
+            {
+                _isLocalizedOptionRefresh = wasLocalizedOptionRefresh;
+            }
             foreach (var card in LocalModelCards)
                 card.RefreshLocalizedMetadata();
             RefreshLocalModelCards(checkDisk: false);
@@ -1188,6 +1204,8 @@ public partial class DictationSectionViewModel : ObservableObject
             ReplaceCollection(GermanOutputVariantOptions, CreateGermanOutputVariantOptions());
             ReplaceCollection(SpokenFormattingStrategyOptions, CreateSpokenFormattingStrategyOptions());
             ReplaceCollection(InsertionStrategyOptions, CreateInsertionStrategyOptions());
+            RelabelFollowSystemDefaultDevice();
+            ReplaceCollection(TranslationTargetOptions, TranslationTargetLabels.GlobalOptions());
 
             LocalModelAcceleration = acceleration;
             Language = language;
@@ -1206,6 +1224,7 @@ public partial class DictationSectionViewModel : ObservableObject
             }
 
             OnPropertyChanged(nameof(SelectedAccelerationOption));
+            OnPropertyChanged(nameof(SelectedTranslationTargetOption));
             OnPropertyChanged(nameof(SelectedLanguageOption));
             OnPropertyChanged(nameof(LanguageSelectionWarning));
             OnPropertyChanged(nameof(SelectedCleanupLevelOption));
@@ -1224,12 +1243,32 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
             OnPropertyChanged(nameof(AccelerationStatusText));
-            // Engine, model status, and active-model labels are computed text; recompute them in the new language.
             RefreshModelState();
         }
         finally
         {
             _isLocalizedOptionRefresh = false;
+        }
+
+        // After the Automatic entry is relabeled: the result line names the selected device.
+        RelocalizeMicrophoneTest();
+    }
+
+    private void RelabelFollowSystemDefaultDevice()
+    {
+        var index = Devices.ToList().FindIndex(device => device.Index < 0);
+        if (index < 0)
+        {
+            return;
+        }
+
+        var wasSelected = SelectedDevice is { Index: < 0 };
+        Devices[index] = AudioRecordingService.CreateFollowSystemDefaultOption(
+            Loc.Instance["Dictation.FollowSystemDefaultMic"]
+        );
+        if (wasSelected)
+        {
+            SelectedDevice = Devices[index];
         }
     }
 
@@ -2188,7 +2227,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnSelectedDeviceChanged(AudioInputDevice? value)
     {
-        if (value is null)
+        // A relabeled entry is the same choice; nothing to persist.
+        if (value is null || _isLocalizedOptionRefresh)
         {
             return;
         }

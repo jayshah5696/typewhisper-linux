@@ -49,9 +49,6 @@ public partial class AboutSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isSupportReportBusy;
 
-    private string _supportReportStatusKey = "About.SupportReportDescription";
-    private string _supportReportRenderedText = Loc.Instance["About.SupportReportDescription"];
-
     [ObservableProperty]
     private string _supportReportStatusText = Loc.Instance["About.SupportReportDescription"];
 
@@ -143,24 +140,66 @@ public partial class AboutSectionViewModel : ObservableObject
         Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }
 
-    private string _backupStatusDefault = Loc.Instance["About.BackupStatusDefault"];
     private string _updateStatusDefault = Loc.Instance["About.UpdateStatusDefault"];
 
-    // Status text is computed, not bound to the catalog: re-resolve defaults and the last
-    // update result in the new language. A backup message the user just saw is left alone.
+    // The message behind each status line, so a language switch can redraw it. Null once the
+    // text is set directly, which then stays as it is.
+    private (string Key, object?[] Args)? _backupStatus = ("About.BackupStatusDefault", []);
+    private (string Key, object?[] Args)? _supportReportStatus = ("About.SupportReportDescription", []);
+    private bool _renderingStatus;
+
+    private void SetBackupStatus(string key, params object?[] args)
+    {
+        _backupStatus = (key, args);
+        RenderStatus(() => BackupStatusText = Loc.Instance.GetString(key, args));
+    }
+
+    private void SetSupportReportStatus(string key, params object?[] args)
+    {
+        _supportReportStatus = (key, args);
+        RenderStatus(() => SupportReportStatusText = Loc.Instance.GetString(key, args));
+    }
+
+    private void RenderStatus(Action render)
+    {
+        _renderingStatus = true;
+        try
+        {
+            render();
+        }
+        finally
+        {
+            _renderingStatus = false;
+        }
+    }
+
+    partial void OnBackupStatusTextChanged(string value)
+    {
+        if (!_renderingStatus)
+            _backupStatus = null;
+    }
+
+    partial void OnSupportReportStatusTextChanged(string value)
+    {
+        if (!_renderingStatus)
+            _supportReportStatus = null;
+    }
+
+    // Status text is computed, not bound to the catalog: redraw each status line and the last
+    // update result in the new language.
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
-        var backupDefault = Loc.Instance["About.BackupStatusDefault"];
-        if (BackupStatusText == _backupStatusDefault)
-            BackupStatusText = backupDefault;
-        _backupStatusDefault = backupDefault;
+        OnPropertyChanged(nameof(VersionLabel));
+
+        if (_backupStatus is var (backupKey, backupArgs))
+            SetBackupStatus(backupKey, backupArgs);
+        if (_supportReportStatus is var (supportKey, supportArgs))
+            SetSupportReportStatus(supportKey, supportArgs);
 
         var updateDefault = Loc.Instance["About.UpdateStatusDefault"];
         if (UpdateStatusText == _updateStatusDefault)
             UpdateStatusText = updateDefault;
         _updateStatusDefault = updateDefault;
-        if (SupportReportStatusText == _supportReportRenderedText)
-            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
         if (IsCheckingForUpdates)
             UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
         else
@@ -172,6 +211,8 @@ public partial class AboutSectionViewModel : ObservableObject
     // Shared with the update checker so both sides agree on "current".
     // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
     public string Version { get; } = AppVersion.Display;
+
+    public string VersionLabel => Loc.Instance.GetString("About.VersionLabel", Version);
 
     // Embedded at build time (Directory.Build.props); shows the upstream/Excel-on-the-Web split in-app.
     // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
@@ -235,15 +276,13 @@ public partial class AboutSectionViewModel : ObservableObject
         {
             var report = await _supportReport.CaptureAsync();
             await Task.Run(() => report.Export(path));
-            _supportReportStatusKey = report.CollectionErrors.Count == 0
-                ? "About.SupportReportExported"
-                : "About.SupportReportPartial";
-            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
+            SetSupportReportStatus(
+                report.CollectionErrors.Count == 0 ? "About.SupportReportExported" : "About.SupportReportPartial"
+            );
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _supportReportStatusKey = "About.SupportReportFailed";
-            SupportReportStatusText = _supportReportRenderedText = Loc.Instance[_supportReportStatusKey];
+            SetSupportReportStatus("About.SupportReportFailed");
         }
         finally
         {
@@ -259,12 +298,11 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsBackupBusy = true;
-        BackupStatusText = Loc.Instance["About.CreatingBackup"];
+        SetBackupStatus("About.CreatingBackup");
         try
         {
             var result = await Task.Run(() => _settingsBackup.CreateBackup(path));
-            BackupStatusText =
-                Loc.Instance.GetString("About.BackupCreated", result.FileCount);
+            SetBackupStatus("About.BackupCreated", result.FileCount);
             return result;
         }
         finally
@@ -281,12 +319,11 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsBackupBusy = true;
-        BackupStatusText = Loc.Instance["About.RestoringBackup"];
+        SetBackupStatus("About.RestoringBackup");
         try
         {
             var result = await Task.Run(() => _settingsBackup.StageRestore(path));
-            BackupStatusText =
-                Loc.Instance.GetString("About.BackupStaged", result.FileCount);
+            SetBackupStatus("About.BackupStaged", result.FileCount);
             return result;
         }
         finally
@@ -304,7 +341,7 @@ public partial class AboutSectionViewModel : ObservableObject
 
         IsBackupBusy = true;
         IsExportingData = true;
-        BackupStatusText = Loc.Instance["About.ExportingData"];
+        SetBackupStatus("About.ExportingData");
         using var cancellation = new CancellationTokenSource();
         _dataExportCancellation = cancellation;
         // A progress report can arrive after the export finished; it must not replace the outcome.
@@ -317,7 +354,7 @@ public partial class AboutSectionViewModel : ObservableObject
                 // ReSharper disable once AccessToModifiedClosure -- intended: Finish clears it under the same lock.
                 if (running)
                 {
-                    BackupStatusText = Loc.Instance.GetString(
+                    SetBackupStatus(
                         "About.ExportingDataProgress",
                         update.FileCount,
                         update.Bytes / (1024.0 * 1024.0)
@@ -325,12 +362,12 @@ public partial class AboutSectionViewModel : ObservableObject
                 }
             }
         });
-        void Finish(string status)
+        void Finish(string key, params object?[] args)
         {
             lock (gate)
             {
                 running = false;
-                BackupStatusText = status;
+                SetBackupStatus(key, args);
             }
         }
 
@@ -342,17 +379,17 @@ public partial class AboutSectionViewModel : ObservableObject
                 progress,
                 cancellation.Token
             );
-            Finish(Loc.Instance.GetString("About.DataExported", result.FileCount));
+            Finish("About.DataExported", result.FileCount);
             return result;
         }
         catch (OperationCanceledException)
         {
-            Finish(Loc.Instance["About.DataExportCanceled"]);
+            Finish("About.DataExportCanceled");
             throw;
         }
         catch
         {
-            Finish(Loc.Instance["About.DataExportFailed"]);
+            Finish("About.DataExportFailed");
             throw;
         }
         finally
@@ -378,14 +415,14 @@ public partial class AboutSectionViewModel : ObservableObject
         }
 
         IsBackupBusy = true;
-        BackupStatusText = Loc.Instance["About.ResettingData"];
+        SetBackupStatus("About.ResettingData");
         try
         {
             await Task.Run(() => _dataReset.RequestReset(new LocalDataResetOptions(DeleteModelsOnReset)));
         }
         catch
         {
-            BackupStatusText = Loc.Instance["About.ResetFailed"];
+            SetBackupStatus("About.ResetFailed");
             IsBackupBusy = false;
             throw;
         }
@@ -393,7 +430,7 @@ public partial class AboutSectionViewModel : ObservableObject
         // The app stays busy until it exits. When it is already quitting, the reset runs at the next launch.
         if (!_requestRestart())
         {
-            BackupStatusText = Loc.Instance["About.ResetAtNextLaunch"];
+            SetBackupStatus("About.ResetAtNextLaunch");
         }
     }
 

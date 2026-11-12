@@ -12,8 +12,6 @@ public partial class DictationSectionViewModel
 
     private MicrophoneTest? _microphoneTest;
     private ITimer? _microphoneTestTimer;
-    private MicrophoneTestSnapshot? _lastMicrophoneTestSnapshot;
-    private MicrophoneTestStartFailure? _microphoneTestStartFailure;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MicrophoneTestButtonText))]
@@ -22,7 +20,10 @@ public partial class DictationSectionViewModel
     [ObservableProperty]
     private string _microphoneTestStatus = Loc.Instance["Dictation.MicTestIdle"];
 
-    private string _microphoneTestIdleStatus = Loc.Instance["Dictation.MicTestIdle"];
+    // What the status line shows, kept so a language switch can redraw it. Null once
+    // something outside the test rendering sets the text, which then stays as it is.
+    private MicrophoneTestShown? _microphoneTestShown = new MicrophoneTestShown.Idle();
+    private bool _renderingMicrophoneTest;
 
     [ObservableProperty]
     private string _microphoneTestDetail = "";
@@ -45,16 +46,16 @@ public partial class DictationSectionViewModel
         var test = _audio.TryStartMicrophoneTest(out var failure);
         if (test is null)
         {
-            _lastMicrophoneTestSnapshot = null;
-            _microphoneTestStartFailure = failure;
-            RefreshMicrophoneTestLanguage();
-            MicrophoneTestDetail = "";
-            MicrophoneTestDevice = "";
+            ShowMicrophoneTest(new MicrophoneTestShown.StartFailed(failure switch
+            {
+                MicrophoneTestStartFailure.Busy => "Dictation.MicTestBusy",
+                MicrophoneTestStartFailure.NoDevice => "Dictation.MicTestNoDevice",
+                MicrophoneTestStartFailure.OpenFailed or MicrophoneTestStartFailure.None or _ => "Dictation.MicTestOpenFailed",
+            }));
             return;
         }
 
         _microphoneTest = test;
-        _microphoneTestStartFailure = null;
         IsMicrophoneTestRunning = true;
         _microphoneTestTimer = _timeProvider.CreateTimer(
             _ => _postToUi(RefreshMicrophoneTest),
@@ -108,35 +109,64 @@ public partial class DictationSectionViewModel
         IsMicrophoneTestRunning = false;
     }
 
-    private void RefreshMicrophoneTestLanguage()
+    private void RenderMicrophoneTest(MicrophoneTestSnapshot snapshot) =>
+        ShowMicrophoneTest(new MicrophoneTestShown.Result(snapshot));
+
+    private void RelocalizeMicrophoneTest()
     {
-        OnPropertyChanged(nameof(MicrophoneTestButtonText));
-        if ((_microphoneTest?.Snapshot() ?? _lastMicrophoneTestSnapshot) is { } snapshot)
+        if (_microphoneTestShown is { } shown)
         {
-            RenderMicrophoneTest(snapshot);
-            return;
+            ShowMicrophoneTest(shown);
         }
-
-        var idle = Loc.Instance["Dictation.MicTestIdle"];
-        if (_microphoneTestStartFailure is null)
-        {
-            if (MicrophoneTestStatus == _microphoneTestIdleStatus)
-                MicrophoneTestStatus = idle;
-            _microphoneTestIdleStatus = idle;
-            return;
-        }
-
-        MicrophoneTestStatus = Loc.Instance[_microphoneTestStartFailure switch
-        {
-            MicrophoneTestStartFailure.Busy => "Dictation.MicTestBusy",
-            MicrophoneTestStartFailure.NoDevice => "Dictation.MicTestNoDevice",
-            MicrophoneTestStartFailure.OpenFailed or MicrophoneTestStartFailure.None or _ => "Dictation.MicTestOpenFailed",
-        }];
     }
 
-    private void RenderMicrophoneTest(MicrophoneTestSnapshot snapshot)
+    partial void OnMicrophoneTestStatusChanged(string value)
     {
-        _lastMicrophoneTestSnapshot = snapshot;
+        if (!_renderingMicrophoneTest)
+        {
+            _microphoneTestShown = null;
+        }
+    }
+
+    private void ShowMicrophoneTest(MicrophoneTestShown shown)
+    {
+        _renderingMicrophoneTest = true;
+        try
+        {
+            switch (shown)
+            {
+                case MicrophoneTestShown.Idle:
+                    MicrophoneTestStatus = Loc.Instance["Dictation.MicTestIdle"];
+                    break;
+                case MicrophoneTestShown.StartFailed(var key):
+                    MicrophoneTestStatus = Loc.Instance[key];
+                    MicrophoneTestDetail = "";
+                    MicrophoneTestDevice = "";
+                    break;
+                case MicrophoneTestShown.Result(var snapshot):
+                    RenderMicrophoneTestResult(snapshot);
+                    break;
+            }
+        }
+        finally
+        {
+            _renderingMicrophoneTest = false;
+        }
+
+        _microphoneTestShown = shown;
+    }
+
+    private abstract record MicrophoneTestShown
+    {
+        public sealed record Idle : MicrophoneTestShown;
+
+        public sealed record StartFailed(string Key) : MicrophoneTestShown;
+
+        public sealed record Result(MicrophoneTestSnapshot Snapshot) : MicrophoneTestShown;
+    }
+
+    private void RenderMicrophoneTestResult(MicrophoneTestSnapshot snapshot)
+    {
         // Following the default usually opens PortAudio's "default" alias, which names
         // nothing the user would recognize; the Automatic entry says what is tested.
         var device = SelectedDevice is { Index: < 0 } automatic

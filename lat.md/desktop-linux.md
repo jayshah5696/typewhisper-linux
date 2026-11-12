@@ -42,6 +42,16 @@ The microphone preview follows changes to the system default input without resta
 
 [[src/TypeWhisper.Linux/Services/AudioRecordingService.cs|AudioRecordingService]] releases a preview stream before refreshing PortAudio's device table and then reopens it on the current default. Changes during recording wait until capture ends. [[src/TypeWhisper.Linux/Services/AudioPlaybackService.cs|AudioPlaybackService]] holds its native audio reference only while a stream exists, so idle playback does not prevent device discovery.
 
+[[src/TypeWhisper.Linux/Services/DefaultDeviceWatcher.cs|Default-device monitoring]] excludes changes caused by opening the app's own preview stream, preventing an Automatic microphone preview from repeatedly reopening itself.
+
+## Interface language changes
+
+Changing the interface language refreshes displayed labels and status messages while preserving current operations and unsaved plugin settings.
+
+[[src/TypeWhisper.Core/Services/DefaultItemNames.cs|Default item names]] retain a stable identity so translated built-in profile and prompt names can follow the interface language without replacing user names. [[src/TypeWhisper.Linux/ViewModels/Sections/AboutSectionViewModel.cs|About status messages]] retain their localization keys and arguments for redraws. [[tests/TypeWhisper.UiTests/PluginDraftLocalizationTests.cs|Plugin draft tests]] verify that language changes preserve edited settings and their saved baseline.
+
+[[src/TypeWhisper.Linux/ViewModels/Sections/ProfilesSectionViewModel.cs|The profile editor]] preserves drafts while built-in names change language and clears selection when the selected profile no longer exists. [[tests/TypeWhisper.UiTests/ProfilesSmallWindowTests.cs|Profile layout tests]] exercise setup controls across all six languages after shared profile changes.
+
 ## Native Dependencies and Packaging
 
 The Linux application packages required platform runtimes and desktop utilities for standard distributions.

@@ -91,7 +91,7 @@ public sealed class PromptPaletteService
             return;
         }
 
-        var targetSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        var targetSnapshot = await CaptureWindowSnapshotAsync(_activeWindow.GetActiveWindowSnapshotAsync);
 
         Interlocked.Increment(ref _activeRuns);
         try
@@ -125,7 +125,7 @@ public sealed class PromptPaletteService
 
         // Capture the target window before the palette steals focus, so the paste
         // can re-activate it and land in the editor even while the palette streamed.
-        var targetSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        var targetSnapshot = await CaptureWindowSnapshotAsync(_activeWindow.GetActiveWindowSnapshotAsync);
         var capturedText = await _textInsertion.CaptureSelectedTextAsync(
             TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
         );
@@ -277,7 +277,7 @@ public sealed class PromptPaletteService
 
     private async Task InsertResultAsync(string result, ActiveWindowSnapshot? targetSnapshot)
     {
-        var currentSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        var currentSnapshot = await CaptureWindowSnapshotAsync(_activeWindow.GetActiveWindowSnapshotAsync);
         if (TransformSelectionService.HasSelectionTargetChanged(targetSnapshot, currentSnapshot))
         {
             var copyResult = await _textInsertion.InsertTextAsync(result, autoPaste: false);
@@ -344,6 +344,45 @@ public sealed class PromptPaletteService
             or InsertionResult.NoText
             or _ => "The correction was not applied because TypeWhisper could not replace the selected text.",
     };
+
+    private static async Task<ActiveWindowSnapshot?> CaptureWindowSnapshotAsync(
+        Func<CancellationToken, Task<ActiveWindowSnapshot?>> snapshotProvider
+    )
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            return await snapshotProvider(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PromptPalette] Target window snapshot failed: {ex.GetType().Name}");
+            return null;
+        }
+    }
+
+    // Extracted for tests. Without a captured window id there's nothing to compare, so paste as before.
+    internal static async Task<bool> IsTargetWindowStillFocusedAsync(
+        Func<CancellationToken, Task<ActiveWindowSnapshot?>> snapshotProvider,
+        ActiveWindowSnapshot? captured,
+        string? targetWindowId,
+        bool isWaylandSession
+    )
+    {
+        // On X11 TextInsertionService re-activates the xdotool window before pasting.
+        if (!isWaylandSession && !string.IsNullOrEmpty(targetWindowId))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(captured?.WindowId))
+        {
+            return true;
+        }
+
+        var current = await CaptureWindowSnapshotAsync(snapshotProvider);
+        return !DictationOrchestrator.HasTargetWindowChanged(captured, current);
+    }
 
     /// <summary>
     ///     Extracted for tests: a configured-but-unresolved action target must surface a routing

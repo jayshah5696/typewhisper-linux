@@ -91,13 +91,15 @@ internal static class ServiceRegistrations
         services.AddSingleton<IProfileService>(sp =>
             new ProfileService(
                 Path.Join(dataPath, "profiles.json"),
-                sp.GetRequiredService<IErrorLogService>()
+                sp.GetRequiredService<IErrorLogService>(),
+                LocDefaultNameLocalizer.Instance
             )
         );
         services.AddSingleton<IPromptActionService>(sp =>
             new PromptActionService(
                 Path.Join(dataPath, "prompt-actions.json"),
-                sp.GetRequiredService<IErrorLogService>()
+                sp.GetRequiredService<IErrorLogService>(),
+                LocDefaultNameLocalizer.Instance
             )
         );
         services.AddSingleton<CleanupService>();
@@ -137,7 +139,12 @@ internal static class ServiceRegistrations
         // Read-only over the AT-SPI client: it never starts the listeners itself, so the
         // insertion path is unchanged unless correction learning already turned them on.
         services.AddSingleton<IPasteConfirmationSource, AtSpiPasteConfirmation>();
-        services.AddSingleton<IWindowFrameLocator, GnomeWindowFrameLocator>();
+        // X11 sessions get device-pixel frames from xdotool; Wayland keeps the GNOME locator.
+        services.AddSingleton<IWindowFrameLocator>(_ =>
+            WaylandSessionDetector.IsWaylandSession()
+                ? new GnomeWindowFrameLocator()
+                : new XdotoolWindowFrameLocator()
+        );
         services.AddSingleton<TargetAppCorrectionLearningService>();
         // Toggles the session-bus accessibility flag (org.a11y.Status.IsEnabled) that
         // Chromium/Electron/Qt apps gate their accessibility tree on; most desktops leave it
