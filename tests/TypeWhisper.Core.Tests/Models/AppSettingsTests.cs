@@ -140,6 +140,36 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void ManualDeviceSettings_RoundTripAndCopyWithoutChangingOtherChoices()
+    {
+        var original = AppSettings.Default
+            .WithLocalModelDevice("provider", "vulkan", "pci:integrated")
+            .WithLocalModelDevice("provider", "nvidia-cuda", "gpu:uuid")
+            .WithLocalModelDevice("other", "vulkan", "pci:other");
+        var changed = original.WithLocalModelDevice("provider", "vulkan", "pci:discrete");
+        var loaded = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(changed, s_jsonOptions), s_jsonOptions)!;
+        Assert.Equal("pci:integrated", original.GetLocalModelDevice("provider", "vulkan"));
+        Assert.Equal("pci:discrete", loaded.GetLocalModelDevice("provider", "vulkan"));
+        Assert.Equal("gpu:uuid", loaded.GetLocalModelDevice("provider", "nvidia-cuda"));
+        Assert.Equal("pci:other", loaded.GetLocalModelDevice("other", "vulkan"));
+        Assert.Null(loaded.GetLocalModelDevice("provider", "auto"));
+        Assert.Null(loaded.GetLocalModelDevice("provider", "cpu"));
+        Assert.Null(loaded.WithLocalModelDevice("provider", "vulkan", null).GetLocalModelDevice("provider", "vulkan"));
+        Assert.Equal(AppSettings.LocalModelAccelerationAuto, loaded.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public void ManualDeviceSettings_MissingOrNullMapsRemainCompatible()
+    {
+        foreach (var json in new[] { "{}", """{"localModelDevices":null}""", """{"localModelDevices":{"provider":null}}""" })
+        {
+            var loaded = JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions)!;
+            Assert.Null(loaded.GetLocalModelDevice("provider", "vulkan"));
+            Assert.Equal("gpu", loaded.WithLocalModelDevice("provider", "vulkan", "gpu").GetLocalModelDevice("provider", "vulkan"));
+        }
+    }
+
+    [Fact]
     public void DefaultLocalModelAcceleration_IsAuto()
     {
         Assert.Equal(

@@ -1,0 +1,19 @@
+{
+  "url": "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.4.1/transcribe-native-0.4.1-linux-x86_64-cuda.tar.gz",
+  "archiveSha256": "c4bdf9c4798bac1868ecdcaa04f27eb7712fb43125268313ce14d508c70d247d",
+  "archiveSize": 203199021,
+  "prefix": "transcribe-native-linux-x86_64-cuda",
+  "files": {
+    "contract.json": { "sha256": "f4fcec364dd4a8c4031257b3824594ce98b8230c83620a278696691cbb03232c", "size": 119 },
+    "libggml-base.so": { "sha256": "dbc3f9db8aae0078c1b2057749f2fd5b7adf7bbf52f84382765bb4a9e0e04e1a", "size": 808688 },
+    "libggml-cpu.so": { "sha256": "9e1b7296cb11f64137262c76907aa0f8aaa0010f0faa99f11fc8f4a6d9b4c60c", "size": 872488 },
+    "libggml-cuda.so": { "sha256": "a2b449a3032eb1b8fd057643b579125b146e6ca9063898884e1e267616aa0b46", "size": 207937784 },
+    "libggml-vulkan.so": { "sha256": "7c678782a0b94993aeaed1f8173d006e674f09cab39f513d9458188920dee269", "size": 44039912 },
+    "libggml.so": { "sha256": "93a901624aada5eb16089328f1ffb126d204967da2ae1a256648ee7b8b50851c", "size": 228968 },
+    "libtranscribe.so": { "sha256": "2d8fc40f14bf09909b537fe0a8473bb4493012462ae6f89b89a09e37ede67091", "size": 2438408 },
+    "licenses/LICENSE": { "sha256": "86a53633b56f6b029d3cb42158bcc7aac0cdff898aceb13e83b93e368bbc4ac6", "size": 1083 },
+    "licenses/LICENSE-ggml": { "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d", "size": 1078 },
+    "licenses/LICENSE-miniz": { "sha256": "6f20fa7672b00e2e975c291df737cf227addf3ad32e36fef3fe0f416e4664d3d", "size": 1162 },
+    "licenses/LICENSE-silero_vad": { "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b", "size": 1075 }
+  }
+}

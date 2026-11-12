@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>TypeWhisper.Plugin.TranscribeCpp</RootNamespace>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
+        <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+        <EmbeddedResource Include="Models\catalog.json" />
+        <EmbeddedResource Include="Native\cuda.json" />
+        <Compile Include="..\Shared\Net\ResilientDownloader.cs" Link="Shared\Net\ResilientDownloader.cs" />
+        <Compile Include="..\Shared\Net\DownloadSpace.cs" Link="Shared\Net\DownloadSpace.cs" />
+        <Compile Include="..\Shared\Net\InterProcessFileLock.cs" Link="Shared\Net\InterProcessFileLock.cs" />
+        <Compile Include="..\Shared\Cuda\CudaRuntimeProvisioner.cs" Link="Shared\Cuda\CudaRuntimeProvisioner.cs" />
+        <Compile Include="..\Shared\Io\DurableFileWrite.cs" Link="Shared\Io\DurableFileWrite.cs" />
+    </ItemGroup>
+    <ItemGroup>
+        <Content Include="manifest.json" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+    <Target Name="PrepareTranscribeNative" BeforeTargets="AssignTargetPaths"
+            Condition="'$(DesignTimeBuild)' != 'true' and $([MSBuild]::IsOSPlatform('Linux'))">
+        <PropertyGroup>
+            <_TranscribeNativeDir>$(MSBuildProjectDirectory)/obj/native-linux-x64</_TranscribeNativeDir>
+        </PropertyGroup>
+        <Exec Command="python3 &quot;$(MSBuildProjectDirectory)/../../scripts/prepare-transcribe-native.py&quot; --output &quot;$(_TranscribeNativeDir)&quot;" />
+        <ItemGroup>
+            <_TranscribeNative Include="$(_TranscribeNativeDir)/**/*" />
+            <Content Include="@(_TranscribeNative)">
+                <Link>native/linux-x64/%(_TranscribeNative.RecursiveDir)%(_TranscribeNative.Filename)%(_TranscribeNative.Extension)</Link>
+                <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+                <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            </Content>
+        </ItemGroup>
+    </Target>
+</Project>

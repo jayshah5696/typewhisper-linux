@@ -47,10 +47,19 @@ internal sealed class StreamingTranscriptState
         }
     }
 
-    public bool TryApplyPolling(
+    // The coordinator supplies the full joined final segments plus the current hypothesis.
+    // A correction or retraction must replace that snapshot, not preserve an obsolete prefix.
+    public bool TryApplyStreaming(int sessionVersion, string rawText, Func<string, string> corrector, out string displayText) =>
+        TryApply(sessionVersion, rawText, corrector, stabilize: false, out displayText);
+
+    public bool TryApplyPolling(int sessionVersion, string rawText, Func<string, string> corrector, out string displayText) =>
+        TryApply(sessionVersion, rawText, corrector, stabilize: true, out displayText);
+
+    private bool TryApply(
         int sessionVersion,
         string rawText,
         Func<string, string> corrector,
+        bool stabilize,
         out string displayText
     )
     {
@@ -69,19 +78,19 @@ internal sealed class StreamingTranscriptState
         }
 
         var text = rawText.Trim();
-        if (string.IsNullOrEmpty(text))
+        if (stabilize && string.IsNullOrEmpty(text))
         {
             return false;
         }
 
         // Deliberately outside the lock; see the trade-off note on _lock.
         text = corrector(text);
-        if (string.IsNullOrEmpty(text))
+        if (stabilize && string.IsNullOrEmpty(text))
         {
             return false;
         }
 
-        var stable = StabilizeText(confirmedSnapshot, text);
+        var stable = stabilize ? StabilizeText(confirmedSnapshot, text) : text;
 
         lock (_lock)
         {

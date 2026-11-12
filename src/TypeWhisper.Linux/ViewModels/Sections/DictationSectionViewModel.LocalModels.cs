@@ -16,12 +16,74 @@ public partial class DictationSectionViewModel
     public ObservableCollection<LocalModelCard> LocalModelCards { get; } = [];
 
     public bool HasLocalModelCards => LocalModelCards.Count > 0;
+    public ObservableCollection<LocalModelLanguageFilter> LocalModelLanguageFilters { get; } = [];
+
+    [ObservableProperty]
+    private string _localModelSearch = "";
+
+    [ObservableProperty]
+    private bool _livePreviewModelsOnly;
+
+    public bool HasLocalModelFilters => !string.IsNullOrWhiteSpace(LocalModelSearch)
+        || LivePreviewModelsOnly || LocalModelLanguageFilters.Any(option => option.IsSelected);
+
+    public string LocalModelResultsText => Loc.Instance.GetString("Dictation.ModelFilterResults",
+        LocalModelCards.Count(card => card.IsListed), LocalModelCards.Count);
+
+    partial void OnLocalModelSearchChanged(string value) => RefreshLocalModelCards(checkDisk: false);
+    partial void OnLivePreviewModelsOnlyChanged(bool value) => RefreshLocalModelCards(checkDisk: false);
+
+    [RelayCommand]
+    private void ClearLocalModelFilters()
+    {
+        LocalModelSearch = "";
+        LivePreviewModelsOnly = false;
+        foreach (var option in LocalModelLanguageFilters)
+            option.IsSelected = false;
+    }
+
+    private void RefreshLocalModelLanguageFilters()
+    {
+        var selected = LocalModelLanguageFilters.Where(option => option.IsSelected)
+            .Select(option => option.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in LocalModelLanguageFilters)
+            option.PropertyChanged -= OnLocalModelLanguageFilterChanged;
+        LocalModelLanguageFilters.Clear();
+        var codes = LocalModelCards.SelectMany(card => card.Metadata.Languages ?? [])
+            .Concat(selected).Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in codes.Select(code => new LocalModelLanguageFilter(code, GetLanguageDisplayName(code) ?? code))
+            .OrderBy(option => option.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            option.IsSelected = selected.Contains(option.Code);
+            option.PropertyChanged += OnLocalModelLanguageFilterChanged;
+            LocalModelLanguageFilters.Add(option);
+        }
+    }
+
+    private void OnLocalModelLanguageFilterChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(LocalModelLanguageFilter.IsSelected))
+            RefreshLocalModelCards(checkDisk: false);
+    }
+
+    private bool MatchesLocalModelFilters(LocalModelCard card)
+    {
+        var search = LocalModelSearch.Trim();
+        return (search.Length == 0
+                || card.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || card.EngineName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || card.ModelId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            && (!LivePreviewModelsOnly || card.Metadata.SupportsStreaming == true)
+            && LocalModelLanguageFilters.Where(option => option.IsSelected).All(option =>
+                card.Metadata.Languages?.Contains(option.Code, StringComparer.OrdinalIgnoreCase) == true);
+    }
 
     // The full catalog is long; by default only models the user has or is advised to get are listed.
     [ObservableProperty]
     private bool _showAllLocalModels;
 
-    public bool ShowLocalModelsToggle => ShowAllLocalModels || LocalModelCards.Any(card => !card.IsListed);
+    public bool ShowLocalModelsToggle => !HasLocalModelFilters
+        && (ShowAllLocalModels || LocalModelCards.Any(card => !card.IsListed));
 
     public string LocalModelsToggleText => ShowAllLocalModels
         ? Loc.Instance["Dictation.ShowFewerLocalModels"]
@@ -40,7 +102,8 @@ public partial class DictationSectionViewModel
 
     // Moving the model folder under a running download or load would split or pull its files.
     public bool CanChangeModelStorage =>
-        !IsMigratingModelStorage && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
+        !IsRecording && !IsDownloadingCudaRuntime && !IsClearingGpuRuntime && !IsMigratingModelStorage
+        && !HasLocalModelOperation && !_models.IsAnyModelDownloading && !LocalModelCards.Any(card => card.WasBusy);
 
     partial void OnIsMigratingModelStorageChanged(bool value)
     {
@@ -49,20 +112,21 @@ public partial class DictationSectionViewModel
 
     private void RebuildLocalModelCards()
     {
+        var previous = LocalModelCards.ToDictionary(card => card.ModelId);
         LocalModelCards.Clear();
         foreach (var engine in _pluginManager.TranscriptionEngines.Where(engine => engine.SupportsModelDownload))
         {
             foreach (var model in engine.TranscriptionModels)
             {
-                LocalModelCards.Add(new LocalModelCard(
-                    ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id),
-                    model.DisplayName,
-                    engine.ProviderDisplayName,
-                    model.SizeDescription,
-                    model.IsRecommended));
+                var id = ModelManagerService.GetPluginModelId(engine.GetTranscriptionSelectionId(), model.Id);
+                LocalModelCards.Add(previous.TryGetValue(id, out var existing)
+                    && existing.Metadata == model && existing.EngineName == engine.ProviderDisplayName
+                    ? existing : new LocalModelCard(id, model.DisplayName, engine.ProviderDisplayName,
+                        model.SizeDescription, model.IsRecommended, model));
             }
         }
 
+        RefreshLocalModelLanguageFilters();
         OnPropertyChanged(nameof(HasLocalModelCards));
         RefreshLocalModelCards(checkDisk: true);
     }
@@ -86,18 +150,24 @@ public partial class DictationSectionViewModel
             if (!busy && (checkDisk || card.LastStatusType != status?.Type))
             {
                 card.Downloaded = IsDownloadedOnDisk(card.ModelId);
+                card.LinkedPath = _models.GetLinkedModelPath(card.ModelId);
             }
 
             card.LastStatusType = status?.Type;
             card.WasBusy = busy;
             var selected = card.ModelId == selectedId;
-            card.IsListed = ShowAllLocalModels || card.Downloaded || busy || selected || card.IsRecommended;
+            card.IsListed = busy || card.IsTesting || card.IsLinking || selected || (MatchesLocalModelFilters(card)
+                && (HasLocalModelFilters || ShowAllLocalModels || card.Downloaded || card.HasLink || card.IsRecommended));
             ApplyCardState(card, status, busy, selected, anyDownloading, anyBusy);
         }
 
         OnPropertyChanged(nameof(CanChangeModelStorage));
+        OnPropertyChanged(nameof(CanDeleteSelectedModel));
+        OnPropertyChanged(nameof(SelectedModelRemoveText));
         OnPropertyChanged(nameof(ShowLocalModelsToggle));
         OnPropertyChanged(nameof(LocalModelsToggleText));
+        OnPropertyChanged(nameof(HasLocalModelFilters));
+        OnPropertyChanged(nameof(LocalModelResultsText));
     }
 
     // An unavailable model folder or a deactivated plugin throws; show the model as not downloaded.
@@ -150,6 +220,9 @@ public partial class DictationSectionViewModel
             ModelStatusType.NotDownloaded or ModelStatusType.Ready or null or _ => Loc.Instance["Dictation.ModelCardStateNotDownloaded"],
         };
 
+        if (!string.IsNullOrWhiteSpace(card.Metadata.UnavailableReason) && !busy)
+            card.StateText = card.Metadata.UnavailableReason;
+
         card.ShowProgress = busy;
         card.IsProgressIndeterminate = !downloading;
         card.Progress = downloading ? Math.Clamp(status!.Progress, 0, 1) : 0;
@@ -158,15 +231,28 @@ public partial class DictationSectionViewModel
         card.ShowCancel = downloading && _models.IsDownloading(card.ModelId);
 
         card.ShowDownload = !downloaded && !busy;
-        card.CanDownload = !anyDownloading && !IsMigratingModelStorage;
+        var available = string.IsNullOrWhiteSpace(card.Metadata.UnavailableReason);
+        card.CanDownload = available && !anyDownloading && !IsMigratingModelStorage;
         card.ShowUse = downloaded && !busy;
         // A selected model that failed to load can be tried again.
-        card.CanUse = (!selected || failed) && !IsMigratingModelStorage;
+        card.CanUse = available && (!selected || failed) && !IsMigratingModelStorage;
         card.UseText = selected
             ? failed ? Loc.Instance["Dictation.ModelCardRetry"] : Loc.Instance["Dictation.ModelCardInUse"]
             : Loc.Instance["Dictation.ModelCardUse"];
-        card.ShowRemove = downloaded && !busy;
-        card.CanRemove = !anyBusy && !IsMigratingModelStorage;
+        card.ShowRemove = (downloaded || card.HasLink) && !busy;
+        card.CanRemove = !anyBusy && !IsMigratingModelStorage && !HasLocalModelOperation;
+        card.CanUse &= !HasLocalModelOperation;
+        card.CanDownload &= !HasLocalModelOperation;
+        card.CanTest = available && downloaded && !anyBusy && !anyDownloading && !IsRecording
+            && !IsMigratingModelStorage && !HasLocalModelOperation && _models.SupportsRawModelTest(card.ModelId);
+        card.ShowLink = !downloaded && !busy && _models.GetTranscriptionPlugin(card.ModelId)?.ModelLinking is not null;
+        card.CanLink = card.ShowLink && available && !anyBusy && !anyDownloading && !IsRecording
+            && !IsMigratingModelStorage && !HasLocalModelOperation;
+        if (card.IsLinking)
+        {
+            card.ShowProgress = true;
+            card.IsProgressIndeterminate = true;
+        }
     }
 
     [RelayCommand]

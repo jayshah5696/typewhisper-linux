@@ -98,6 +98,63 @@ public sealed class LocalModelStorageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_TranscribeAssetsMoveButExternalSourceAndSettingsStay()
+    {
+        var source = Path.Join(_tempRoot, "transcribe-source");
+        var target = Path.Join(_tempRoot, "transcribe-target");
+        var plugin = Path.Join(source, "PluginData", "com.typewhisper.transcribe-cpp");
+        Directory.CreateDirectory(Path.Join(plugin, "models"));
+        Directory.CreateDirectory(Path.Join(plugin, "Runtimes", "cuda-0.4.1"));
+        var external = Path.Join(_tempRoot, "external.gguf");
+        await File.WriteAllTextAsync(external, "external weights");
+        var receipt = "{\"externalPath\":\"" + external + "\"}";
+        await File.WriteAllTextAsync(Path.Join(plugin, "models", "model.ready.json"), receipt);
+        await File.WriteAllTextAsync(Path.Join(plugin, "Runtimes", "cuda-0.4.1", "contract.json"), "native contract");
+        await File.WriteAllTextAsync(Path.Join(plugin, "settings.json"), "selected model");
+        var sentinel = Path.Join(plugin, "models", "model.gguf.lock");
+        await File.WriteAllTextAsync(sentinel, "");
+        var targetSentinel = Path.Join(target, "PluginData", "com.typewhisper.transcribe-cpp", "models", "model.gguf.lock");
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        settings.SettingsChanged += _ =>
+        {
+            Assert.Throws<IOException>(() => { using var locked = new FileStream(sentinel, FileMode.Open, FileAccess.ReadWrite, FileShare.None); });
+            Assert.Throws<IOException>(() => { using var locked = new FileStream(targetSentinel, FileMode.Open, FileAccess.ReadWrite, FileShare.None); });
+        };
+        var service = new LocalModelStorageService(settings);
+
+        await service.MoveDownloadsAndUsePathAsync(target);
+
+        var moved = Path.Join(target, "PluginData", "com.typewhisper.transcribe-cpp");
+        Assert.Equal(receipt, await File.ReadAllTextAsync(Path.Join(moved, "models", "model.ready.json")));
+        Assert.Equal("native contract", await File.ReadAllTextAsync(Path.Join(moved, "Runtimes", "cuda-0.4.1", "contract.json")));
+        Assert.Equal("external weights", await File.ReadAllTextAsync(external));
+        Assert.Equal("selected model", await File.ReadAllTextAsync(Path.Join(plugin, "settings.json")));
+        Assert.False(File.Exists(Path.Join(plugin, "models", "model.ready.json")));
+        Assert.True(File.Exists(sentinel)); // Stable lock inodes must never be unlinked, even by migration.
+        using var releasedSource = new FileStream(sentinel, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var releasedTarget = new FileStream(targetSentinel, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    [Fact]
+    public async Task MoveDownloadsAndUsePathAsync_ForeignTranscribeLeaseKeepsSourceAndSettingIntact()
+    {
+        var source = Path.Join(_tempRoot, "leased-source");
+        var target = Path.Join(_tempRoot, "leased-target");
+        var models = Path.Join(source, "PluginData", "com.typewhisper.transcribe-cpp", "models");
+        Directory.CreateDirectory(models);
+        var weights = Path.Join(models, "model.gguf");
+        await File.WriteAllTextAsync(weights, "verified weights");
+        var sentinel = weights + ".lock";
+        using var lease = new FileStream(sentinel, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var settings = new FakeSettingsService(new AppSettings { LocalModelStoragePath = source });
+        var service = new LocalModelStorageService(settings);
+        await Assert.ThrowsAsync<IOException>(() => service.MoveDownloadsAndUsePathAsync(target));
+        Assert.Equal(source, settings.Current.LocalModelStoragePath);
+        Assert.Equal("verified weights", await File.ReadAllTextAsync(weights));
+        Assert.True(File.Exists(sentinel));
+    }
+
+    [Fact]
     public async Task MoveDownloadsAndUsePathAsync_SaveFails_LeavesSourceIntact()
     {
         var source = Path.Join(_tempRoot, "source-save-failure");

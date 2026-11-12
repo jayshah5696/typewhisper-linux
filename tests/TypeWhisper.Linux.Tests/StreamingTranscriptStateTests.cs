@@ -197,6 +197,64 @@ public sealed class LinuxStreamingTranscriptStateTests
         Assert.Equal("hello world how are you", sut.StopSession());
     }
 
+    [Fact]
+    public void TryApplyStreaming_ReplacesEarlierHypothesisInsteadOfStabilizingItsPrefix()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+        Assert.True(sut.TryApplyStreaming(session, "He bent his waist.", text => text, out _));
+
+        Assert.True(sut.TryApplyStreaming(session, "He bent his face over her hair.", text => text, out var display));
+
+        Assert.Equal("He bent his face over her hair.", display);
+        Assert.Equal(display, sut.StopSession());
+    }
+
+    [Fact]
+    public void TryApplyStreaming_EmptySnapshotClearsRetractedPreview()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+        sut.TryApplyStreaming(session, "incorrect silence hypothesis", text => text, out _);
+
+        Assert.True(sut.TryApplyStreaming(session, "", text => text, out var display));
+
+        Assert.Equal("", display);
+        Assert.Equal("", sut.StopSession());
+    }
+
+    [Fact]
+    public void TryApplyStreaming_CorrectsWithoutMergingAndRejectsOldSession()
+    {
+        var sut = new StreamingTranscriptState();
+        var previous = sut.StartSession();
+        var current = sut.StartSession();
+        Assert.False(sut.TryApplyStreaming(previous, "stale", text => text, out _));
+        Assert.True(sut.TryApplyStreaming(current, "teh face", text => text.Replace("teh", "the"), out var display));
+        Assert.Equal("the face", display);
+        Assert.Equal(display, sut.StopSession());
+    }
+
+    [Fact]
+    public async Task TryApplyStreaming_ConcurrentOlderCorrectionCannotReplaceNewerSnapshot()
+    {
+        var sut = new StreamingTranscriptState();
+        var session = sut.StartSession();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var older = Task.Run(() => sut.TryApplyStreaming(session, "old hypothesis", text =>
+        {
+            entered.SetResult();
+            release.Task.Wait(s_testTimeout);
+            return text;
+        }, out _));
+        await entered.Task.WaitAsync(s_testTimeout);
+        Assert.True(sut.TryApplyStreaming(session, "new authoritative hypothesis", text => text, out _));
+        release.SetResult();
+        Assert.False(await older.WaitAsync(s_testTimeout));
+        Assert.Equal("new authoritative hypothesis", sut.StopSession());
+    }
+
     private static void SetPrivateField(StreamingTranscriptState target, string name, string value)
     {
         var field =

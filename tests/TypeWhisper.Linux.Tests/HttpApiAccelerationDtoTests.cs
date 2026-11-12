@@ -107,6 +107,63 @@ public class HttpApiAccelerationDtoTests
         Assert.True(json.GetProperty("requiresRestart").GetBoolean());
     }
 
+    [Fact]
+    public void BuildAccelerationDto_Unloaded_DoesNotReportAnActiveBackendOrDevice()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Not loaded")
+            {
+                IsModelLoaded = false,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Vulkan, "pci:old", "Old GPU", TranscriptionDeviceKind.IntegratedGpu),
+            },
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, AppSettings.Default));
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("activeBackend").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("activeDevice").ValueKind);
+        Assert.False(json.GetProperty("isModelLoaded").GetBoolean());
+    }
+
+    [Fact]
+    public void BuildAccelerationDto_Loaded_ReportsExactDeviceAndFallbackReasonSeparately()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Cpu, "Using CPU")
+            {
+                IsModelLoaded = true,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+                FallbackReason = "Vulkan allocation failed",
+            },
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, AppSettings.Default));
+        Assert.Equal("auto", json.GetProperty("preference").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeBackend").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeDevice").GetProperty("stableId").GetString());
+        Assert.Equal("cpu", json.GetProperty("activeDevice").GetProperty("backend").GetString());
+        Assert.Equal("Vulkan allocation failed", json.GetProperty("fallbackReason").GetString());
+    }
+
+    [Fact]
+    public void BuildAccelerationDto_ManualRequestRemainsSeparateFromConfirmedDevice()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan")
+            {
+                IsModelLoaded = true,
+                ActiveDevice = new(TranscriptionAccelerationBackend.Vulkan, "pci:old", "Old GPU", TranscriptionDeviceKind.IntegratedGpu),
+            },
+        };
+        var settings = (AppSettings.Default with { LocalModelAcceleration = "vulkan" })
+            .WithLocalModelDevice("fake", "vulkan", "pci:requested");
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, settings));
+        Assert.Equal("pci:requested", json.GetProperty("requestedDeviceStableId").GetString());
+        Assert.Equal("pci:old", json.GetProperty("activeDevice").GetProperty("stableId").GetString());
+        var auto = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin, settings with { LocalModelAcceleration = "auto" }));
+        Assert.Equal(JsonValueKind.Null, auto.GetProperty("requestedDeviceStableId").ValueKind);
+    }
+
     private sealed class FakeAccelerationPlugin : ITranscriptionEnginePlugin
     {
         public string PluginId => "fake";

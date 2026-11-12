@@ -18,6 +18,12 @@ Providers defined in [[plugin-system#ASR and Transcription Providers]] process t
 - Local offline engines (such as Needle Whistle or Sherpa-ONNX) perform immediate on-device inference without external network calls.
 - Cloud providers (such as Deepgram, AssemblyAI, or Gladia) stream or upload audio over authenticated HTTPS endpoints.
 
+## Streaming preview snapshots
+
+Streaming previews replace the previous hypothesis. Polling previews retain their separate stabilization policy.
+
+[[src/TypeWhisper.Linux/Services/StreamingTranscriptionCoordinator.cs|The coordinator]] joins completed segments with the current hypothesis. [[src/TypeWhisper.Linux/Services/StreamingTranscriptState.cs|The transcript state]] accepts that complete snapshot without splicing an obsolete prefix into a correction. Empty snapshots clear a retracted preview. Session versions and commit revisions reject stale correction work in both modes. [[tests/TypeWhisper.Linux.Tests/StreamingTranscriptStateTests.cs|Focused tests]] cover corrections, retractions and concurrent callbacks.
+
 ## Speculative and Final Cleanup
 
 Live text refinement runs speculatively during speech, while final cleanup applies authoritative prompt templates and LLM formatting on dictation end.

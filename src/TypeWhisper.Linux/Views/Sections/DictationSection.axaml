@@ -132,7 +132,7 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
                             <Button Grid.Column="2"
-                                    Content="{loc:Str Dictation.DeleteModelFiles}"
+                                    Content="{Binding SelectedModelRemoveText}"
                                     IsEnabled="{Binding CanDeleteSelectedModel}"
                                     Click="OnDeleteSelectedModel" />
                         </Grid>
@@ -222,6 +222,10 @@
                                     Content="{Binding DownloadCudaRuntimeText}"
                                     Command="{Binding DownloadCudaRuntimeCommand}"
                                     IsVisible="{Binding ShowDownloadCudaRuntimeAction}" />
+                            <Button Classes="small-action"
+                                    Content="{loc:Str Common.Cancel}"
+                                    Command="{Binding CancelCudaRuntimeDownloadCommand}"
+                                    IsVisible="{Binding IsDownloadingCudaRuntime}" />
                             <Button Grid.Column="2"
                                     Content="{Binding ClearGpuRuntimeText}"
                                     Command="{Binding ClearGpuRuntimeCommand}"
@@ -234,6 +238,30 @@
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
+                            <StackPanel Spacing="8" IsVisible="{Binding ShowLocalModelDevices}">
+                                <TextBlock Text="{loc:Str Dictation.HardwareDevice}" Classes="row-label" />
+                                <ComboBox AutomationProperties.Name="{loc:Str Dictation.HardwareDevice}"
+                                          ItemsSource="{Binding LocalModelDeviceOptions}"
+                                          SelectedItem="{Binding SelectedLocalModelDevice}"
+                                          IsEnabled="{Binding CanSelectLocalModelDevice}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:LocalModelDeviceOption">
+                                            <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                                    <Button Content="{loc:Str Dictation.HardwareRefresh}"
+                                            Command="{Binding RefreshLocalModelDevicesCommand}"
+                                            IsEnabled="{Binding !IsDiscoveringLocalModelDevices}" />
+                                    <Button Content="{loc:Str Dictation.HardwareRetryCpu}"
+                                            Command="{Binding RetryLocalModelOnCpuCommand}"
+                                            IsEnabled="{Binding CanRetryLocalModelOnCpu}" />
+                                </WrapPanel>
+                                <TextBlock Text="{Binding LocalModelDeviceDiscoveryText}" FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
                             <TextBlock Text="{Binding AccelerationStatusText}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TwTextSecondaryBrush}"
@@ -263,6 +291,37 @@
                            FontSize="12"
                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                            TextWrapping="Wrap" />
+                <TextBox Text="{Binding LocalModelSearch}"
+                         PlaceholderText="{loc:Str Dictation.ModelSearch}"
+                         AutomationProperties.Name="{loc:Str Dictation.ModelSearch}" />
+                <WrapPanel ItemSpacing="12" LineSpacing="6">
+                    <CheckBox Content="{loc:Str Dictation.ModelFilterLive}"
+                              IsChecked="{Binding LivePreviewModelsOnly}" />
+                    <Button Content="{loc:Str Dictation.ModelFilterClear}"
+                            Command="{Binding ClearLocalModelFiltersCommand}"
+                            IsVisible="{Binding HasLocalModelFilters}" />
+                </WrapPanel>
+                <Expander Header="{loc:Str Dictation.ModelFilterLanguages}"
+                          HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{loc:Str Dictation.ModelFilterLanguagesHelp}" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding LocalModelLanguageFilters}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel ItemSpacing="12" LineSpacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LocalModelLanguageFilter">
+                                    <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Expander>
+                <TextBlock Text="{Binding LocalModelResultsText}" FontSize="12" TextWrapping="Wrap" />
+                <TextBlock Text="{loc:Str Dictation.ModelSizeHelp}" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}" />
                 <ItemsControl ItemsSource="{Binding LocalModelCards}">
                     <!-- Hide the item container, not the card, so unlisted cards leave no spacing. A container
                          theme, unlike a style, doesn't also match the presenters inside the buttons. -->
@@ -303,6 +362,19 @@
                                                        Classes.failed="{Binding IsFailed}" />
                                         </Border>
                                     </Grid>
+                                    <TextBlock Text="{Binding CapabilityText}" FontSize="12" TextWrapping="Wrap" />
+                                    <Expander Header="{loc:Str Dictation.ModelDetails}" HorizontalAlignment="Stretch">
+                                        <StackPanel Spacing="6">
+                                            <SelectableTextBlock Text="{Binding LanguagesText}" FontSize="12" TextWrapping="Wrap" />
+                                            <SelectableTextBlock Text="{Binding LicenseText}" FontSize="12" TextWrapping="Wrap" />
+                                            <SelectableTextBlock Text="{Binding LicenseUrl}" FontSize="12" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding LicenseUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock Text="{loc:Str Dictation.ModelReferenceHelp}" FontSize="12" TextWrapping="Wrap"
+                                                       IsVisible="{Binding HasReferenceBenchmarks}" />
+                                            <SelectableTextBlock Text="{Binding ReferenceBenchmarkText}" FontSize="12" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding HasReferenceBenchmarks}" />
+                                        </StackPanel>
+                                    </Expander>
                                     <TextBlock Text="{Binding StateText}"
                                                FontSize="12"
                                                Foreground="{DynamicResource TwTextSecondaryBrush}"
@@ -339,7 +411,23 @@
                                                 CommandParameter="{Binding}"
                                                 IsVisible="{Binding ShowUse}"
                                                 IsEnabled="{Binding CanUse}" />
-                                        <Button Content="{loc:Str Dictation.ModelCardRemove}"
+                                        <Button Content="{loc:Str Dictation.ModelTest}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).TestLocalModelCommand}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding ShowUse}"
+                                                IsEnabled="{Binding CanTest}"
+                                                ToolTip.Tip="{loc:Str Dictation.ModelTestHelp}" />
+                                        <Button Content="{loc:Str Common.Cancel}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).CancelLocalModelTestCommand}"
+                                                IsVisible="{Binding IsTesting}" />
+                                        <Button Content="{loc:Str Dictation.ModelLink}"
+                                                Click="OnLinkLocalModel"
+                                                IsVisible="{Binding ShowLink}" IsEnabled="{Binding CanLink}"
+                                                ToolTip.Tip="{loc:Str Dictation.ModelLinkHelp}" />
+                                        <Button Content="{loc:Str Common.Cancel}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).CancelLocalModelLinkCommand}"
+                                                IsVisible="{Binding IsLinking}" />
+                                        <Button Content="{Binding RemoveText}"
                                                 Click="OnRemoveLocalModel"
                                                 IsVisible="{Binding ShowRemove}"
                                                 IsEnabled="{Binding CanRemove}" />
@@ -349,6 +437,13 @@
                                                 CommandParameter="{Binding}"
                                                 IsVisible="{Binding ShowCancel}" />
                                     </WrapPanel>
+                                    <TextBlock Text="{Binding LinkStatusText}" TextWrapping="Wrap" FontSize="12" />
+                                    <SelectableTextBlock Text="{Binding LinkedSourceText}" TextWrapping="Wrap"
+                                                         FontSize="12" IsVisible="{Binding HasLink}" />
+                                    <TextBlock Text="{Binding TestStatusText}" TextWrapping="Wrap" FontSize="12" />
+                                    <SelectableTextBlock Text="{Binding TestTranscript}" TextWrapping="Wrap"
+                                                         IsVisible="{Binding HasTestTranscript}"
+                                                         AutomationProperties.Name="{loc:Str Dictation.ModelTestTranscript}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

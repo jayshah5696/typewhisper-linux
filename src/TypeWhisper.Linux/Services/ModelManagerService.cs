@@ -21,13 +21,14 @@ public enum ModelUnloadOutcome { Unloaded, NothingLoaded, OtherEngine, Busy, Fai
 public sealed class ModelDownloadCanceledException(Exception? innerException)
     : OperationCanceledException("The model download was canceled.", innerException);
 
-public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
+public sealed partial class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
     private readonly ConcurrentDictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
+    private string? _activeModelDeviceId;
     private string? _activeModelId;
     // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
     // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
@@ -522,6 +523,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         bool begun;
         lock (_fileOperationGate)
         {
+            if (_exclusiveAssetOperation)
+                throw new InvalidOperationException("Model assets are changing. Wait for the current operation to finish.");
             begun = _fileOperations.TryAdd(modelId, operation);
             running = begun ? Task.FromResult(ModelFileOperationOutcome.Ended) : _fileOperations[modelId].Completion;
         }
@@ -861,20 +864,28 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// <summary>
     ///     Deletes every on-demand-provisioning engine's cached CUDA runtime (the shared
     ///     CUDA math libraries plus each engine's own GPU build) so a corrupt cache can
-    ///     be recovered: the next process start re-provisions from scratch. The active
-    ///     model is unloaded first so no <c>.so</c> is in use. Every engine is attempted
+    ///     be recovered. Worker providers require explicit preparation again; legacy providers
+    ///     may prepare on a later load. The active model is unloaded first. Every engine is attempted
     ///     (one failing doesn't stop the others), but if any clear fails the collected
     ///     failures are thrown as an aggregate — so a corrupt runtime is never reported to
     ///     the user as repaired when it is still on disk. Note: libraries already loaded
-    ///     this session are held until exit, so a restart is required for the fresh
-    ///     re-download to take effect.
+    ///     in a legacy host process are held until exit, so those engines need a restart.
     /// </summary>
     public async Task ClearCudaRuntimeCacheAsync(CancellationToken cancellationToken = default)
     {
         await _modelLock.WaitAsync(cancellationToken);
+        var claimed = false;
         try
         {
+            lock (_fileOperationGate)
+            {
+                if (_exclusiveAssetOperation || _fileOperations.Count != 0)
+                    throw new InvalidOperationException("Model or runtime files are in use. Finish the current operation before clearing CUDA.");
+                _exclusiveAssetOperation = claimed = true;
+            }
             await UnloadModelCoreAsync();
+            if (ActiveModelId is not null)
+                throw new InvalidOperationException("The model could not unload. CUDA files were not removed.");
 
             var failures = new List<string>();
             foreach (
@@ -915,6 +926,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
+            if (claimed)
+            {
+                lock (_fileOperationGate) { _exclusiveAssetOperation = false; }
+            }
             _modelLock.Release();
         }
     }
@@ -1242,9 +1257,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
-            var requestedPreference = GetAccelerationPreference(
-                _settings.Current.LocalModelAcceleration
-            );
+            var hardwareSettings = _settings.Current;
+            var requestedPreference = GetAccelerationPreference(hardwareSettings.LocalModelAcceleration);
+            var requestedDeviceId = plugin.HardwareSelection is null ? null
+                : hardwareSettings.GetLocalModelDevice(pluginId, hardwareSettings.LocalModelAcceleration);
             var pluginSupportsCuda = plugin.SupportedAccelerationBackends.Contains(
                 TranscriptionAccelerationBackend.NvidiaCuda
             );
@@ -1255,7 +1271,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             // Always resolve Auto → Cpu locally so plugins never receive the unresolved
             // Auto sentinel (SDK contract).
             TranscriptionAccelerationPreference resolvedPreference;
-            if (pluginSupportsCuda)
+            TranscriptionHardwareRequest? hardwareRequest = null;
+            if (plugin.HardwareSelection is not null)
+            {
+                hardwareRequest = await ResolveHardwareRequestAsync(plugin, pluginModelId,
+                    requestedPreference, requestedDeviceId, cancellationToken);
+                resolvedPreference = TranscriptionHardwareSelector.ToPreference(hardwareRequest.Device.Backend);
+            }
+            else if (pluginSupportsCuda)
             {
                 resolvedPreference = ResolveAutoPreference(
                     requestedPreference,
@@ -1271,7 +1294,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             if (
-                pluginSupportsCuda
+                hardwareRequest is null
+                && pluginSupportsCuda
                 && resolvedPreference == TranscriptionAccelerationPreference.NvidiaCuda
             )
             {
@@ -1304,7 +1328,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 }
             }
 
+            if (hardwareRequest is not null)
+            {
+                // Configuring can replace the live worker before loading succeeds. The old
+                // cache must not later claim that this discarded execution is reusable.
+                _activeModelAccelerationPreference = null;
+                _activeModelDeviceId = null;
+            }
+
             plugin.SetAccelerationPreference(resolvedPreference);
+            if (hardwareRequest is not null)
+            {
+                plugin.HardwareSelection!.ConfigureHardware(hardwareRequest);
+            }
 
             if (plugin.SupportsModelDownload)
             {
@@ -1329,6 +1365,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
+            _activeModelDeviceId = requestedDeviceId;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1377,6 +1414,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         ClearStatus(modelId);
         ActiveModelId = null;
         _activeModelAccelerationPreference = null;
+        _activeModelDeviceId = null;
     }
 
     /// <summary>
@@ -1466,6 +1504,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
             ActiveModelId = null;
             _activeModelAccelerationPreference = null;
+            _activeModelDeviceId = null;
         }
 
         if (IsPluginModel(modelId))
@@ -1495,13 +1534,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return false;
         }
 
-        var targetPreference = GetAccelerationPreference(
-            _settings.Current.LocalModelAcceleration
-        );
+        var hardwareSettings = _settings.Current;
+        var targetPreference = GetAccelerationPreference(hardwareSettings.LocalModelAcceleration);
+        var targetPlugin = GetTranscriptionPlugin(targetModelId);
+        var targetDeviceId = targetPlugin?.HardwareSelection is null ? null
+            : hardwareSettings.GetLocalModelDevice(targetPlugin.GetTranscriptionSelectionId(), hardwareSettings.LocalModelAcceleration);
 
         if (
             ActiveModelId == targetModelId
             && _activeModelAccelerationPreference == targetPreference
+            && _activeModelDeviceId == targetDeviceId
         )
         {
             CancelAutoUnload();

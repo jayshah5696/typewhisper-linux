@@ -150,6 +150,356 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
         }
     }
 
+    private async Task<IsolatedTranscriptionEngine> HardwareEngineAsync(TranscriptionWorkerLaunch? launch = null)
+    {
+        _inner.EnableHardwareSelection = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-hardware": "enabled" }""");
+        return Engine(launch);
+    }
+
+    private static void ConfigureGpu(IsolatedTranscriptionEngine engine, TranscriptionAccelerationPreference requested)
+    {
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        Assert.IsAssignableFrom<ITranscriptionHardwareSelection>(engine.HardwareSelection).ConfigureHardware(
+            new TranscriptionHardwareRequest(requested,
+                new TranscriptionDevice(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0",
+                    "GPU", TranscriptionDeviceKind.DiscreteGpu)));
+    }
+
+    [Fact]
+    public async Task RawModelTestUsesDisposableExecutionWithoutChangingTheLiveModelOrSettings()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var livePid = engine.WorkerProcessId;
+        var before = await File.ReadAllBytesAsync(SettingsPath);
+        var request = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Cpu,
+            TranscriptionHardwareSelector.CpuDevice);
+
+        var result = await engine.TestModelAsync("large", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, request, CancellationToken.None);
+
+        var fields = Fields(result.Transcription);
+        var testPid = int.Parse(fields["pid"], CultureInfo.InvariantCulture);
+        Assert.Equal("large", fields["model"]);
+        Assert.Equal("large", fields["selected"]);
+        Assert.Equal("False", fields["translate"]);
+        Assert.Equal("", fields["prompt"]);
+        Assert.Equal("cpu", result.Acceleration.ActiveDevice?.StableId);
+        Assert.False(IsRunning(testPid));
+        Assert.Equal(livePid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.NvidiaCuda, engine.AccelerationPreference);
+        Assert.Equal(before, await File.ReadAllBytesAsync(SettingsPath));
+        Assert.Equal("small", Fields(await engine.TranscribeAsync(s_audio, "en", false, null, CancellationToken.None))["model"]);
+    }
+
+    [Fact]
+    public async Task RawModelTestReusesSameLoadedModelWithoutTakingASecondFileLease()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        var hardware = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Auto,
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0", "Same GPU", TranscriptionDeviceKind.DiscreteGpu));
+        var result = await engine.TestModelAsync("small", s_audio, "en",
+            TranscriptionAccelerationPreference.NvidiaCuda, hardware, CancellationToken.None);
+        Assert.Equal(pid, int.Parse(Fields(result.Transcription)["pid"], CultureInfo.InvariantCulture));
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.TestModelAsync("small", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, new(TranscriptionAccelerationPreference.Cpu,
+                TranscriptionHardwareSelector.CpuDevice), CancellationToken.None));
+        Assert.Equal(pid, engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task RawModelTestAutoFallbackIsReportedWithoutChangingTheLiveGpu()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        var request = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Auto,
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "pci:0000:01:00.0", "GPU", TranscriptionDeviceKind.DiscreteGpu));
+        var result = await engine.TestModelAsync("large", s_audio, "fail-on-gpu",
+            TranscriptionAccelerationPreference.NvidiaCuda, request, CancellationToken.None);
+        Assert.Equal("cpu", result.Acceleration.ActiveDevice?.StableId);
+        Assert.NotNull(result.Acceleration.FallbackReason);
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Equal(TranscriptionAccelerationBackend.NvidiaCuda, engine.AccelerationStatus.ActiveBackend);
+    }
+
+    [Fact]
+    public async Task RawModelTestFailureAndCancellationLeaveLiveExecutionUsable()
+    {
+        var engine = Engine();
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<FileNotFoundException>(() => engine.TestModelAsync("broken", s_audio, "en",
+            TranscriptionAccelerationPreference.Cpu, null, CancellationToken.None));
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.TestModelAsync("large", s_audio, "slow",
+            TranscriptionAccelerationPreference.Cpu, null, cancel.Token));
+        Assert.Equal(pid, engine.WorkerProcessId);
+        Assert.Equal("small", engine.SelectedModelId);
+        Assert.Equal("small", Fields(await engine.TranscribeAsync(s_audio, "en", false, null, CancellationToken.None))["model"]);
+    }
+
+    [Fact]
+    public async Task HardwareDiscoveryUsesADisposableWorkerWithoutReplacingTheLoadedWorker()
+    {
+        var engine = await HardwareEngineAsync();
+        var hardware = Assert.IsAssignableFrom<ITranscriptionHardwareSelection>(engine.HardwareSelection);
+        var devices = await hardware.DiscoverDevicesAsync("small", CancellationToken.None);
+        var device = Assert.Single(devices, item => item.Backend == TranscriptionAccelerationBackend.NvidiaCuda);
+        var discoveryPid = int.Parse(device.DisplayName["GPU in ".Length..], CultureInfo.InvariantCulture);
+        Assert.NotEqual(Environment.ProcessId, discoveryPid);
+        Assert.False(IsRunning(discoveryPid));
+        Assert.Null(engine.WorkerProcessId);
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+        var workerPid = engine.WorkerProcessId;
+        Assert.Equal("Auto", Fields(result)["requested"]);
+        Assert.Equal("pci:0000:01:00.0", Fields(result)["device"]);
+        await hardware.DiscoverDevicesAsync("small", CancellationToken.None);
+        Assert.Equal(workerPid, engine.WorkerProcessId);
+        Assert.True(engine.AccelerationStatus.IsModelLoaded);
+    }
+
+    [Theory]
+    [InlineData("crash-on-gpu")]
+    [InlineData("fail-on-gpu")]
+    public async Task HardwareAutoRetriesRetainedAudioOnceOnCpuInAFreshWorker(string failure)
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var gpuPid = engine.WorkerProcessId!.Value;
+
+        var result = await engine.TranscribeAsync(s_audio, failure, false, "keep prompt", CancellationToken.None);
+
+        Assert.Equal("Cpu", Fields(result)["preference"]);
+        Assert.Equal("Auto", Fields(result)["requested"]);
+        Assert.Equal("cpu", Fields(result)["device"]);
+        Assert.Equal("4", Fields(result)["length"]);
+        Assert.Equal("keep prompt", Fields(result)["prompt"]);
+        Assert.NotEqual(gpuPid, engine.WorkerProcessId);
+        Assert.False(IsRunning(gpuPid));
+        Assert.True(engine.UsesCpuFallback);
+        Assert.True(engine.AccelerationStatus.IsModelLoaded);
+        Assert.Equal("cpu", engine.AccelerationStatus.ActiveDevice?.StableId);
+        Assert.NotNull(engine.AccelerationStatus.FallbackReason);
+        Assert.Single(Logs(), line => line.Contains("retrying once on CPU", StringComparison.Ordinal));
+
+        await engine.UnloadModelAsync();
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+        Assert.Null(engine.AccelerationStatus.ActiveDevice);
+    }
+
+    [Fact]
+    public async Task HardwareAutoRetriesGpuLoadErrorOnCpuButKeepsTheCause()
+    {
+        var engine = await HardwareEngineAsync();
+        await File.WriteAllTextAsync(SettingsPath,
+            """{ "probe-hardware": "enabled", "probe-gpu-load-error": "enabled" }""");
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+
+        await engine.LoadModelAsync("small", CancellationToken.None);
+
+        Assert.True(engine.AccelerationStatus.IsModelLoaded);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, engine.AccelerationStatus.ActiveBackend);
+        Assert.Contains("out of memory", engine.AccelerationStatus.FallbackReason, StringComparison.Ordinal);
+        Assert.Equal(TranscriptionAccelerationPreference.NvidiaCuda, engine.AccelerationPreference);
+    }
+
+    [Theory]
+    [InlineData("crash-on-gpu")]
+    [InlineData("fail-on-gpu")]
+    public async Task HardwareExplicitGpuNeverSilentlyRetriesOnCpu(string failure)
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.NvidiaCuda);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var gpuPid = engine.WorkerProcessId!.Value;
+
+        var error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            engine.TranscribeAsync(s_audio, failure, false, null, CancellationToken.None));
+
+        Assert.Contains("CPU", error.Message, StringComparison.Ordinal);
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Null(engine.WorkerProcessId);
+        Assert.False(IsRunning(gpuPid));
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+        Assert.Null(engine.AccelerationStatus.ActiveDevice);
+        Assert.DoesNotContain(Logs(), line => line.Contains("retrying once on CPU", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HardwareAutoDoesNotRetryCallerCancellationOrUnsupportedRequests()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var gpuPid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            engine.TranscribeAsync(s_audio, "fail", false, null, CancellationToken.None));
+        using var canceled = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            engine.TranscribeAsync(s_audio, "slow", false, null, canceled.Token));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Equal(gpuPid, engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task HardwareAutoStopsAfterOneFailedCpuRetry()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
+            engine.TranscribeAsync(s_audio, "crash", false, null, CancellationToken.None));
+        var attempts = await File.ReadAllLinesAsync(Path.Join(PluginDataRoot, WorkerProbePlugin.Id, "hardware-attempts"));
+        Assert.Equal(2, attempts.Length);
+        Assert.EndsWith(";NvidiaCuda;4", attempts[0], StringComparison.Ordinal);
+        Assert.EndsWith(";Cpu;4", attempts[1], StringComparison.Ordinal);
+        Assert.NotEqual(attempts[0].Split(';')[0], attempts[1].Split(';')[0]);
+        Assert.Null(engine.WorkerProcessId);
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+        Assert.NotNull(engine.AccelerationStatus.FallbackReason);
+    }
+
+    [Fact]
+    public async Task HardwareExplicitCpuDoesNotRetryACrash()
+    {
+        var engine = await HardwareEngineAsync();
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        engine.HardwareSelection!.ConfigureHardware(new TranscriptionHardwareRequest(
+            TranscriptionAccelerationPreference.Cpu, TranscriptionHardwareSelector.CpuDevice));
+        await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
+            engine.TranscribeAsync(s_audio, "crash", false, null, CancellationToken.None));
+        var attempts = await File.ReadAllLinesAsync(Path.Join(PluginDataRoot, WorkerProbePlugin.Id, "hardware-attempts"));
+        Assert.EndsWith(";Cpu;4", Assert.Single(attempts), StringComparison.Ordinal);
+        Assert.False(engine.UsesCpuFallback);
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+    }
+
+    [Fact]
+    public async Task HardwareAutoDoesNotRetryMissingWeights()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await Assert.ThrowsAsync<FileNotFoundException>(() => engine.LoadModelAsync("broken", CancellationToken.None));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Null(engine.AccelerationStatus.FallbackReason);
+    }
+
+    [Fact]
+    public async Task HardwareChoiceReconfigurationClearsFallbackAndRestartsTheWorker()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.TranscribeAsync(s_audio, "fail-on-gpu", false, null, CancellationToken.None);
+        var cpuPid = engine.WorkerProcessId!.Value;
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.NvidiaCuda);
+        Assert.False(engine.AccelerationStatus.IsModelLoaded);
+        Assert.Null(engine.AccelerationStatus.FallbackReason);
+        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+        Assert.Equal("NvidiaCuda", Fields(result)["preference"]);
+        Assert.Equal("NvidiaCuda", Fields(result)["requested"]);
+        Assert.False(engine.UsesCpuFallback);
+        Assert.NotEqual(cpuPid, engine.WorkerProcessId);
+        Assert.False(IsRunning(cpuPid));
+    }
+
+    [Fact]
+    public async Task HardwareDiscoveryCancellationLeavesLoadedWorkerUsable()
+    {
+        var engine = await HardwareEngineAsync();
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var gpuPid = engine.WorkerProcessId;
+        using var canceled = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        var hardware = Assert.IsAssignableFrom<ITranscriptionHardwareSelection>(engine.HardwareSelection);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            hardware.DiscoverDevicesAsync("slow-discovery", canceled.Token));
+        Assert.Equal(gpuPid, engine.WorkerProcessId);
+        Assert.False(engine.UsesCpuFallback);
+        await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task HardwareDiscoveryTimeoutDoesNotBecomeCallerCancellationOrFallback()
+    {
+        var engine = await HardwareEngineAsync(Launch() with { RequestTimeout = TimeSpan.FromMilliseconds(500) });
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var gpuPid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<TranscriptionWorkerRequestTimeoutException>(() =>
+            engine.HardwareSelection!.DiscoverDevicesAsync("slow-discovery", CancellationToken.None));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Equal(gpuPid, engine.WorkerProcessId);
+        await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task HardwareConfigurationRejectsWorkersWithoutTheNegotiatedCapability()
+    {
+        var engine = await HardwareEngineAsync(Launch(FakeWorker("answer")));
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => engine.LoadModelAsync("small", CancellationToken.None));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task HardwareWorkerRejectsLoadingAfterDiscoveryAndRepeatedConfiguration()
+    {
+        await HardwareEngineAsync();
+        var hardware = new TranscriptionHardwareRequest(TranscriptionAccelerationPreference.Cpu,
+            TranscriptionHardwareSelector.CpuDevice);
+        await using var probe = await TranscriptionWorkerProcess.StartAsync(_runner, Launch(),
+            TranscriptionAccelerationPreference.Cpu, null, Log, CancellationToken.None);
+        Assert.Contains(TranscriptionWorkerCapabilities.HardwareSelection, probe.Capabilities);
+        var discovered = await probe.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = TranscriptionWorkerCommands.DiscoverDevices, ModelId = "small",
+        }, default, CancellationToken.None);
+        Assert.NotEmpty(discovered.Devices!);
+        var configureAfterDiscovery = await probe.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = TranscriptionWorkerCommands.ConfigureHardware, HardwareRequest = hardware,
+        }, default, CancellationToken.None);
+        Assert.NotNull(configureAfterDiscovery.Error);
+        var loadAfterDiscovery = await probe.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = TranscriptionWorkerCommands.Load, ModelId = "small",
+        }, default, CancellationToken.None);
+        Assert.NotNull(loadAfterDiscovery.Error);
+        Assert.Null(loadAfterDiscovery.State?.LoadedModelId);
+
+        await using var worker = await TranscriptionWorkerProcess.StartAsync(_runner, Launch(),
+            TranscriptionAccelerationPreference.Cpu, null, Log, CancellationToken.None);
+        var request = new TranscriptionWorkerMessage
+        {
+            Command = TranscriptionWorkerCommands.ConfigureHardware, HardwareRequest = hardware,
+        };
+        Assert.Null((await worker.SendAsync(request, default, CancellationToken.None)).Error);
+        Assert.NotNull((await worker.SendAsync(request, default, CancellationToken.None)).Error);
+    }
+
+    [Fact]
+    public void LegacyProvidersDoNotExposeTheNewHardwareCapability()
+    {
+        Assert.Null(Engine().HardwareSelection);
+    }
+
     [Fact]
     public async Task TranscribesInAWorkerWithTheHostSelectionAndFullResult()
     {
@@ -883,14 +1233,184 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
         Assert.True(launch.TimeoutFor(transcribe, TranscriptionWorkerProtocol.MaximumAudioBytes) > TimeSpan.FromHours(90));
     }
 
-    [Fact]
-    public void StreamingEnginesStayInProcess()
+    private async Task<IsolatedTranscriptionEngine> StreamingEngineAsync(TranscriptionWorkerLaunch? launch = null)
     {
-        var streaming = new Moq.Mock<ITranscriptionEngineRole>();
-        streaming.SetupGet(engine => engine.SupportsStreaming).Returns(true);
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled" }""");
+        return Engine(launch);
+    }
 
-        Assert.Throws<ArgumentException>(() =>
-            IsolatedTranscriptionEngine.Create(streaming.Object, _runner, Launch(), Log));
+    [Fact]
+    public async Task StreamingReplacesCorrectedPreviewsAndPreservesRepeatedWordsInOneFinal()
+    {
+        ITranscriptionEngineRole engine = await StreamingEngineAsync();
+        Assert.True(engine.SupportsStreaming);
+        await using var session = await engine.StartStreamingWithLanguageHintsAndPromptAsync(["en"], "context", CancellationToken.None);
+        var events = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += events.Add;
+        await session.SendAudioAsync(s_audio, CancellationToken.None);
+        await session.SendAudioAsync(s_audio, CancellationToken.None);
+        await session.FinalizeAsync(CancellationToken.None);
+        Assert.Equal(["very bad", "very very good", "very very good"], events.Select(update => update.Text));
+        Assert.Equal([false, false, true], events.Select(update => update.IsFinal));
+        Assert.Equal("en", events[^1].DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task RealCoordinatorAssemblesOnlyTheFinalWindowAndKeepsCorrectedPreviews()
+    {
+        var engine = await StreamingEngineAsync();
+        var previews = new List<string>();
+        await using var coordinator = new StreamingTranscriptionCoordinator(engine, LanguageSelection.Explicit("en"), [],
+            1, (_, text) => previews.Add(text), error => throw new InvalidOperationException("Unexpected stream fault.", error));
+        await coordinator.StartAsync(CancellationToken.None);
+        coordinator.AcceptAudioFrame([0.1f, 0.2f], 16000);
+        coordinator.AcceptAudioFrame([0.3f, 0.4f], 16000);
+        Assert.Equal("very very good", await coordinator.FinalizeAsync(CancellationToken.None));
+        Assert.Equal(["very bad", "very very good", "very very good"], previews);
+        Assert.False(coordinator.Faulted);
+        Assert.False(coordinator.HasDroppedAudio);
+    }
+
+    [Fact]
+    public async Task SlowWorkerMakesLiveResultIneligibleAndAllowsCompleteRecordingBatchFallback()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromMilliseconds(150) });
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled", "probe-stream-behavior": "slow" }""");
+        var coordinator = new StreamingTranscriptionCoordinator(engine, LanguageSelection.Explicit("en"), [],
+            1, (_, _) => { }, _ => { }, finalizeSenderTimeout: TimeSpan.FromMilliseconds(100),
+            finalizeSessionTimeout: TimeSpan.FromMilliseconds(500));
+        await coordinator.StartAsync(CancellationToken.None);
+        coordinator.AcceptAudioFrame([0.1f, 0.2f], 16000);
+        await Assert.ThrowsAsync<TimeoutException>(() => coordinator.FinalizeAsync(CancellationToken.None));
+        await coordinator.DisposeAsync();
+        var result = await engine.TranscribeAsync(new byte[32000], "en", false, null, CancellationToken.None);
+        Assert.Equal("32000", Fields(result)["length"]);
+    }
+
+    [Fact]
+    public async Task StreamingCapabilityIsRequiredBeforeSendingAStartToAnOlderWorker()
+    {
+        var engine = await StreamingEngineAsync(Launch(FakeWorker("normal")));
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StreamingDoesNotAllowBatchOrModelReplacementUntilSessionEnds()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.LoadModelAsync("large", CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
+        await session.FinalizeAsync(CancellationToken.None);
+        await engine.LoadModelAsync("large", CancellationToken.None);
+        var pid = engine.WorkerProcessId;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Equal(pid, engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task StaleWorkerUpdatesCannotPublishAFinalOrLeaveTheWorkerReusable()
+    {
+        var engine = await StreamingEngineAsync(Launch(FakeWorker("stale-stream-update")));
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        var updates = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += updates.Add;
+        await Assert.ThrowsAsync<InvalidDataException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Empty(updates);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task StreamPayloadsAreSplitIntoBoundedOrderedRequests()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        var updates = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += updates.Add;
+        await session.SendAudioAsync(new byte[2 * TranscriptionWorkerProtocol.MaximumStreamChunkBytes + 2], CancellationToken.None);
+        Assert.Equal(3, updates.Count);
+        Assert.DoesNotContain(updates, value => value.IsFinal);
+    }
+
+    [Fact]
+    public async Task StreamingCancellationReachesNativeWorkWithoutBlockingTheControlReader()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromMilliseconds(150) });
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("hang", CancellationToken.None);
+        var pid = engine.WorkerProcessId!.Value;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.SendAudioAsync(s_audio, cancel.Token));
+        await session.DisposeAsync();
+        await WaitUntilGoneAsync(pid);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task ConcurrentStreamDisposalWaitsForTheSameInFlightNativeWork()
+    {
+        var engine = await StreamingEngineAsync(Launch() with { CancellationGrace = TimeSpan.FromSeconds(1) });
+        var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("hang", CancellationToken.None);
+        var feeding = session.SendAudioAsync(s_audio, CancellationToken.None);
+        await WaitForLogAsync("stream feed entered");
+        var first = session.DisposeAsync().AsTask();
+        var second = session.DisposeAsync().AsTask();
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        await Task.WhenAll(first, second);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => feeding);
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task UnloadingAnIdleStreamInvalidatesItWithoutWaitingForMoreAudio()
+    {
+        var engine = await StreamingEngineAsync();
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("en", CancellationToken.None);
+        await engine.UnloadModelAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.Null(engine.WorkerProcessId);
+    }
+
+    [Fact]
+    public async Task WorkerRejectsStaleSessionIdentityAndOutOfOrderAudio()
+    {
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled" }""");
+        await using var worker = await TranscriptionWorkerProcess.StartAsync(_runner, Launch(), TranscriptionAccelerationPreference.Cpu, null, Log, CancellationToken.None);
+        var start = await worker.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = "stream-start", ModelId = "small", SessionId = "first", Sequence = 0,
+        }, default, CancellationToken.None);
+        Assert.Null(start.Error);
+        foreach (var (id, sequence) in new[] { ("stale", 1L), ("first", 2L) })
+        {
+            var rejected = await worker.SendAsync(new TranscriptionWorkerMessage
+            {
+                Command = "stream-feed", SessionId = id, Sequence = sequence,
+            }, s_audio, CancellationToken.None);
+            Assert.NotNull(rejected.Error);
+        }
+        var valid = await worker.SendAsync(new TranscriptionWorkerMessage
+        {
+            Command = "stream-feed", SessionId = "first", Sequence = 1,
+        }, s_audio, CancellationToken.None);
+        Assert.Null(valid.Error);
+    }
+
+    [Fact]
+    public async Task AutoNeverRetriesOnlyTheFailedStreamingChunkOnCpu()
+    {
+        var engine = await HardwareEngineAsync();
+        _inner.EnableStreaming = true;
+        await File.WriteAllTextAsync(SettingsPath, """{ "probe-streaming": "enabled", "probe-hardware": "enabled" }""");
+        ConfigureGpu(engine, TranscriptionAccelerationPreference.Auto);
+        await using var session = await ((ITranscriptionEngineRole)engine).StartStreamingAsync("fail-on-gpu", CancellationToken.None);
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => session.SendAudioAsync(s_audio, CancellationToken.None));
+        Assert.False(engine.UsesCpuFallback);
+        Assert.Null(engine.WorkerProcessId);
+        Assert.DoesNotContain(Logs(), line => line.Contains("retrying once on CPU", StringComparison.Ordinal));
     }
 
     private static ProcessCommand FakeWorker(string behavior)

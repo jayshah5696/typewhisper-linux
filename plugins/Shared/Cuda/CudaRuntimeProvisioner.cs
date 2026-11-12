@@ -318,6 +318,29 @@ public class CudaRuntimeProvisioner
             .ConfigureAwait(false);
     }
 
+    // Worker-only use of an already prepared cache. It must never turn inference or discovery
+    // into an implicit download, and it must never preload GPU libraries in the desktop process.
+    internal async Task PreloadInstalledAsync(CudaRuntimeProfile profile, CancellationToken ct)
+    {
+        if (!Environment.GetCommandLineArgs().Contains("--transcription-worker", StringComparer.Ordinal))
+            throw new NotSupportedException("Preload installed CUDA libraries only in a transcription worker.");
+        ct.ThrowIfCancellationRequested();
+        if (!IsProfileSatisfied(profile))
+            throw new InvalidOperationException("Download the CUDA runtime explicitly before using this backend.");
+        if (!TryInitializeCudaDriver(out var error))
+            throw new InvalidOperationException($"The NVIDIA CUDA driver is not usable: {error}");
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            EnsureExternalLockDirectory();
+            await using var lease = await AcquireProvisioningWheelLocksAsync(WheelsFor(profile), ct).ConfigureAwait(false);
+            if (!IsProfileSatisfied(profile))
+                throw new InvalidOperationException("The prepared CUDA libraries are no longer available. Download them explicitly again.");
+            PreloadAll(WheelsFor(profile));
+        }
+        finally { _gate.Release(); }
+    }
+
     // The network+disk half of EnsureReadyAsync. Internal so tests can exercise the
     // marker/satisfied/extract/prune/progress/concurrency logic against a fake
     // HttpMessageHandler and a temp cache dir, never touching dlopen or the driver probe.

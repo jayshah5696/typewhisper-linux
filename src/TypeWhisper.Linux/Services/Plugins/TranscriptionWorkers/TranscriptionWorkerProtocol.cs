@@ -21,6 +21,7 @@ internal static class TranscriptionWorkerProtocol
 
     // Two hours of 16 kHz PCM16 WAV is about 230 MB; anything near this ceiling is not dictation.
     internal const int MaximumAudioBytes = 1 << 30;
+    internal const int MaximumStreamChunkBytes = 64 << 10;
 
     private static readonly JsonSerializerOptions s_json = new(JsonSerializerDefaults.Web)
     {
@@ -98,12 +99,6 @@ internal static class TranscriptionWorkerProtocol
 
         var header = new byte[headerLength];
         await stream.ReadExactlyAsync(header, ct).ConfigureAwait(false);
-        var payload = payloadLength == 0 ? [] : new byte[payloadLength];
-        if (payloadLength > 0)
-        {
-            await stream.ReadExactlyAsync(payload, ct).ConfigureAwait(false);
-        }
-
         TranscriptionWorkerMessage? message;
         try
         {
@@ -114,9 +109,15 @@ internal static class TranscriptionWorkerProtocol
             throw new InvalidDataException("The transcription worker connection sent an unreadable frame.", ex);
         }
 
-        return message is null
-            ? throw new InvalidDataException("The transcription worker connection sent an empty frame.")
-            : new TranscriptionWorkerFrame(message, payload);
+        if (message is null)
+            throw new InvalidDataException("The transcription worker connection sent an empty frame.");
+        if (message.Command == TranscriptionWorkerCommands.StreamFeed
+            && (payloadLength is <= 0 or > MaximumStreamChunkBytes || payloadLength % 2 != 0))
+            throw new InvalidDataException("Invalid streaming PCM16 chunk length.");
+        var payload = payloadLength == 0 ? [] : new byte[payloadLength];
+        if (payloadLength > 0)
+            await stream.ReadExactlyAsync(payload, ct).ConfigureAwait(false);
+        return new TranscriptionWorkerFrame(message, payload);
     }
 
     // Engine exceptions keep their kind and message across the process boundary, because the host
@@ -225,11 +226,25 @@ internal static class TranscriptionWorkerMessageTypes
     internal const string Heartbeat = "heartbeat";
 }
 
+internal static class TranscriptionWorkerCapabilities
+{
+    internal const string HardwareSelection = "hardware-selection-v1";
+    internal const string Streaming = "streaming-v1";
+}
+
 internal static class TranscriptionWorkerCommands
 {
+    internal const string DiscoverDevices = "discover-devices";
+    internal const string ConfigureHardware = "configure-hardware";
     internal const string Load = "load";
     internal const string Transcribe = "transcribe";
     internal const string Shutdown = "shutdown";
+    internal const string StreamStart = "stream-start";
+    internal const string StreamFeed = "stream-feed";
+    internal const string StreamFinalize = "stream-finalize";
+    internal const string StreamDispose = "stream-dispose";
+
+    internal static bool IsStreaming(string? command) => command is StreamStart or StreamFeed or StreamFinalize or StreamDispose;
 }
 
 /// <summary>The single envelope of every frame; unused fields stay null.</summary>
@@ -243,7 +258,16 @@ internal sealed record TranscriptionWorkerMessage
     /// <summary>In <see cref="TranscriptionWorkerMessageTypes.Hello" />: the launch token, proving the peer is the worker this host started.</summary>
     public string? Token { get; init; }
 
+    /// <summary>Optional features negotiated in the authenticated hello.</summary>
+    public string[]? Capabilities { get; init; }
+
     public string? Command { get; init; }
+    public string? SessionId { get; init; }
+    public long Sequence { get; init; }
+    public StreamingTranscriptEvent[]? Updates { get; init; }
+    public TimeSpan? FinalizeTimeout { get; init; }
+    public TranscriptionHardwareRequest? HardwareRequest { get; init; }
+    public TranscriptionDevice[]? Devices { get; init; }
     public string? ModelId { get; init; }
     public string? Language { get; init; }
     public string[]? LanguageHints { get; init; }

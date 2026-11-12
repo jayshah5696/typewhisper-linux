@@ -53,6 +53,9 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports downloading and managing local model files.</summary>
     bool SupportsModelDownload => false;
 
+    /// <summary>Optional verified external model linking. Null leaves ordinary download behavior unchanged.</summary>
+    ITranscriptionModelLinking? ModelLinking => null;
+
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 
@@ -76,19 +79,20 @@ public interface ITranscriptionEngineRole
     /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
     IReadOnlyList<string> SupportedLanguages => [];
 
+    /// <summary>Optional worker-only native device selection. Null preserves legacy acceleration policy.</summary>
+    ITranscriptionHardwareSelection? HardwareSelection => null;
+
     /// <summary>Acceleration backends this engine can run on. Default: CPU only.</summary>
     IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
         [TranscriptionAccelerationBackend.Cpu];
 
     /// <summary>
-    ///     Whether this engine downloads and preloads its own CUDA runtime on demand
-    ///     during <see cref="LoadModelAsync(string, CancellationToken)" />, and falls back to CPU itself
-    ///     (surfacing the reason via <see cref="AccelerationStatus" />) when the GPU
-    ///     path can't be honored. When <c>true</c>, the host must not reject an
-    ///     explicit <see cref="TranscriptionAccelerationBackend.NvidiaCuda" /> load
-    ///     just because the CUDA runtime libraries aren't already installed on the
-    ///     host — the plugin provisions them. Default: <c>false</c> (the engine relies
-    ///     on a host-provided CUDA runtime).
+    ///     Whether this engine can prepare its own optional CUDA runtime through
+    ///     <see cref="EnsureCudaRuntimeReadyAsync" />. Legacy engines may also prepare it during
+    ///     loading and report CPU fallback. Engines with <see cref="HardwareSelection" /> keep
+    ///     preparation explicit: discovery and inference must not download, and only Auto may
+    ///     retry CPU in a fresh worker. The host must not require system-provided math libraries
+    ///     for a self-provisioning engine. Default: false, using a host-provided runtime.
     /// </summary>
     bool ProvisionsCudaRuntimeOnDemand => false;
 
@@ -104,14 +108,11 @@ public interface ITranscriptionEngineRole
     bool IsCudaRuntimeProvisioned => false;
 
     /// <summary>
-    ///     Downloads and preloads only the CUDA runtime libraries this engine is still
-    ///     missing (a no-op when <see cref="IsCudaRuntimeProvisioned" /> is already
-    ///     <c>true</c>), reporting progress 0.0–1.0. Lets the host offer an explicit
-    ///     "download CUDA runtime" action on a driver-only host instead of waiting for
-    ///     the lazy <see cref="LoadModelAsync(string, IProgress{double}, CancellationToken)" />
-    ///     path. Throws if the NVIDIA driver is unusable or the download fails — the
-    ///     host surfaces the message. Default: no-op (engines that rely on a
-    ///     host-provided runtime have nothing to fetch).
+    ///     Prepares missing CUDA files, reporting progress from 0.0 to 1.0. Engines with
+    ///     <see cref="HardwareSelection" /> download and verify files only in this explicit action;
+    ///     they must not initialize a driver or preload native libraries in the host. A fresh
+    ///     discovery worker checks execution readiness afterwards. Legacy engines may also
+    ///     preload and check the driver here. Default: no-op for host-provided runtimes.
     /// </summary>
     // ReSharper disable UnusedParameter.Global
     Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
@@ -122,10 +123,10 @@ public interface ITranscriptionEngineRole
 
     /// <summary>
     ///     Deletes this engine's provisioned CUDA runtime caches (the shared CUDA math
-    ///     libraries plus any per-engine GPU build) so the next CUDA load re-provisions
-    ///     from scratch. Best-effort. Note: libraries already dlopen'd this session are
-    ///     held until process exit, so a restart is required for a fresh re-download to
-    ///     take effect. Default: no-op for engines that rely on a host-provided runtime
+    ///     libraries plus any per-engine GPU build). Engines with hardware selection require
+    ///     explicit preparation again, and the host stops their loaded worker before clearing.
+    ///     Legacy engines may need an app restart because native libraries remain pinned in
+    ///     that process. Default: no-op for engines that rely on a host-provided runtime
     ///     (nothing to clear); a self-provisioning engine
     ///     (<see cref="ProvisionsCudaRuntimeOnDemand" />) MUST override this — the default
     ///     throws rather than silently report a clear that never happened (which would

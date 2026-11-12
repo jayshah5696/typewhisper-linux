@@ -11,11 +11,11 @@ internal sealed class TranscriptionWorkerFaultedException(string message, Except
 /// <summary>
 ///     Presents a local engine to the host while its model loading and inference run in a worker
 ///     process. Metadata, downloads, removal and settings stay with the in-process engine, which
-///     never loads a model. A crashed worker is replaced and the request retried; repeated crashes
-///     on an accelerated backend switch the engine to the CPU, and further crashes pause it briefly
-///     instead of looping. A worker that hung is not retried: it already cost the user its timeout.
+///     never loads a model. Legacy providers retry crashes, fall back to CPU after repeated GPU
+///     faults, and pause after further crashes. Providers with hardware selection instead preserve
+///     request intent: only Auto GPU failures get one fresh-worker CPU retry.
 /// </summary>
-internal sealed class IsolatedTranscriptionEngine
+internal sealed partial class IsolatedTranscriptionEngine
     : ITranscriptionEngineRole,
         ITranscriptionEngineSelectionIdentity,
         ITranscriptionLanguageSelectionCapabilities,
@@ -33,6 +33,7 @@ internal sealed class IsolatedTranscriptionEngine
     private readonly Action _statusChanged;
     private readonly Func<string> _settings;
     private readonly TimeProvider _time;
+    private readonly TranscriptionAccelerationPreference? _executionPreference;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ITranscriptionWorkerConnection? _worker;
     private TranscriptionWorkerState? _state;
@@ -65,16 +66,14 @@ internal sealed class IsolatedTranscriptionEngine
         Action<PluginLogLevel, string> log,
         Action? statusChanged = null,
         TimeProvider? time = null,
-        Func<string>? settings = null
+        Func<string>? settings = null,
+        TranscriptionAccelerationPreference? executionPreference = null
     )
     {
-        // Streaming sessions are callback objects that cannot cross the process boundary.
-        if (inner.SupportsStreaming)
-        {
-            throw new ArgumentException("Streaming engines cannot run in a transcription worker.", nameof(inner));
-        }
-
         _inner = inner;
+        _executionPreference = executionPreference;
+        _hardwareSelection = inner.HardwareSelection is null ? null : new HardwareProxy(this);
+        ModelLinking = inner.ModelLinking is null ? null : new ModelLinkProxy(this, inner.ModelLinking);
         _start = start;
         _log = log;
         _statusChanged = statusChanged ?? (() => { });
@@ -115,7 +114,9 @@ internal sealed class IsolatedTranscriptionEngine
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => _inner.TranscriptionModels;
     public string? SelectedModelId => _inner.SelectedModelId;
     public bool SupportsTranslation => _inner.SupportsTranslation;
+    public bool SupportsStreaming => _inner.SupportsStreaming;
     public bool SupportsModelDownload => _inner.SupportsModelDownload;
+    public ITranscriptionModelLinking? ModelLinking { get; }
     public DictionaryTermsBudget? DictionaryTermsBudget => _inner.DictionaryTermsBudget;
     public bool SupportsStructuredDictionaryTerms => _inner.SupportsStructuredDictionaryTerms;
     public bool SupportsLanguageHints => _inner.SupportsLanguageHints;
@@ -123,7 +124,7 @@ internal sealed class IsolatedTranscriptionEngine
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends => _inner.SupportedAccelerationBackends;
     public bool ProvisionsCudaRuntimeOnDemand => _inner.ProvisionsCudaRuntimeOnDemand;
     public bool IsCudaRuntimeProvisioned => _inner.IsCudaRuntimeProvisioned;
-    public TranscriptionAccelerationPreference AccelerationPreference => _inner.AccelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference => _executionPreference ?? _inner.AccelerationPreference;
 
     // Language support is metadata of the selected model, so the in-process engine answers.
     public LanguageSelectionSupport AutomaticDetectionSupport =>
@@ -139,7 +140,9 @@ internal sealed class IsolatedTranscriptionEngine
     // What the worker actually runs on, once one has started. A worker never needs an app restart:
     // a changed choice or an explicit load starts a new one.
     public TranscriptionAccelerationStatus AccelerationStatus =>
-        FallbackActive()
+        HardwareSelection is not null
+            ? HardwareAccelerationStatus()
+            : FallbackActive()
             ? new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU",
@@ -172,6 +175,7 @@ internal sealed class IsolatedTranscriptionEngine
         // The next request starts a worker with the new preference, which supersedes an earlier
         // explicit backend just as it does in the engine itself.
         _inner.SetAccelerationPreference(preference);
+        _hardwareRequest = null;
         _computeBackend = null;
         if (preference != _fallbackFrom)
         {
@@ -358,6 +362,8 @@ internal sealed class IsolatedTranscriptionEngine
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_activeStream is not null)
+                throw new InvalidOperationException("Finish or dispose the active streaming session first.");
             if (explicitLoad)
             {
                 _pausedUntil = default;
@@ -373,6 +379,18 @@ internal sealed class IsolatedTranscriptionEngine
             if (_time.GetUtcNow() < _pausedUntil)
             {
                 throw new TranscriptionWorkerFaultedException(PausedMessage());
+            }
+
+            if (HardwareSelection is not null)
+            {
+                try
+                {
+                    return AcceptStreamStart(await RunHardwareAsync(request, payload, token).ConfigureAwait(false), request, ct, stop);
+                }
+                finally
+                {
+                    statusChanged = true;
+                }
             }
 
             var restartedForRuntime = false;
@@ -436,7 +454,7 @@ internal sealed class IsolatedTranscriptionEngine
                 }
 
                 _consecutiveCrashes = 0;
-                return response;
+                return AcceptStreamStart(response, request, ct, stop);
             }
         }
         catch (OperationCanceledException ex) when (stop.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -445,6 +463,10 @@ internal sealed class IsolatedTranscriptionEngine
         }
         finally
         {
+            // A canceled or malformed start may have created a session in the worker without
+            // returning its identity. Never leave that unowned session behind for the next call.
+            if (request.Command == TranscriptionWorkerCommands.StreamStart && _activeStream is null)
+                await DiscardWorkerAsync().ConfigureAwait(false);
             _gate.Release();
             if (statusChanged)
             {
@@ -465,7 +487,7 @@ internal sealed class IsolatedTranscriptionEngine
         // starts cold. Loading gets its own budget before the audio deadline starts.
         // ReSharper disable once InvertIf -- inverting would repeat the request send in both branches.
         if (
-            request is { Command: TranscriptionWorkerCommands.Transcribe, ModelId: { } modelId }
+            request is { Command: TranscriptionWorkerCommands.Transcribe or TranscriptionWorkerCommands.StreamStart, ModelId: { } modelId }
             && worker.State?.LoadedModelId != modelId
         )
         {
@@ -498,7 +520,7 @@ internal sealed class IsolatedTranscriptionEngine
         if (_consecutiveCrashes >= CrashesBeforeCpuFallback && !FallbackActive() && CanFallBackToCpu())
         {
             _cpuFallback = true;
-            _fallbackFrom = _inner.AccelerationPreference;
+            _fallbackFrom = AccelerationPreference;
             _consecutiveCrashes = 0;
             _log(
                 PluginLogLevel.Warning,
@@ -535,7 +557,7 @@ internal sealed class IsolatedTranscriptionEngine
     // The fallback holds until the user picks an acceleration again, which is a new explicit choice.
     private bool FallbackActive()
     {
-        if (_cpuFallback && _inner.AccelerationPreference != _fallbackFrom)
+        if (_cpuFallback && AccelerationPreference != _fallbackFrom)
         {
             _cpuFallback = false;
         }
@@ -545,7 +567,7 @@ internal sealed class IsolatedTranscriptionEngine
 
     private TranscriptionAccelerationPreference EffectivePreference()
     {
-        return FallbackActive() ? TranscriptionAccelerationPreference.Cpu : _inner.AccelerationPreference;
+        return FallbackActive() ? TranscriptionAccelerationPreference.Cpu : AccelerationPreference;
     }
 
     private void SetState(TranscriptionWorkerState state, TranscriptionAccelerationPreference acceleration)
@@ -567,11 +589,13 @@ internal sealed class IsolatedTranscriptionEngine
         var computeBackend = FallbackActive() ? null : _computeBackend;
         // A worker reads the plugin's settings once, so a changed setting needs a new one.
         var settings = _settings();
+        var hardware = EffectiveHardwareRequest();
         if (
             _worker is { IsAlive: true } running
             && running.Acceleration == preference
             && _workerComputeBackend == computeBackend
             && _workerSettings == settings
+            && _workerHardwareRequest == hardware
         )
         {
             return running;
@@ -580,6 +604,28 @@ internal sealed class IsolatedTranscriptionEngine
         await DiscardWorkerAsync().ConfigureAwait(false);
         // Snapshots: a change during startup must still be seen as a change afterwards.
         _worker = await _start(preference, computeBackend, ct).ConfigureAwait(false);
+        if (hardware is not null)
+        {
+            try
+            {
+                var configured = await _worker.SendAsync(new TranscriptionWorkerMessage
+                {
+                    Command = TranscriptionWorkerCommands.ConfigureHardware,
+                    HardwareRequest = hardware,
+                }, default, ct).ConfigureAwait(false);
+                if (configured.Error is { } error)
+                {
+                    throw TranscriptionWorkerProtocol.ToException(error);
+                }
+            }
+            catch
+            {
+                await DiscardWorkerAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        _workerHardwareRequest = hardware;
         _workerComputeBackend = computeBackend;
         _workerSettings = settings;
         if (_worker.State is { } state)
@@ -592,8 +638,16 @@ internal sealed class IsolatedTranscriptionEngine
 
     private async Task DiscardWorkerAsync()
     {
+        _activeStream?.Invalidate();
+        _activeStream = null;
         var worker = _worker;
         _worker = null;
+        _workerHardwareRequest = null;
+        if (HardwareSelection is not null)
+        {
+            _state = null;
+        }
+
         if (worker is not null)
         {
             await worker.DisposeAsync().ConfigureAwait(false);

@@ -7,6 +7,7 @@ using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -27,7 +28,7 @@ public sealed class DictationLocalModelCardsTests
         Assert.Equal(["Small", "Large", "Medium"], context.Sut.LocalModelCards.Select(card => card.DisplayName));
         var small = context.Card("small");
         var large = context.Card("large");
-        Assert.Equal("~200 MB · Local engine", small.DetailText);
+        Assert.Equal($"{Loc.Instance["Dictation.ModelDownloadSize"]}: ~200 MB · Local engine", small.DetailText);
         Assert.Equal(Loc.Instance["Dictation.ModelCardDownloaded"], small.BadgeText);
         Assert.True(small is { ShowUse: true, CanUse: true, ShowRemove: true, ShowDownload: false });
         Assert.Equal(Loc.Instance["Dictation.ModelCardRecommended"], large.BadgeText);
@@ -185,15 +186,559 @@ public sealed class DictationLocalModelCardsTests
         Assert.Equal(Loc.Instance["Dictation.ModelCardNotDownloaded"], small.BadgeText);
     }
 
+    [Fact]
+    public void Search_ListsHiddenMatchesAndIncludesProviderAndIdentityWithoutSavingSettings()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Settings.Invocations.Clear();
+        var cards = context.Sut.LocalModelCards.ToArray();
+
+        context.Sut.LocalModelSearch = "  medium  ";
+        Assert.Equal(["Medium"], cards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        context.Sut.LocalModelSearch = "LOCAL ENGINE";
+        Assert.All(cards, card => Assert.True(card.IsListed));
+        context.Sut.LocalModelSearch = "com.test.local:small";
+        Assert.Equal(["Small"], cards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        context.Sut.LocalModelSearch = "";
+        Assert.False(context.Card("medium").IsListed);
+        Assert.Equal(cards, context.Sut.LocalModelCards);
+        context.Settings.Verify(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public void LanguageFilters_RequireEveryLanguageAndRejectUnknownMetadata()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Sut.ShowAllLocalModels = true;
+        var languages = context.Sut.LocalModelLanguageFilters.ToArray();
+        languages.Single(option => option.Code == "en").IsSelected = true;
+        Assert.Equal(["Small", "Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        languages.Single(option => option.Code == "de").IsSelected = true;
+        Assert.Equal(["Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+        Assert.Equal(languages, context.Sut.LocalModelLanguageFilters);
+        Assert.Equal("auto", context.Sut.Language);
+        context.Sut.ClearLocalModelFiltersCommand.Execute(null);
+        Assert.All(languages, option => Assert.False(option.IsSelected));
+        Assert.All(context.Sut.LocalModelCards, card => Assert.True(card.IsListed));
+    }
+
+    [Fact]
+    public async Task Filters_KeepSelectedAndDownloadingCardsReachable()
+    {
+        var local = new DownloadableEngine { DownloadGate = new TaskCompletionSource() };
+        local.Downloaded.Add("small");
+        using var context = new CardsTestContext(local);
+        context.Sut.UseLocalModelCommand.Execute(context.Card("small"));
+        await context.WaitUntilAsync(() => context.Card("small").IsActive);
+        var download = context.Sut.DownloadLocalModelCommand.ExecuteAsync(context.Card("large"));
+        await local.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await context.WaitUntilAsync(() => context.Card("large").ShowCancel);
+
+        context.Sut.LocalModelSearch = "no match";
+        context.Sut.LivePreviewModelsOnly = true;
+        Assert.True(context.Card("small").IsListed);
+        Assert.True(context.Card("large").IsListed);
+        Assert.False(context.Card("medium").IsListed);
+        context.Sut.CancelLocalModelDownloadCommand.Execute(context.Card("large"));
+        await download.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(context.Card("large").IsListed);
+        Assert.True(context.Card("small").IsListed);
+    }
+
+    [Fact]
+    public void LiveFilter_RequiresKnownPerModelSupport()
+    {
+        using var context = new CardsTestContext(new DownloadableEngine());
+        context.Sut.LivePreviewModelsOnly = true;
+        Assert.Equal(["Large"], context.Sut.LocalModelCards.Where(card => card.IsListed).Select(card => card.DisplayName));
+    }
+
+    [Theory]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
+    public async Task LanguageChange_PreservesFiltersAndOperationProgressWithoutSaving(string language)
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var local = new DownloadableEngine { DownloadGate = new TaskCompletionSource() };
+            using var context = new CardsTestContext(local);
+            context.Sut.LocalModelSearch = "Large";
+            context.Sut.LocalModelLanguageFilters.Single(option => option.Code == "en").IsSelected = true;
+            var large = context.Card("large");
+            var download = context.Sut.DownloadLocalModelCommand.ExecuteAsync(large);
+            await local.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            local.LastProgress!.Report(0.25);
+            await context.WaitUntilAsync(() => large.PercentText == "25%");
+            var options = context.Sut.LocalModelLanguageFilters.ToArray();
+            context.Settings.Invocations.Clear();
+
+            Loc.Instance.CurrentLanguage = language;
+            Assert.Equal(options, context.Sut.LocalModelLanguageFilters);
+            await context.WaitUntilAsync(() => !ReferenceEquals(options[0], context.Sut.LocalModelLanguageFilters[0]));
+            Assert.True(context.Sut.LocalModelLanguageFilters.Single(option => option.Code == "en").IsSelected);
+            Assert.Equal("Large", context.Sut.LocalModelSearch);
+            Assert.Equal("25%", large.PercentText);
+            Assert.True(large.ShowCancel);
+            Assert.Equal(Loc.Instance["Dictation.ModelCardDownloading"], large.BadgeText);
+            Assert.Contains(Loc.Instance["Dictation.ModelMetadataYes"], large.CapabilityText);
+            Assert.Equal(Loc.Instance.GetString("Dictation.ModelFilterResults", 1, 3), context.Sut.LocalModelResultsText);
+            context.Settings.Verify(settings => settings.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+            context.Sut.CancelLocalModelDownloadCommand.Execute(large);
+            await download.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void Metadata_ShowsDownloadSizeTermsAndReferenceProvenanceAndBlocksUnavailableActions()
+    {
+        var local = new DownloadableEngine
+        {
+            TranscriptionModels =
+            [
+                new("restricted", "Restricted")
+                {
+                    SizeDescription = "400 MiB", Languages = ["en"], SupportsStreaming = false,
+                    SupportsTranslation = true, License = "Publisher terms", LicenseUrl = "https://example.org/terms",
+                    UnavailableReason = "Terms need review",
+                    ReferenceBenchmarks = [new("LibriSpeech", "en", "WER", 4.2, "https://example.org/results", "Publisher CPU run")],
+                },
+            ],
+        };
+        local.Downloaded.Add("restricted");
+        using var context = new CardsTestContext(local);
+        var card = context.Card("restricted");
+        Assert.Contains("400 MiB", card.DetailText);
+        Assert.Contains(Loc.Instance["Dictation.ModelDownloadSize"], card.DetailText);
+        Assert.Contains("Terms need review", card.StateText);
+        Assert.Contains("Publisher terms", card.LicenseText);
+        Assert.Equal("https://example.org/terms", card.LicenseUrl);
+        Assert.Contains("LibriSpeech", card.ReferenceBenchmarkText);
+        Assert.Contains("WER", card.ReferenceBenchmarkText);
+        Assert.Contains("https://example.org/results", card.ReferenceBenchmarkText);
+        Assert.Contains("Publisher CPU run", card.ReferenceBenchmarkText);
+        Assert.False(card.CanUse);
+        Assert.False(card.CanDownload);
+        Assert.True(card.CanRemove);
+    }
+
+    [Fact]
+    public async Task Devices_OpeningAndChangingModeNeverProbesOrSavesAndRefreshIsExplicit()
+    {
+        var hardware = new HardwareProbe();
+        var local = new DownloadableEngine { HardwareSelection = hardware };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small") }
+            .WithLocalModelDevice(local.PluginId, "vulkan", "pci:saved");
+        using var context = new CardsTestContext(settings, local);
+        context.Settings.Invocations.Clear();
+        Assert.True(context.Sut.ShowLocalModelDevices);
+        Assert.Equal(0, hardware.Calls);
+        context.Sut.LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan;
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:saved"));
+        Assert.Equal(AppSettings.LocalModelAccelerationVulkan, context.Settings.Object.Current.LocalModelAcceleration);
+        Assert.Equal("pci:saved", context.Sut.SelectedLocalModelDevice?.StableId);
+        Assert.Equal(0, hardware.Calls);
+        context.Settings.Invocations.Clear();
+
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+        Assert.Equal(1, hardware.Calls);
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "software");
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "unsupported");
+        Assert.Contains(context.Sut.LocalModelDeviceOptions, option => option.StableId == "pci:saved");
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        var options = context.Sut.LocalModelDeviceOptions.ToArray();
+        context.Sut.SelectedLocalModelDevice = options.Single(option => option.StableId == "pci:gpu");
+        Assert.Equal(options, context.Sut.LocalModelDeviceOptions);
+        Assert.Equal("pci:gpu", context.Settings.Object.Current.GetLocalModelDevice(local.PluginId, "vulkan"));
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(context.Models.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task DeviceChoicesAndModelSelectorSurviveUnchangedProviderNotifications()
+    {
+        var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" }
+            .WithLocalModelDevice(local.PluginId, "vulkan", "pci:gpu");
+        using var context = new CardsTestContext(settings, local);
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+        var models = context.Sut.ModelOptions.ToArray();
+        var devices = context.Sut.LocalModelDeviceOptions.ToArray();
+        context.Settings.Invocations.Clear();
+        context.NotifyPluginStateChanged();
+        await context.WaitUntilAsync(() => true);
+        Assert.Same(models[0], context.Sut.ModelOptions[0]);
+        Assert.Same(devices[0], context.Sut.LocalModelDeviceOptions[0]);
+        Assert.Equal("pci:gpu", context.Sut.SelectedLocalModelDevice?.StableId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Devices_LateRefreshCannotReplaceChoicesForAnotherModel()
+    {
+        var hardware = new HardwareProbe { Gate = new TaskCompletionSource<IReadOnlyList<TranscriptionDevice>>() };
+        var local = new DownloadableEngine { HardwareSelection = hardware };
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" };
+        using var context = new CardsTestContext(settings, local);
+        var refresh = context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => hardware.Calls == 1);
+        context.Sut.SelectedModel = null;
+        hardware.Gate.SetResult(HardwareProbe.Devices);
+        await refresh;
+        await context.WaitUntilAsync(() => !context.Sut.IsDiscoveringLocalModelDevices);
+        Assert.False(context.Sut.ShowLocalModelDevices);
+        Assert.DoesNotContain(context.Sut.LocalModelDeviceOptions, option => option.StableId == "pci:gpu");
+        Assert.Equal(0, local.LoadCount);
+    }
+
+    [Fact]
+    public async Task Devices_LanguageChangeDefersChoicesAndKeepsSavedIdentityWithoutSaving()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+            var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" }
+                .WithLocalModelDevice(local.PluginId, "vulkan", "pci:gpu");
+            using var context = new CardsTestContext(settings, local);
+            await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+            await context.WaitUntilAsync(() => context.Sut.LocalModelDeviceOptions.Any(option => option.StableId == "pci:gpu"));
+            var options = context.Sut.LocalModelDeviceOptions.ToArray();
+            context.Settings.Invocations.Clear();
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(options, context.Sut.LocalModelDeviceOptions);
+            await context.WaitUntilAsync(() => !ReferenceEquals(options[0], context.Sut.LocalModelDeviceOptions[0]));
+            Assert.Equal("pci:gpu", context.Sut.SelectedLocalModelDevice?.StableId);
+            context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public async Task HardwareStatus_ReportsRequestedUnloadedThenActualDeviceAndFallbackThenUnloaded()
+    {
+        var local = new DownloadableEngine { HardwareSelection = new HardwareProbe() };
+        local.Downloaded.Add("small");
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "cpu" };
+        using var context = new CardsTestContext(settings, local);
+        Assert.Contains(Loc.Instance["Dictation.HardwareUnloaded"], context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain(Loc.Instance["Dictation.AccelCpuActive"], context.Sut.AccelerationStatusText);
+        await context.Models.EnsureModelLoadedAsync(settings.SelectedModelId);
+        local.AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Vulkan")
+        {
+            IsModelLoaded = true,
+            ActiveDevice = HardwareProbe.Devices[1],
+            FallbackReason = "original GPU failure",
+        };
+        Assert.Contains("Native GPU", context.Sut.AccelerationStatusText);
+        Assert.Contains("pci:gpu", context.Sut.AccelerationStatusText);
+        Assert.Contains("original GPU failure", context.Sut.AccelerationStatusText);
+        local.AccelerationStatus = local.AccelerationStatus with { IsModelLoaded = false };
+        Assert.Contains(Loc.Instance["Dictation.HardwareUnloaded"], context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain("Native GPU", context.Sut.AccelerationStatusText);
+        await context.Models.UnloadModelAsync();
+        Assert.Contains("original GPU failure", context.Sut.AccelerationStatusText);
+        Assert.DoesNotContain("Native GPU", context.Sut.AccelerationStatusText);
+    }
+
+    [Fact]
+    public async Task HardwareCpuRetry_LoadsSameDownloadedModelEvenWhenNothingIsActive()
+    {
+        var probe = new HardwareProbe { Fault = new IOException("broken driver") };
+        var local = new DownloadableEngine { HardwareSelection = probe };
+        local.Downloaded.Add("small");
+        var settings = new AppSettings { SelectedModelId = ModelManagerService.GetPluginModelId(local.PluginId, "small"), LocalModelAcceleration = "vulkan" };
+        using var context = new CardsTestContext(settings, local);
+        context.Settings.Invocations.Clear();
+        await context.Sut.RefreshLocalModelDevicesCommand.ExecuteAsync(null);
+        Assert.Contains("broken driver", context.Sut.LocalModelDeviceDiscoveryText);
+        Assert.Equal("vulkan", context.Sut.LocalModelAcceleration);
+        Assert.Equal(0, local.LoadCount);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        await context.Sut.RetryLocalModelOnCpuCommand.ExecuteAsync(null);
+        Assert.Equal(1, local.LoadCount);
+        Assert.Equal(settings.SelectedModelId, context.Models.ActiveModelId);
+        Assert.Equal(settings.SelectedModelId, context.Settings.Object.Current.SelectedModelId);
+        Assert.Equal("cpu", context.Settings.Object.Current.LocalModelAcceleration);
+        Assert.Equal(1, probe.Calls);
+    }
+
+    [Fact]
+    public async Task RawTest_ShowsOnlyRawResultAndConfirmedDeviceWithoutSavingSelection()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.UnionWith(["small", "large"]);
+        var worker = new TestWorker();
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (_, _, _) => Task.FromResult<ITranscriptionWorkerConnection>(worker), (_, _) => { });
+        using var context = new CardsTestContext(AppSettings.Default with
+        {
+            SelectedModelId = "plugin:com.test.local:small", LocalModelAcceleration = "cpu",
+        }, isolated);
+        var card = context.Card("large");
+        Assert.True(card.CanTest);
+        var settings = context.Settings.Object.Current;
+        var selected = context.Sut.SelectedModel;
+        context.Settings.Invocations.Clear();
+
+        await context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+
+        Assert.Equal("He bent his face over her hair.", card.TestTranscript);
+        Assert.Contains("CPU", card.TestStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("large", worker.Request?.ModelId);
+        Assert.Null(worker.Request?.Prompt);
+        Assert.False(worker.Request?.Translate);
+        Assert.Equal("en", worker.Request?.Language);
+        Assert.Equal("RIFF", System.Text.Encoding.ASCII.GetString(worker.Audio![..4]));
+        Assert.True(worker.Disposed);
+        Assert.Equal(settings, context.Settings.Object.Current);
+        Assert.Same(selected, context.Sut.SelectedModel);
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(local.SelectedModelId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RawVulkanTestDoesNotRequireOptionalCudaFiles()
+    {
+        var local = new DownloadableEngine { ProvisionsCudaRuntimeOnDemand = true, HardwareSelection = new HardwareProbe() };
+        local.Downloaded.Add("small");
+        var started = new List<TranscriptionAccelerationPreference>();
+        await using var isolated = new IsolatedTranscriptionEngine(local, (preference, _, _) =>
+        {
+            started.Add(preference);
+            return Task.FromResult<ITranscriptionWorkerConnection>(new TestWorker());
+        }, (_, _) => { });
+        using var context = new CardsTestContext(new AppSettings { LocalModelAcceleration = "vulkan" }, isolated);
+        var result = await context.Models.TestModelAsync(context.Card("small").ModelId, CancellationToken.None);
+        Assert.Equal("He bent his face over her hair.", result.Transcription.Text);
+        Assert.Contains(TranscriptionAccelerationPreference.Vulkan, started);
+        Assert.Equal(0, local.CudaPrepareCalls);
+        Assert.False(local.IsCudaRuntimeProvisioned);
+    }
+
+    [Fact]
+    public async Task RawTest_LegacyAutoCpuProviderDoesNotProbeOrRequestCuda()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.Add("small");
+        TranscriptionAccelerationPreference? started = null;
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (preference, _, _) =>
+            {
+                started = preference;
+                return Task.FromResult<ITranscriptionWorkerConnection>(new TestWorker());
+            }, (_, _) => { });
+        using var context = new CardsTestContext(isolated);
+        context.Models.CudaRuntimePreflight = () => throw new InvalidOperationException("Must not probe CUDA for this provider");
+        var card = context.Card("small");
+        await context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, started);
+        Assert.Equal("He bent his face over her hair.", card.TestTranscript);
+    }
+
+    [Fact]
+    public async Task RawTest_RefusesBusyLeaseAndRecordingAndCancelsWhenRecordingStarts()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.UnionWith(["small", "large"]);
+        var worker = new TestWorker { Wait = new TaskCompletionSource() };
+        await using var isolated = new IsolatedTranscriptionEngine(local,
+            (_, _, _) => Task.FromResult<ITranscriptionWorkerConnection>(worker), (_, _) => { });
+        using var context = new CardsTestContext(isolated);
+        var card = context.Card("large");
+        var liveModelId = context.Card("small").ModelId;
+        await context.Models.LoadModelAsync(liveModelId);
+        await using (var lease = await context.Models.TryAcquireTranscriptionAsync(liveModelId))
+        {
+            Assert.NotNull(lease);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => context.Models.TestModelAsync(card.ModelId, CancellationToken.None));
+        }
+        context.Sut.IsRecording = true;
+        Assert.False(card.CanTest);
+        context.Sut.IsRecording = false;
+        var task = context.Sut.TestLocalModelCommand.ExecuteAsync(card);
+        await worker.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(card.IsTesting);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.LocalModelSearch = "no match";
+        Assert.True(card.IsListed);
+        context.Sut.IsRecording = true;
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(card.IsTesting);
+        Assert.Empty(card.TestTranscript);
+        Assert.True(worker.Disposed);
+    }
+
+    [Fact]
+    public void RawTest_IsUnavailableForUnisolatedOrNonEnglishModels()
+    {
+        var local = new DownloadableEngine();
+        local.Downloaded.Add("small");
+        using var context = new CardsTestContext(local);
+        Assert.False(context.Card("small").CanTest);
+        Assert.False(context.Models.SupportsRawModelTest(context.Card("small").ModelId));
+    }
+
+    [Fact]
+    public async Task Link_ShowsExternalOwnershipAndUnlinkWithoutSelectingOrSaving()
+    {
+        var local = new DownloadableEngine();
+        var linking = new ModelLinkProbe(local);
+        local.ModelLinking = linking;
+        using var context = new CardsTestContext(local);
+        var card = context.Card("large");
+        context.Settings.Invocations.Clear();
+        Assert.True(card is { ShowLink: true, CanLink: true });
+        await context.Sut.LinkLocalModelAsync(card, "/public/model.gguf");
+        Assert.Equal("/public/model.gguf", card.LinkedPath);
+        Assert.Equal(Loc.Instance["Dictation.ModelUnlink"], card.RemoveText);
+        Assert.True(card.ShowRemove);
+        Assert.False(card.ShowLink);
+        Assert.Equal(0, local.LoadCount);
+        Assert.Null(context.Sut.SelectedModel);
+        Assert.Null(context.Settings.Object.Current.SelectedModelId);
+        context.Settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        await context.Sut.DeleteLocalModelAsync(card);
+        Assert.Null(card.LinkedPath);
+        Assert.Equal(1, linking.Unlinks);
+    }
+
+    [Fact]
+    public async Task Link_MissingSourceStillShowsUnlinkForANonRecommendedModel()
+    {
+        var local = new DownloadableEngine();
+        local.ModelLinking = new ModelLinkProbe(local);
+        using var context = new CardsTestContext(local);
+        var card = context.Card("medium");
+        await context.Sut.LinkLocalModelAsync(card, "/public/removed.gguf");
+        local.Downloaded.Remove("medium");
+        context.NotifyPluginStateChanged();
+        await context.WaitUntilAsync(() => !context.Card("medium").ShowUse);
+        card = context.Card("medium");
+        Assert.True(card.IsListed);
+        Assert.True(card.ShowRemove);
+        Assert.Equal(Loc.Instance["Dictation.ModelUnlink"], card.RemoveText);
+    }
+
+    [Fact]
+    public async Task Link_FailureAndCancellationNeverMakeAFileReadyOrHideTheBusyCard()
+    {
+        var local = new DownloadableEngine();
+        var linking = new ModelLinkProbe(local) { Wait = new TaskCompletionSource() };
+        local.ModelLinking = linking;
+        using var context = new CardsTestContext(local);
+        var card = context.Card("medium");
+        Assert.False(card.IsListed);
+        var running = context.Sut.LinkLocalModelAsync(card, "/public/model.gguf");
+        await linking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(card.IsLinking);
+        Assert.True(card.IsListed);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.CancelLocalModelLinkCommand.Execute(null);
+        await running;
+        Assert.False(card.IsLinking);
+        Assert.False(card.ShowRemove);
+        Assert.Null(card.LinkedPath);
+        linking.Fault = new InvalidDataException("unexpected file size");
+        await context.Sut.LinkLocalModelAsync(card, "/public/wrong.gguf");
+        Assert.Contains("unexpected file size", card.LinkStatusText, StringComparison.Ordinal);
+        Assert.False(card.ShowRemove);
+        context.Sut.IsRecording = true;
+        Assert.False(card.CanLink);
+    }
+
+    private sealed class ModelLinkProbe(DownloadableEngine engine) : ITranscriptionModelLinking
+    {
+        private readonly Dictionary<string, string> _paths = [];
+        public TaskCompletionSource? Wait { get; init; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Unlinks { get; private set; }
+        public Exception? Fault { get; set; }
+        public string? GetLinkedModelPath(string modelId) => _paths.GetValueOrDefault(modelId);
+        public async Task LinkModelAsync(string modelId, string sourcePath, CancellationToken ct)
+        {
+            if (Fault is not null) throw Fault;
+            Entered.TrySetResult();
+            if (Wait is not null) await Wait.Task.WaitAsync(ct);
+            _paths[modelId] = sourcePath;
+            engine.Downloaded.Add(modelId);
+        }
+        public void Unlink(string modelId) { if (_paths.Remove(modelId)) Unlinks++; }
+    }
+
+    private sealed class TestWorker : ITranscriptionWorkerConnection
+    {
+        public TranscriptionAccelerationPreference Acceleration => TranscriptionAccelerationPreference.Cpu;
+        public int ProcessId => 1234;
+        public IReadOnlyList<string> Capabilities => [TranscriptionWorkerCapabilities.HardwareSelection];
+        public bool IsAlive => !Disposed;
+        public bool Disposed { get; private set; }
+        public TaskCompletionSource? Wait { get; init; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TranscriptionWorkerMessage? Request { get; private set; }
+        public byte[]? Audio { get; private set; }
+        public TranscriptionWorkerState? State { get; private set; }
+        public async Task<TranscriptionWorkerMessage> SendAsync(TranscriptionWorkerMessage request, ReadOnlyMemory<byte> payload, CancellationToken ct)
+        {
+            if (request.Command == TranscriptionWorkerCommands.DiscoverDevices) return new() { Devices = HardwareProbe.Devices.ToArray() };
+            State = new(request.ModelId, request.ModelId, new(TranscriptionAccelerationBackend.Cpu, "CPU")
+            { IsModelLoaded = true, ActiveDevice = TranscriptionHardwareSelector.CpuDevice });
+            if (request.Command != TranscriptionWorkerCommands.Transcribe) return new() { State = State };
+            Request = request;
+            Audio = payload.ToArray();
+            Entered.TrySetResult();
+            if (Wait is not null) await Wait.Task.WaitAsync(ct);
+            return new() { State = State, Result = new("He bent his face over her hair.", "en", 1, null, null, null) };
+        }
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    private sealed class HardwareProbe : ITranscriptionHardwareSelection
+    {
+        public static IReadOnlyList<TranscriptionDevice> Devices { get; } =
+        [
+            new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+            new(TranscriptionAccelerationBackend.Vulkan, "pci:gpu", "Native GPU", TranscriptionDeviceKind.IntegratedGpu),
+            new(TranscriptionAccelerationBackend.Vulkan, "software", "llvmpipe", TranscriptionDeviceKind.SoftwareGpu),
+            new(TranscriptionAccelerationBackend.NvidiaCuda, "unsupported", "CUDA", TranscriptionDeviceKind.DiscreteGpu),
+        ];
+        public int Calls { get; private set; }
+        public Exception? Fault { get; init; }
+        public TaskCompletionSource<IReadOnlyList<TranscriptionDevice>>? Gate { get; init; }
+        public Task<IReadOnlyList<TranscriptionDevice>> DiscoverDevicesAsync(string modelId, CancellationToken ct)
+        {
+            Calls++;
+            if (Fault is not null) { throw Fault; }
+            return Gate?.Task ?? Task.FromResult(Devices);
+        }
+        public void ConfigureHardware(TranscriptionHardwareRequest request) { }
+    }
+
     private sealed class CardsTestContext : IDisposable
     {
         private readonly ConcurrentQueue<Action> _pending = new();
         private readonly AudioRecordingService _audio;
         private readonly PluginManager _pluginManager;
 
-        public CardsTestContext(params ITranscriptionEngineRole[] engines)
+        public CardsTestContext(params ITranscriptionEngineRole[] engines) : this(AppSettings.Default with { SelectedModelId = null }, engines) { }
+
+        public CardsTestContext(AppSettings settings, params ITranscriptionEngineRole[] engines)
         {
-            Settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default with { SelectedModelId = null });
+            Settings = TestPluginManagerFactory.CreateSettings(settings);
             _pluginManager = TestPluginManagerFactory.Create();
             PluginManagerTestAccess.SetTranscriptionEngines(_pluginManager, engines);
             var commands = new SystemCommandAvailabilityService(new FakeProcessRunner());
@@ -224,6 +769,10 @@ public sealed class DictationLocalModelCardsTests
         public DictationSectionViewModel Sut { get; }
         public ModelManagerService Models { get; }
         public Mock<ISettingsService> Settings { get; }
+
+        public void NotifyPluginStateChanged() =>
+            ((EventHandler?)typeof(PluginManager).GetField("PluginStateChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(_pluginManager))?.Invoke(_pluginManager, EventArgs.Empty);
 
         public LocalModelCard Card(string modelId) =>
             Sut.LocalModelCards.Single(card => card.ModelId.EndsWith(":" + modelId, StringComparison.Ordinal));
@@ -256,6 +805,35 @@ public sealed class DictationLocalModelCardsTests
         }
     }
 
+    [Fact]
+    public async Task NativeCudaPreparationDoesNotChangeTheRequestedModeAndCanBeCanceled()
+    {
+        var engine = new DownloadableEngine { HardwareSelection = new HardwareProbe(), ProvisionsCudaRuntimeOnDemand = true };
+        using var context = new CardsTestContext(new AppSettings
+        {
+            SelectedModelId = "plugin:com.test.local:small", LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
+        }, engine);
+        await context.WaitUntilAsync(() => context.Sut.SelectedModel is not null);
+        var mode = context.Sut.LocalModelAcceleration;
+        context.Settings.Invocations.Clear();
+        Assert.Equal(0, engine.CudaPrepareCalls);
+        await context.Sut.DownloadCudaRuntimeCommand.ExecuteAsync(null);
+        Assert.Equal(1, engine.CudaPrepareCalls);
+        Assert.Equal(mode, context.Sut.LocalModelAcceleration);
+        context.Settings.Verify(value => value.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+        Assert.DoesNotContain("restart", context.Sut.CudaSetupStatus, StringComparison.OrdinalIgnoreCase);
+
+        engine.CudaPreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = context.Sut.DownloadCudaRuntimeCommand.ExecuteAsync(null);
+        await context.WaitUntilAsync(() => engine.CudaPrepareCalls == 2);
+        Assert.False(context.Sut.CanChangeModelStorage);
+        context.Sut.CancelCudaRuntimeDownloadCommand.Execute(null);
+        await running.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(context.Sut.IsDownloadingCudaRuntime);
+        Assert.Equal(mode, context.Sut.LocalModelAcceleration);
+        Assert.Contains("cancel", context.Sut.CudaSetupStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class DownloadableEngine : ITranscriptionEngineRole
     {
         public HashSet<string> Downloaded { get; } = [];
@@ -269,17 +847,34 @@ public sealed class DictationLocalModelCardsTests
         public string ProviderDisplayName => "Local engine";
         public bool IsConfigured => true;
         public bool SupportsModelDownload => true;
+        public ITranscriptionModelLinking? ModelLinking { get; set; }
         public bool SupportsTranslation => false;
+        public bool ProvisionsCudaRuntimeOnDemand { get; init; }
+        public bool IsCudaRuntimeProvisioned { get; private set; }
+        public int CudaPrepareCalls { get; private set; }
+        public TaskCompletionSource? CudaPreparation { get; set; }
+        public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            CudaPrepareCalls++;
+            if (CudaPreparation is not null) await CudaPreparation.Task.WaitAsync(ct);
+            IsCudaRuntimeProvisioned = true;
+        }
         public string? SelectedModelId { get; private set; }
 
-        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; init; } =
         [
-            new("small", "Small") { SizeDescription = "~200 MB" },
-            new("large", "Large") { IsRecommended = true },
+            new("small", "Small") { SizeDescription = "~200 MB", Languages = ["en"], SupportsStreaming = false },
+            new("large", "Large") { IsRecommended = true, Languages = ["en", "de"], SupportsStreaming = true },
             new("medium", "Medium"),
         ];
 
+        public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Cpu;
+        public void SetAccelerationPreference(TranscriptionAccelerationPreference preference) => AccelerationPreference = preference;
         public bool StorageUnavailable { get; init; }
+        public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
+        public TranscriptionAccelerationStatus AccelerationStatus { get; set; } = new(TranscriptionAccelerationBackend.Cpu, "CPU") { IsModelLoaded = false };
+        public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
+            [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan];
 
         public bool IsModelDownloaded(string modelId)
         {
@@ -314,6 +909,7 @@ public sealed class DictationLocalModelCardsTests
             lock (Downloaded)
             {
                 Downloaded.Remove(modelId);
+                (ModelLinking as ModelLinkProbe)?.Unlink(modelId);
             }
 
             return Task.CompletedTask;

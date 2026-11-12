@@ -52,6 +52,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.Soniox/TypeWhisper.Plugin.Soniox.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Speechmatics/TypeWhisper.Plugin.Speechmatics.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.SupertonicTts/TypeWhisper.Plugin.SupertonicTts.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.TranscribeCpp/TypeWhisper.Plugin.TranscribeCpp.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Voxtral/TypeWhisper.Plugin.Voxtral.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Webhook/TypeWhisper.Plugin.Webhook.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.WhisperCpp/TypeWhisper.Plugin.WhisperCpp.csproj"/>

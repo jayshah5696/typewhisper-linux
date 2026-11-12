@@ -17,6 +17,7 @@ public sealed class LocalModelStorageService
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
             ["com.typewhisper.whisper-cpp"] = ["Models", "Runtimes"],
+            ["com.typewhisper.transcribe-cpp"] = ["models", "Runtimes"],
             ["com.typewhisper.sherpa-onnx"] = ["Models", "Runtimes"],
             ["com.typewhisper.gemma-local"] = ["Models"],
             ["com.typewhisper.supertonic-tts"] = ["Models"],
@@ -95,7 +96,7 @@ public sealed class LocalModelStorageService
     public async Task MoveDownloadsAndUsePathAsync(string targetPath, CancellationToken ct = default)
     {
         var targetRoot = PrepareWritableTarget(targetPath);
-        var migrated = new MigratedTargets();
+        using var migrated = new MigratedTargets();
         var sourceRoot = ResolvedModelStoragePath;
         var currentIsDefault =
             AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath) is null;
@@ -259,7 +260,9 @@ public sealed class LocalModelStorageService
             if (string.Equals(name, LocalModelStoragePaths.PluginDataFolderName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            CopyEntry(entry, Path.Join(targetRoot, SafeLeafName(name, nameof(entry))), migrated, ct);
+            var target = Path.Join(targetRoot, SafeLeafName(name, nameof(entry)));
+            migrated.ProtectSentinels(entry, target, ct);
+            CopyEntry(entry, target, migrated, ct);
         }
     }
 
@@ -302,11 +305,10 @@ public sealed class LocalModelStorageService
             {
                 ct.ThrowIfCancellationRequested();
                 var safeEntryName = SafeRelativeName(entryName, nameof(entryName));
-                CopyEntry(
-                    Path.Join(sourcePluginDir, safeEntryName),
-                    Path.Join(targetPluginDir, safeEntryName),
-                    migrated,
-                    ct);
+                var source = Path.Join(sourcePluginDir, safeEntryName);
+                var target = Path.Join(targetPluginDir, safeEntryName);
+                migrated.ProtectSentinels(source, target, ct);
+                CopyEntry(source, target, migrated, ct);
             }
         }
     }
@@ -344,10 +346,34 @@ public sealed class LocalModelStorageService
     ///     the user the only remaining copy of a multi-gigabyte model. Hashing instead would roughly
     ///     double migration I/O and still be a time-of-check race; a replacement moves the timestamp.
     /// </summary>
-    private sealed class MigratedTargets
+    private sealed class MigratedTargets : IDisposable
     {
         private readonly Dictionary<string, (long Length, DateTime LastWriteUtc)> _written =
             new(StringComparer.Ordinal);
+        private readonly Dictionary<string, FileStream> _sentinels = new(StringComparer.Ordinal);
+
+        // FileShare.None uses the same Unix flock contract as plugin model/runtime leases.
+        // Keep both roots locked through settings commit and source cleanup. A foreign lease
+        // refuses the move without changing settings, rather than copying a model in use.
+        public void ProtectSentinels(string source, string target, CancellationToken ct)
+        {
+            if (!Directory.Exists(source)) return;
+            var paths = Directory.EnumerateFiles(source, "*.lock", SearchOption.AllDirectories)
+                .SelectMany(path => new[] { path, Path.Join(target, Path.GetRelativePath(source, path)) })
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            foreach (var path in paths)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (_sentinels.ContainsKey(path)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                _sentinels.Add(path, new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var stream in _sentinels.Values) stream.Dispose();
+        }
 
         public void Record(string target)
         {
@@ -409,7 +435,9 @@ public sealed class LocalModelStorageService
             return;
         }
 
-        if (!File.Exists(source))
+        // A sentinel's inode is its identity. It is acquired separately and must never be
+        // copied over an existing lock or deleted, including after a successful move.
+        if (!File.Exists(source) || source.EndsWith(".lock", StringComparison.Ordinal))
             return;
 
         if (File.Exists(target))
@@ -478,7 +506,8 @@ public sealed class LocalModelStorageService
         // Provenance, not resemblance: only a target this run wrote is known to be the source's
         // copy, and it must still carry the size and timestamp it had when written — a target
         // swapped out between the copy and this cleanup pass spares the source.
-        if (!File.Exists(source) || !migrated.IsUnchangedSinceThisRunWroteIt(target))
+        if (source.EndsWith(".lock", StringComparison.Ordinal)
+            || !File.Exists(source) || !migrated.IsUnchangedSinceThisRunWroteIt(target))
         {
             return;
         }

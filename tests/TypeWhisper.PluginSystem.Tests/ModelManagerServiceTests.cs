@@ -99,6 +99,87 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task StorageChangeRejectsActiveLeaseWithoutMovingOrUnloading()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        await using var lease = await sut.AcquireTranscriptionAsync(modelId);
+        var moved = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ChangeModelStorageAsync(() =>
+        {
+            moved = true;
+            return Task.CompletedTask;
+        }));
+        Assert.False(moved);
+        Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task StorageChangeHoldsExecutionAndFileSlotsUntilCommitAndReleasesThemOnFailure()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        await sut.LoadModelAsync(modelId);
+        var copying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var moving = sut.ChangeModelStorageAsync(async () =>
+        {
+            Assert.True(plugin.UnloadStarted.Task.IsCompleted);
+            copying.SetResult();
+            await commit.Task;
+            throw new IOException("copy failed");
+        });
+        await copying.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Null(await sut.TryAcquireTranscriptionAsync(modelId));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.DownloadModelAsync(modelId));
+            Assert.Equal(0, plugin.DownloadCallCount);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.PrepareCudaRuntimeAsync(plugin, null, CancellationToken.None));
+        }
+        finally { commit.SetResult(); }
+        await Assert.ThrowsAsync<IOException>(() => moving);
+        await sut.LoadModelAsync(modelId);
+        Assert.Equal(2, plugin.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task RuntimeClearRejectsConcurrentPreparationAndDoesNotRemoveFiles()
+    {
+        using var sut = CreateServiceWithLoadableModel(out _, out var plugin);
+        plugin.ProvisionsCudaRuntimeOnDemand = true;
+        plugin.CudaPreparationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparation = sut.PrepareCudaRuntimeAsync(plugin, null, CancellationToken.None);
+        await plugin.CudaPreparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ClearCudaRuntimeCacheAsync());
+            Assert.False(plugin.ClearCudaRuntimeCalled);
+            Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+        }
+        finally { plugin.CudaPreparationGate.SetResult(); }
+        await preparation;
+        await sut.ClearCudaRuntimeCacheAsync();
+        Assert.True(plugin.ClearCudaRuntimeCalled);
+    }
+
+    [Fact]
+    public async Task StorageChangeRejectsDownloadAlreadyWritingFiles()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var modelId, out var plugin);
+        plugin.ModelDownloaded = false;
+        plugin.DownloadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var download = sut.DownloadModelAsync(modelId);
+        await plugin.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ChangeModelStorageAsync(() =>
+                throw new InvalidOperationException("must not run")));
+            Assert.False(plugin.UnloadStarted.Task.IsCompleted);
+        }
+        finally { plugin.DownloadGate.SetResult(); }
+        await download;
+    }
+
+    [Fact]
     public async Task AcquireTranscriptionAsync_WhileLeaseHeld_DoesNotArmAutoUnload()
     {
         using var sut = CreateServiceWithLoadableModel(
@@ -1695,7 +1776,7 @@ public class ModelManagerServiceTests
 
     private ModelManagerService CreateServiceWithLoadableModel(
         out string fullModelId,
-        out ITranscriptionEnginePlugin plugin,
+        out FakeTranscriptionPlugin plugin,
         int modelAutoUnloadSeconds = 0
     )
     {
@@ -1750,6 +1831,187 @@ public class ModelManagerServiceTests
             CudaRuntimePreflight = () => (false, "CUDA not available in test"),
         };
         return service;
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_HardwareCapability_PreservesAutoIntentAndUsesProviderDevices()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        var settings = new AppSettings { SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto };
+        _settings.Setup(s => s.Current).Returns(settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object)
+        {
+            CudaRuntimePreflight = () => throw new InvalidOperationException("Legacy preflight must not run"),
+        };
+
+        await sut.LoadModelAsync(modelId);
+
+        Assert.Equal("parakeet", hardware.DiscoveredModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.Auto, hardware.Request?.RequestedPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Vulkan, hardware.Request?.Device.Backend);
+        Assert.Equal(TranscriptionAccelerationPreference.Vulkan, fake.AccelerationPreferenceAtLoad);
+        Assert.Equal(AppSettings.LocalModelAccelerationAuto, settings.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_ExplicitCpu_DoesNotProbeGpuDevices()
+    {
+        var hardware = new FakeHardwareSelection { FailDiscovery = true };
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true) { HardwareSelection = hardware };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings
+        {
+            SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
+        });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await sut.LoadModelAsync(modelId);
+
+        Assert.Null(hardware.DiscoveredModelId);
+        Assert.Equal(TranscriptionAccelerationPreference.Cpu, hardware.Request?.RequestedPreference);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, hardware.Request?.Device.Backend);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_HardwareCapability_RejectsDevicesNotSupportedByProvider()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings
+        {
+            SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan,
+        });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.LoadModelAsync(modelId));
+
+        Assert.Contains("Select CPU", error.Message);
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Null(hardware.Request);
+        Assert.Null(sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_HardwareDiscovery_DependencyCancellationIsNotCallerCancellation()
+    {
+        var hardware = new FakeHardwareSelection { DiscoveryFault = new OperationCanceledException("driver fault") };
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true) { HardwareSelection = hardware };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        _settings.Setup(s => s.Current).Returns(new AppSettings { SelectedModelId = modelId });
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => sut.LoadModelAsync(modelId));
+
+        Assert.Equal(ModelStatus.Failed("driver fault"), sut.GetStatus(modelId));
+        Assert.Equal(0, fake.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoaded_ManualDeviceChangeReloadsAndMissingDeviceDoesNotFallBack()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        var settings = new AppSettings { SelectedModelId = modelId, LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan };
+        _settings.Setup(s => s.Current).Returns(() => settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+
+        settings = settings.WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:0000:64:00.0");
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(2, fake.LoadCallCount);
+        Assert.Equal("pci:0000:64:00.0", hardware.Request?.Device.StableId);
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(2, fake.LoadCallCount);
+
+        settings = settings.WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:missing");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.EnsureModelLoadedAsync(modelId));
+        Assert.Contains("pci:missing", error.Message);
+        Assert.Contains("Select CPU", error.Message);
+        Assert.Equal(2, fake.LoadCallCount);
+        Assert.Equal(AppSettings.LocalModelAccelerationVulkan, settings.LocalModelAcceleration);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoaded_FailedHardwareReconfigurationCannotReuseOldLoadCache()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var settings = new AppSettings { LocalModelAcceleration = "vulkan" };
+        _settings.Setup(s => s.Current).Returns(() => settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+        var modelId = ModelManagerService.GetPluginModelId("hardware", "parakeet");
+        await sut.EnsureModelLoadedAsync(modelId);
+        settings = settings.WithLocalModelDevice("hardware", "vulkan", "pci:0000:64:00.0");
+        fake.LoadFault = new InvalidOperationException("GPU load failed after worker replacement");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.EnsureModelLoadedAsync(modelId));
+        settings = settings.WithLocalModelDevice("hardware", "vulkan", null);
+        fake.LoadFault = null;
+        await sut.EnsureModelLoadedAsync(modelId);
+        Assert.Equal(3, fake.LoadCallCount);
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+    }
+
+    [Fact]
+    public async Task EnsureModelLoaded_AutoIgnoresSavedExplicitDeviceAndOtherProviders()
+    {
+        var hardware = new FakeHardwareSelection();
+        var fake = new FakeTranscriptionPlugin("hardware", true, null, true)
+        {
+            HardwareSelection = hardware,
+            SupportedAccelerationBackends = [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.Vulkan],
+        };
+        var settings = new AppSettings()
+            .WithLocalModelDevice("hardware", AppSettings.LocalModelAccelerationVulkan, "pci:missing")
+            .WithLocalModelDevice("other", AppSettings.LocalModelAccelerationVulkan, "other-device");
+        _settings.Setup(s => s.Current).Returns(settings);
+        using var sut = new ModelManagerService(CreatePluginManager(fake), _settings.Object);
+
+        await sut.EnsureModelLoadedAsync(ModelManagerService.GetPluginModelId("hardware", "parakeet"));
+
+        Assert.Equal("pci:discrete", hardware.Request?.Device.StableId);
+        Assert.Equal(TranscriptionAccelerationPreference.Auto, hardware.Request?.RequestedPreference);
+        Assert.Equal("other-device", settings.GetLocalModelDevice("other", AppSettings.LocalModelAccelerationVulkan));
+    }
+
+    private sealed class FakeHardwareSelection : ITranscriptionHardwareSelection
+    {
+        public string? DiscoveredModelId { get; private set; }
+        public bool FailDiscovery { get; init; }
+        public Exception? DiscoveryFault { get; init; }
+        public TranscriptionHardwareRequest? Request { get; private set; }
+        public Task<IReadOnlyList<TranscriptionDevice>> DiscoverDevicesAsync(string modelId, CancellationToken ct)
+        {
+            if (FailDiscovery) { throw new InvalidOperationException("GPU probe must not run"); }
+            DiscoveredModelId = modelId;
+            if (DiscoveryFault is not null) { throw DiscoveryFault; }
+            return Task.FromResult<IReadOnlyList<TranscriptionDevice>>([
+                new(TranscriptionAccelerationBackend.Cpu, "cpu", "CPU", TranscriptionDeviceKind.Cpu),
+                new(TranscriptionAccelerationBackend.Vulkan, "pci:0000:64:00.0", "780M", TranscriptionDeviceKind.IntegratedGpu),
+                new(TranscriptionAccelerationBackend.Vulkan, "pci:discrete", "Discrete GPU", TranscriptionDeviceKind.DiscreteGpu),
+            ]);
+        }
+        public void ConfigureHardware(TranscriptionHardwareRequest request) => Request = request;
     }
 
     private PluginManager CreatePluginManager(
@@ -1849,6 +2111,14 @@ public class ModelManagerServiceTests
             [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
 
         public bool ProvisionsCudaRuntimeOnDemand { get; set; }
+        public TaskCompletionSource? CudaPreparationGate { get; set; }
+        public TaskCompletionSource CudaPreparationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+        {
+            CudaPreparationStarted.TrySetResult();
+            if (CudaPreparationGate is not null) await CudaPreparationGate.Task.WaitAsync(ct);
+        }
+        public ITranscriptionHardwareSelection? HardwareSelection { get; init; }
 
         /// <summary>Last preference passed to <see cref="SetAccelerationPreference" />.</summary>
         private TranscriptionAccelerationPreference? LastAccelerationPreference { get; set; }
