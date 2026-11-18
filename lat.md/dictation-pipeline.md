@@ -47,3 +47,5 @@ On Linux desktops, input delivery interacts with the active display server:
 History and recovery retain completed transcripts when delivery fails, subject to the user's retention and recording settings. They do not guarantee recovery of every interrupted capture or failed recognition.
 
 If an application rejects simulated keypresses or loses focus during paste, the user can open the History window or click the recovery overlay to copy or re-insert the recognized speech. The recovery mechanism is verified end-to-end via [[verification#Virtual Audio and Needle Smoke]].
+
+[[src/TypeWhisper.Linux/Services/SessionAudioFileService.cs|Capture retention]] removes expired audio on startup and shutdown, even when History still retains the transcript. It also removes unreferenced captures when History is readable. An upgrade restart can therefore expire recordings under the existing retention setting. [[src/TypeWhisper.Linux/Services/HistoryRetentionCoordinator.cs|History retention]] applies a separate policy to transcript records.
