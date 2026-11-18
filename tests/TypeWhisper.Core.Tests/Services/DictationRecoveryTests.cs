@@ -72,7 +72,7 @@ public sealed class DictationRecoveryTests : IDisposable
     [Theory]
     [InlineData(-1, -1)]
     [InlineData(-10, 1)]
-    [InlineData(0, 1)]
+    [InlineData(0, 0)]
     [InlineData(30, 30)]
     [InlineData(900, 365)]
     public void Retention_ClampsSaveLoadAndUpdate(int input, int expected)

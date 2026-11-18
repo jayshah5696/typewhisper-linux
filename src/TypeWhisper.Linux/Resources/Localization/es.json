@@ -387,7 +387,7 @@
   "Dictation.AutoLearnCorrectionsHint": "Cuando editas un elemento del historial, las sugerencias claras a nivel de frase pueden aprenderse de inmediato.",
   "Dictation.Recovery": "Recuperación",
   "Dictation.RecoveryRetention": "Conservar grabaciones de dictado para recuperación (días)",
-  "Dictation.RecoveryRetentionHint": "Los dictados fallidos se pueden reintentar desde el historial mientras se conserve la grabación. -1 elimina las grabaciones al cerrar la aplicación.",
+  "Dictation.RecoveryRetentionHint": "Los dictados fallidos se pueden reintentar desde el historial mientras se conserve la grabación. 0 conserva las grabaciones para siempre. -1 elimina las grabaciones al cerrar la aplicación. Eliminar entradas del historial también elimina sus grabaciones.",
   "Dictation.TargetAppCorrectionLearning": "Aprender correcciones de otras apps",
   "Dictation.TargetAppCorrectionLearningHint": "Cuando escribes sobre una palabra dictada en otra app para corregirla, TypeWhisper aprende la corrección de forma silenciosa y la aplica a los dictados futuros. Lee el campo de texto enfocado; desactivado de forma predeterminada.",
   "Dictation.A11yBridgeSetupExplanation": "Tu sesión de escritorio no ha activado el puente de accesibilidad que permite a las apps exponer su texto. El aprendizaje de correcciones lo necesita para apps de Chromium/Electron como VS Code y para apps de Qt. Actívalo abajo y luego reinicia las apps de Chromium/Electron de las que quieras aprender: solo lo detectan al iniciarse (las apps de Qt lo aplican de inmediato).",

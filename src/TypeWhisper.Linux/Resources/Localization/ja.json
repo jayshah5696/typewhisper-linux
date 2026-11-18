@@ -387,7 +387,7 @@
   "Dictation.AutoLearnCorrectionsHint": "履歴の項目を編集すると、明確なフレーズ単位の候補をすぐに学習できます。",
   "Dictation.Recovery": "復旧",
   "Dictation.RecoveryRetention": "復旧用に音声入力の録音を保持（日数）",
-  "Dictation.RecoveryRetentionHint": "失敗した音声入力は、録音が保持されている間は履歴から再試行できます。-1にすると、アプリを閉じたときに録音が削除されます。",
+  "Dictation.RecoveryRetentionHint": "失敗した音声入力は、録音が保持されている間は履歴から再試行できます。0は録音を無期限に保持します。-1はアプリを閉じたときに録音を削除します。履歴の項目を削除すると、その録音も削除されます。",
   "Dictation.TargetAppCorrectionLearning": "他のアプリから修正を学習",
   "Dictation.TargetAppCorrectionLearningHint": "他のアプリで音声入力された単語を上書きして修正すると、TypeWhisperがその修正を自動的に学習し、今後の音声入力に適用します。フォーカス中のテキストフィールドを読み取ります。既定ではオフです。",
   "Dictation.A11yBridgeSetupExplanation": "デスクトップセッションで、アプリがテキストを公開するためのアクセシビリティブリッジが有効になっていません。修正の学習には、VS CodeなどのChromium/ElectronアプリとQtアプリでこれが必要です。下で有効にしてから、学習対象にしたいChromium/Electronアプリを再起動してください。これらのアプリは起動時にのみ設定を読み込みます（Qtアプリにはすぐに適用されます）。",

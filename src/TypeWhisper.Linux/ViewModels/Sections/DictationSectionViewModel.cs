@@ -2393,7 +2393,7 @@ public partial class DictationSectionViewModel : ObservableObject
         if (!int.TryParse(value, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var days))
             return;
-        days = days == -1 ? -1 : Math.Clamp(days, 1, 365);
+        days = days is -1 or 0 ? days : Math.Clamp(days, 1, 365);
         _settings.Update(current => current with { DictationRecoveryRetentionDays = days });
         // The binding commits per keystroke, so show what was persisted rather than what was typed.
         DictationRecoveryRetentionDays = days.ToString(CultureInfo.InvariantCulture);

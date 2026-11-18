@@ -195,12 +195,12 @@ public sealed class SettingsService : ISettingsService
     private static AppSettings NormalizeLanguageHints(AppSettings settings) =>
         settings.WithLanguageHints(settings.LanguageHints is { Count: > 0 } stored ? stored : settings.GetLanguageHints());
 
-    // -1 is the "delete captures at shutdown" sentinel; every other value is a day count in 1..365.
+    // -1 deletes captures at shutdown, 0 keeps them forever, and positive values count days.
     private static AppSettings NormalizeRetention(AppSettings settings) =>
         settings with
         {
-            DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays == -1
-                ? -1 : Math.Clamp(settings.DictationRecoveryRetentionDays, 1, 365),
+            DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays is -1 or 0
+                ? settings.DictationRecoveryRetentionDays : Math.Clamp(settings.DictationRecoveryRetentionDays, 1, 365),
             DiagnosticLogRetentionDays =
                 DiagnosticLogPreferences.NormalizeRetentionDays(settings.DiagnosticLogRetentionDays),
         };

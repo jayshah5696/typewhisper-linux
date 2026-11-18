@@ -387,7 +387,7 @@
   "Dictation.AutoLearnCorrectionsHint": "编辑历史记录条目时，可以立即学习明确的短语级建议。",
   "Dictation.Recovery": "恢复",
   "Dictation.RecoveryRetention": "保留听写录音以便恢复（天）",
-  "Dictation.RecoveryRetentionHint": "只要录音仍被保留，失败的听写就可以从历史记录中重试。-1表示在应用关闭时删除录音。",
+  "Dictation.RecoveryRetentionHint": "只要录音仍被保留，失败的听写就可以从历史记录中重试。0表示永久保留录音。-1表示在应用关闭时删除录音。删除历史记录条目也会删除其录音。",
   "Dictation.TargetAppCorrectionLearning": "从其他应用学习纠正",
   "Dictation.TargetAppCorrectionLearningHint": "当你在其他应用中改写听写出的词以修正它时，TypeWhisper会静默学习该纠正，并将其应用于以后的听写。会读取当前聚焦的文本字段；默认关闭。",
   "Dictation.A11yBridgeSetupExplanation": "你的桌面会话尚未启用无障碍桥接，应用需要它来公开其文本。纠正学习需要它来支持VS Code等Chromium/Electron应用以及Qt应用。请在下方启用，然后重新启动你想从中学习的所有Chromium/Electron应用——它们只在启动时读取此设置（Qt应用会立即生效）。",

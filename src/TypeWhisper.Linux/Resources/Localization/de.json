@@ -387,7 +387,7 @@
   "Dictation.AutoLearnCorrectionsHint": "Wenn Sie einen Verlaufseintrag bearbeiten, können eindeutige Phrasen-Vorschläge sofort gelernt werden.",
   "Dictation.Recovery": "Wiederherstellung",
   "Dictation.RecoveryRetention": "Diktataufnahmen zur Wiederherstellung aufbewahren (Tage)",
-  "Dictation.RecoveryRetentionHint": "Fehlgeschlagene Diktate lassen sich im Verlauf erneut versuchen, solange die Aufnahme aufbewahrt wird. -1 löscht Aufnahmen beim Beenden der App.",
+  "Dictation.RecoveryRetentionHint": "Fehlgeschlagene Diktate lassen sich im Verlauf erneut versuchen, solange die Aufnahme aufbewahrt wird. 0 bewahrt Aufnahmen dauerhaft auf. -1 löscht Aufnahmen beim Beenden der App. Das Löschen von Verlaufseinträgen löscht auch deren Aufnahmen.",
   "Dictation.TargetAppCorrectionLearning": "Korrekturen aus anderen Apps lernen",
   "Dictation.TargetAppCorrectionLearningHint": "Wenn Sie ein diktiertes Wort in einer anderen App überschreiben, um es zu korrigieren, lernt TypeWhisper die Korrektur stillschweigend und wendet sie auf zukünftige Diktate an. Liest das fokussierte Textfeld; standardmäßig deaktiviert.",
   "Dictation.A11yBridgeSetupExplanation": "Ihre Desktop-Sitzung hat die Barrierefreiheitsbrücke, über die Apps ihren Text bereitstellen, nicht aktiviert. Das Korrekturlernen benötigt sie für Chromium/Electron-Apps wie VS Code sowie für Qt-Apps. Aktivieren Sie sie unten und starten Sie dann Chromium/Electron-Apps neu, aus denen gelernt werden soll — sie übernehmen die Einstellung nur beim Start (Qt-Apps übernehmen sie sofort).",

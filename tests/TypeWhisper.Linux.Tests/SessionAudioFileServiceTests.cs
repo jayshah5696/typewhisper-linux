@@ -8,6 +8,29 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SessionAudioFileServiceTests : IDisposable
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ApplyRetention_Forever_KeepsOldAndUnreferencedCaptures(bool referenced)
+    {
+        var history = new HistoryService(Path.Join(_audioDirectory, "history.json"), _audioDirectory);
+        var service = new SessionAudioFileService(_audioDirectory, history);
+        var path = service.SaveDictationCapture([1, 2, 3]);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddYears(-2));
+        if (referenced)
+            history.AddRecord(new TranscriptionRecord
+            {
+                Id = "old", Timestamp = DateTime.UtcNow.AddYears(-2), RawText = "", FinalText = "",
+                AudioFileName = Path.GetFileName(path),
+            });
+
+        service.ApplyRetention(0);
+        service.ApplyRetention(0);
+
+        Assert.True(File.Exists(path));
+        Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(path));
+    }
+
     [Fact]
     public void ApplyRetention_WithoutHistory_KeepsFreshCapture()
     {

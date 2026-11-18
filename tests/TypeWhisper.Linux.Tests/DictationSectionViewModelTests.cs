@@ -115,7 +115,7 @@ public sealed class DictationSectionViewModelTests
 
     [Theory]
     [InlineData("-1", -1, "-1")]
-    [InlineData("0", 1, "1")]
+    [InlineData("0", 0, "0")]
     [InlineData("900", 365, "365")]
     [InlineData("7", 7, "7")]
     // Unparseable text is left in the box so the user can keep typing.

@@ -81,12 +81,16 @@ public sealed class SessionAudioFileService
 
     /// <summary>
     ///     Deletes captures older than <paramref name="days" />, plus any capture no history record
-    ///     still points at. <c>-1</c> is the "keep nothing" sentinel and deletes every capture; any
-    ///     other value is clamped to 1..365. Orphans are only pruned when the history could be read,
+    ///     still points at. <c>-1</c> is the "keep nothing" sentinel and deletes every capture;
+    ///     zero keeps all captures forever. Other values are clamped to 1..365.
+    ///     Orphans are only pruned when the history could be read,
     ///     so an unreadable history never looks like an empty one.
     /// </summary>
     public void ApplyRetention(int days)
     {
+        if (days == 0)
+            return;
+
         try
         {
             if (!Directory.Exists(_audioDirectory))
