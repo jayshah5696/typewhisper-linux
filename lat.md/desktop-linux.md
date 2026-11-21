@@ -12,6 +12,8 @@ Differences across display environments:
 - **X11**: Full support for global shortcut grabbing via X11 hotkey hooks, window focus queries, and clipboard synchronization with `xclip` or native X11 atoms.
 - **Wayland**: Global shortcuts use available desktop integration or the Linux evdev backend. Input delivery depends on compositor support and installed tools. Mutter RemoteDesktop input belongs to the isolated verification harness, not the production input backend.
 
+[[src/TypeWhisper.Core/Models/ActiveWindowSnapshot.cs|Active-window snapshots]] carry the owning window `ProcessId` across X11, GNOME, Hyprland, Sway, and KWin, with `ProcessIdUnresolved` failing closed when KWin cannot read a PID. [[src/TypeWhisper.Linux/Services/ActiveWindow/AtSpiUrlExtractor.cs|AT-SPI URL extraction]] and screen-context capture reject mismatched or unresolved browser instances instead of borrowing another instance's URL or context, and [[src/TypeWhisper.Linux/Services/ActiveWindowService.cs|ActiveWindowService]] keeps explicit single-label intranet URLs from Chromium.
+
 ## Global Hotkeys and Short Cuts
 
 System-wide push-to-talk and toggle shortcuts operate independently of active application window focus.
@@ -42,7 +44,9 @@ The microphone preview follows changes to the system default input without resta
 
 [[src/TypeWhisper.Linux/Services/AudioRecordingService.cs|AudioRecordingService]] releases a preview stream before refreshing PortAudio's device table and then reopens it on the current default. Changes during recording wait until capture ends. [[src/TypeWhisper.Linux/Services/AudioPlaybackService.cs|AudioPlaybackService]] holds its native audio reference only while a stream exists, so idle playback does not prevent device discovery.
 
-[[src/TypeWhisper.Linux/Services/DefaultDeviceWatcher.cs|Default-device monitoring]] excludes changes caused by opening the app's own preview stream, preventing an Automatic microphone preview from repeatedly reopening itself.
+[[src/TypeWhisper.Linux/Services/DefaultDeviceWatcher.cs|Default-device monitoring]] excludes changes caused by opening the app's own preview stream, preventing an Automatic microphone preview from repeatedly reopening itself, and synchronizes teardown on shutdown so `pactl subscribe` is not orphaned.
+
+[[src/TypeWhisper.Linux/Services/SigtermShutdown.cs|SIGTERM shutdown]] routes termination through normal teardown while [[src/TypeWhisper.Linux/Services/AudioDuckingService.cs|AudioDuckingService]] and [[src/TypeWhisper.Linux/Services/MediaPauseService.cs|MediaPauseService]] restore ducked volumes and paused media and refuse late changes, with a forced exit fallback if the UI thread is blocked.
 
 ## Interface language changes
 

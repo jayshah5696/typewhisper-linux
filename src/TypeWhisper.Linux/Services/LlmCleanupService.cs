@@ -49,11 +49,13 @@ public sealed class LlmCleanupService
         ProfileStylePreset? stylePreset = null,
         bool isDraft = false,
         TimeSpan? draftTimeout = null,
-        string? referenceContext = null
+        string? referenceContext = null,
+        Action? referenceContextSent = null
     )
     {
         return (await CleanWithResultAsync(text, level, statusCallback, capture, timeout, ct,
-            sourceLanguage, providerOverride, preparedLightText, stylePreset, isDraft, draftTimeout, referenceContext)).Text;
+            sourceLanguage, providerOverride, preparedLightText, stylePreset, isDraft, draftTimeout,
+            referenceContext, referenceContextSent)).Text;
     }
 
     public async Task<CleanupResult> CleanWithResultAsync(
@@ -69,7 +71,8 @@ public sealed class LlmCleanupService
         ProfileStylePreset? stylePreset = null,
         bool isDraft = false,
         TimeSpan? draftTimeout = null,
-        string? referenceContext = null
+        string? referenceContext = null,
+        Action? referenceContextSent = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -111,7 +114,8 @@ public sealed class LlmCleanupService
                 providerOverride,
                 isDraft,
                 ct,
-                referenceContext
+                referenceContext,
+                referenceContextSent
             );
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
@@ -189,7 +193,8 @@ public sealed class LlmCleanupService
     // supplies the user's wait limit; speculative work never holds a shared request gate.
     private async Task<string> ProcessWithinBudgetAsync(
         string prompt, string text, LlmCallCapture? capture, TimeSpan timeout,
-        string? providerOverride, bool isDraft, CancellationToken ct, string? referenceContext)
+        string? providerOverride, bool isDraft, CancellationToken ct, string? referenceContext,
+        Action? referenceContextSent)
     {
         var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var timerCts = new CancellationTokenSource();
@@ -200,7 +205,8 @@ public sealed class LlmCleanupService
             return await _promptProcessing.ProcessSystemPromptAsync(
                 prompt, text, capture, providerOverride,
                 reportProviderProblems: !isDraft, ct: requestCts.Token,
-                referenceContext: referenceContext).ConfigureAwait(false);
+                referenceContext: referenceContext,
+                referenceContextSent: referenceContextSent).ConfigureAwait(false);
         }, requestCts.Token);
         try
         {

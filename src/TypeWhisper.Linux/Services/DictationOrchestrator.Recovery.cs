@@ -16,7 +16,7 @@ public sealed partial class DictationOrchestrator
         Func<string, Task>? status, CancellationToken token,
         TimeSpan? timeout = null, string? sourceLanguage = null,
         ProfileStylePreset? stylePreset = null, Action<CleanupOutcome>? outcome = null,
-        string? referenceContext = null)
+        string? referenceContext = null, Action? referenceContextSent = null)
     {
         var started = Stopwatch.GetTimestamp();
         var hasFinalLimit = timeout is { } limit && limit > TimeSpan.Zero;
@@ -63,7 +63,7 @@ public sealed partial class DictationOrchestrator
         }
         var result = await cleanup.CleanWithResultAsync(text, level, status, capture,
             timeout: timeout, ct: token, sourceLanguage: sourceLanguage, stylePreset: stylePreset,
-            referenceContext: referenceContext);
+            referenceContext: referenceContext, referenceContextSent: referenceContextSent);
         outcome?.Invoke(result.Outcome);
         return result.Text;
     }
@@ -145,7 +145,8 @@ public sealed partial class DictationOrchestrator
                             sourceLanguage: postProcessingLanguage,
                             stylePreset: context.Profile?.StylePreset,
                             outcome: result => context.CleanupOutcome = result,
-                            referenceContext: referenceContext),
+                            referenceContext: referenceContext,
+                            referenceContextSent: context.ReferenceContextUse.MarkSent),
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
